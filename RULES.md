@@ -39,6 +39,11 @@ the same reason: `what()` stays `what()`.
 
 Where nothing names it, the name says its purpose.
 
+A specification names the thing, not the work. So a function is named
+with a verb and then the word the specification gives the thing:
+`parse_quoted_string`. A predicate already reads as a verb and keeps
+the plain form: `is_tchar`.
+
 The order of a class follows the order of the specification that
 defines it, section by section.
 
@@ -242,3 +247,9 @@ is checked. A predicate over a byte has 256 inputs, so all 256 are
 checked. The expectation is written from the specification and not
 from the table under test, so a wrong table has something to disagree
 with.
+
+## A clone is recursive
+
+`git clone --recursive`. A repository that has no submodule today can
+have one tomorrow, and a clone without them fails later and somewhere
+else.

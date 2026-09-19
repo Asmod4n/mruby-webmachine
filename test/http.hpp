@@ -40,7 +40,7 @@ mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
 
 inline void http_spec(mrb_state *mrb)
 {
-    struct RClass *wm = mrb_module_get(mrb, "Webmachine");
+    struct RClass *wm = mrb_define_module(mrb, "Webmachine");
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));

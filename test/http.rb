@@ -6,12 +6,14 @@
 #
 # The list below is read off the RFC and not built from the table under
 # test, so a wrong table has something to disagree with.
-TCHAR = ('a'..'z').to_a + ('A'..'Z').to_a + ('0'..'9').to_a +
-        %w[! # $ % & ' * + - . ^ _ ` | ~]
+TCHAR = %q{abcdefghijklmnopqrstuvwxyz}.bytes +
+        %q{ABCDEFGHIJKLMNOPQRSTUVWXYZ}.bytes +
+        %q{0123456789}.bytes +
+        %q{!#$%&'*+-.^_`|~}.bytes
 
 assert('is_tchar answers RFC 9110 5.6.2 for every one of the 256 bytes') do
   256.times do |byte|
-    assert_equal TCHAR.include?(byte.chr), Webmachine::SpecHttp.tchar?(byte),
+    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.tchar?(byte),
                  "byte #{byte}"
   end
 end

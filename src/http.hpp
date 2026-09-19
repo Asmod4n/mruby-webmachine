@@ -1,8 +1,10 @@
 #ifndef WEBMACHINE_HTTP_HPP
 #define WEBMACHINE_HTTP_HPP
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <expected>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
@@ -67,19 +69,64 @@ private:
 inline constexpr std::array<bool, 256> kTchar = [] {
     std::array<bool, 256> table{};
     for (const char letter : std::string_view("!#$%&'*+-.^_`|~"))
-        table[static_cast<unsigned char>(letter)] = true;
+        table.at(static_cast<unsigned char>(letter)) = true;
     for (unsigned index = '0'; index <= '9'; index++)
-        table[index] = true;
+        table.at(index) = true;
     for (unsigned index = 'A'; index <= 'Z'; index++)
-        table[index] = true;
+        table.at(index) = true;
     for (unsigned index = 'a'; index <= 'z'; index++)
-        table[index] = true;
+        table.at(index) = true;
     return table;
 }();
 
 constexpr bool is_tchar(const char letter)
 {
-    return kTchar[static_cast<unsigned char>(letter)];
+    return kTchar.at(static_cast<unsigned char>(letter));
+}
+
+inline constexpr std::array<bool, 256> kQdtext = [] {
+    std::array<bool, 256> table{};
+    table.at('\t') = true;
+    table.at(' ') = true;
+    for (unsigned index = '!'; index <= '~'; index++)
+        table.at(index) = true;
+    table.at('"') = false;
+    table.at('\\') = false;
+    for (unsigned index = 0x80; index <= 0xFF; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+constexpr bool is_qdtext(const char letter)
+{
+    return kQdtext.at(static_cast<unsigned char>(letter));
+}
+
+inline std::expected<std::string_view, ParseError> parse_quoted_string(const std::string_view text)
+{
+    if (!text.starts_with('"'))
+        return std::unexpected(ParseError(kQuotedStringProblem, text, 0));
+    std::string_view rest = text.substr(1);
+    while (!rest.empty()) {
+        const size_t at = text.size() - rest.size();
+        const size_t stop = rest.find_first_of("\"\\");
+        if (stop == std::string_view::npos)
+            break;
+        const std::string_view plain = rest.substr(0, stop);
+        const auto bad = std::ranges::find_if_not(plain, is_qdtext);
+        if (bad != plain.end())
+            return std::unexpected(
+                ParseError(kQdtextProblem, text, at + std::distance(plain.begin(), bad)));
+        if (rest.at(stop) == '"')
+            return text.substr(0, at + stop + 1);
+        const std::string_view escaped = rest.substr(stop + 1);
+        if (escaped.empty())
+            break;
+        if (!is_qdtext(escaped.front()) && escaped.front() != '"' && escaped.front() != '\\')
+            return std::unexpected(ParseError(kQdtextProblem, text, at + stop + 1));
+        rest = escaped.substr(1);
+    }
+    return std::unexpected(ParseError(kQuotedStringProblem, text, text.size()));
 }
 
 struct Field {
