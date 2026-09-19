@@ -532,3 +532,83 @@ assert('a reg-name and a token allow different bytes') do
   assert_true Webmachine::SpecHttp.token?('^', 64)
   assert_false Webmachine::SpecHttp.reg_name?('^', 64)
 end
+
+HOST_NAME = 0
+HOST_PORT = 1
+
+# RFC 9110 7.2: Host = uri-host [ ":" port ]
+# The field carries no scheme, so it cannot know the default port. The
+# port is nil where the sender named none, and curl really sends it
+# that way: http://127.0.0.1/ puts "127.0.0.1" in the field and
+# http://127.0.0.1:8111/ puts "127.0.0.1:8111".
+
+assert('parse_host reads a name with and without a port') do
+  a = Webmachine::SpecHttp.parse_host('www.example.com', 64)
+  assert_equal 'www.example.com', a[HOST_NAME]
+  assert_nil a[HOST_PORT]
+  b = Webmachine::SpecHttp.parse_host('www.example.com:8080', 64)
+  assert_equal 'www.example.com', b[HOST_NAME]
+  assert_equal 8080, b[HOST_PORT]
+end
+
+# An address is a reg-name as far as the grammar goes, so it needs no
+# separate path. Whether it routes anywhere is another question.
+assert('parse_host reads an IPv4 address like any other name') do
+  a = Webmachine::SpecHttp.parse_host('10.0.0.1:80', 64)
+  assert_equal '10.0.0.1', a[HOST_NAME]
+  assert_equal 80, a[HOST_PORT]
+end
+
+# The brackets stay in the name: that is what the ABNF says, and it is
+# what a configured address is compared against.
+assert('parse_host keeps the brackets of an IP-literal') do
+  a = Webmachine::SpecHttp.parse_host('[::1]', 64)
+  assert_equal '[::1]', a[HOST_NAME]
+  assert_nil a[HOST_PORT]
+  b = Webmachine::SpecHttp.parse_host('[2001:db8::8a2e:370:7334]:443', 64)
+  assert_equal '[2001:db8::8a2e:370:7334]', b[HOST_NAME]
+  assert_equal 443, b[HOST_PORT]
+end
+
+# RFC 3986 3.2.3 writes port = *DIGIT, so an empty port is syntax and
+# means the scheme decides.
+assert('parse_host takes a colon with no digits behind it') do
+  a = Webmachine::SpecHttp.parse_host('example.com:', 64)
+  assert_equal 'example.com', a[HOST_NAME]
+  assert_nil a[HOST_PORT]
+end
+
+assert('parse_host refuses a port no socket can take') do
+  e = Webmachine::SpecHttp.parse_host('example.com:65536', 64)
+  assert_equal 'port', e[0]
+  assert_equal 12, e[1]
+  e = Webmachine::SpecHttp.parse_host('example.com:80a', 64)
+  assert_equal 'port', e[0]
+end
+
+assert('parse_host refuses a name that is not a name') do
+  ['exam ple.com', "example\rcom", 'a/b', ''].each do |bad|
+    e = Webmachine::SpecHttp.parse_host(bad, 64)
+    assert_equal 'Host', e[0], bad
+  end
+end
+
+# A reg-name holds no colon, so the first one starts the port and
+# everything behind it has to be digits.
+assert('parse_host splits at the first colon') do
+  e = Webmachine::SpecHttp.parse_host('exa:mple.com:80', 64)
+  assert_equal 'port', e[0]
+  assert_equal 4, e[1]
+end
+
+# The bytes inside the brackets are checked and the address is not.
+# nginx and h2o do the same: a literal that means nothing matches no
+# route, so it ends as a 404 rather than a 400.
+assert('parse_host checks the bytes of an IP-literal and not the address') do
+  e = Webmachine::SpecHttp.parse_host('[zz]', 64)
+  assert_equal 'Host', e[0]
+  assert_equal 1, e[1]
+  e = Webmachine::SpecHttp.parse_host('[::1', 64)
+  assert_equal 'Host', e[0]
+  assert_equal '[:::::1]', Webmachine::SpecHttp.parse_host('[:::::1]', 64)[HOST_NAME]
+end

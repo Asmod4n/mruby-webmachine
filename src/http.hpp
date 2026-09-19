@@ -52,6 +52,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "day-name-l \",\" SP day \"-\" month \"-\" 2DIGIT SP time-of-day SP GMT", 400},
     {"RFC 9110 5.6.7", "asctime-date", "The timestamp is not valid",
      "day-name SP month SP ( 2DIGIT / ( SP 1DIGIT ) ) SP time-of-day SP 4DIGIT", 400},
+    {"RFC 9110 7.2", "Host", "The Host field is not valid", "uri-host [ \":\" port ]", 400},
+    {"RFC 3986 3.2.3", "port", "The Host field is not valid", "*DIGIT, at most 65535", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -65,6 +67,8 @@ inline constexpr uint16_t kImfFixdateProblem = 7;
 inline constexpr uint16_t kTimeOfDayProblem = 8;
 inline constexpr uint16_t kRfc850DateProblem = 9;
 inline constexpr uint16_t kAsctimeDateProblem = 10;
+inline constexpr uint16_t kHostProblem = 11;
+inline constexpr uint16_t kPortProblem = 12;
 
 struct Refusal {
     uint16_t problem;
@@ -171,6 +175,21 @@ inline constexpr std::array<bool, 256> kRegName = [] {
 }();
 
 inline constexpr auto kRegNameLowBits = low_nibble_bits_of(kRegName);
+
+inline constexpr std::array<bool, 256> kIpLiteral = [] {
+    std::array<bool, 256> table{};
+    for (const char letter : std::string_view(".:v"))
+        table.at(static_cast<unsigned char>(letter)) = true;
+    for (unsigned index = '0'; index <= '9'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'A'; index <= 'F'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'a'; index <= 'f'; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+inline constexpr auto kIpLiteralLowBits = low_nibble_bits_of(kIpLiteral);
 inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
 inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
 
@@ -242,6 +261,11 @@ inline bool is_token(const std::string_view text, const size_t readable_bytes)
 inline bool is_reg_name(const std::string_view host, const size_t readable_bytes)
 {
     return every_byte_is_allowed(host, readable_bytes, kRegName, kRegNameLowBits);
+}
+
+inline bool is_ip_literal(const std::string_view inside)
+{
+    return every_byte_is_allowed(inside, kIpLiteral);
 }
 
 inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::string_view text)
@@ -496,6 +520,37 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
     if (const auto obsolete = parse_asctime_date(text))
         return obsolete;
     return fixdate;
+}
+
+struct Host {
+    std::string_view uri_host;
+    std::optional<unsigned> port;
+};
+
+inline std::expected<Host, Refusal> parse_host(const std::string_view text,
+                                               const size_t readable_bytes)
+{
+    if (text.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kHostProblem, 0});
+    const size_t colon = text.starts_with('[') ? text.find(':', text.find(']')) : text.find(':');
+    const std::string_view uri_host = text.substr(0, colon);
+    if (uri_host.starts_with('[')) {
+        if (!uri_host.ends_with(']')) [[unlikely]]
+            return std::unexpected(Refusal{kHostProblem, 0});
+        if (!is_ip_literal(uri_host.substr(1, uri_host.size() - 2))) [[unlikely]]
+            return std::unexpected(Refusal{kHostProblem, 1});
+    } else if (!is_reg_name(uri_host, readable_bytes)) [[unlikely]] {
+        return std::unexpected(Refusal{kHostProblem, 0});
+    }
+    if (colon == std::string_view::npos)
+        return Host{uri_host, std::nullopt};
+    const std::string_view digits = text.substr(colon + 1);
+    if (digits.empty())
+        return Host{uri_host, std::nullopt};
+    const auto port = parse_digits(digits);
+    if (!port || *port > 65535) [[unlikely]]
+        return std::unexpected(Refusal{kPortProblem, static_cast<uint32_t>(colon + 1)});
+    return Host{uri_host, *port};
 }
 
 }

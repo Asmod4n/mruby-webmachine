@@ -169,6 +169,28 @@ mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
                           static_cast<size_t>(readable)));
 }
 
+mrb_value spec_parse_host(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int readable = 0;
+    mrb_get_args(mrb, "si", &text, &length, &readable);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_host(whole, static_cast<size_t>(readable));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->uri_host),
+        got->port ? cpp_to_mrb_value(mrb, *got->port) : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -178,6 +200,7 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

@@ -120,6 +120,16 @@ void every_byte_over_a_host(benchmark::State &state)
     }
 }
 
+void parse_host_of_chrome(benchmark::State &state)
+{
+    const size_t readable =
+        kChrome.size() - static_cast<size_t>(kHostOfChrome.data() - kChrome.data());
+    for (auto _ : state) {
+        auto got = http::parse_host(kHostOfChrome, readable);
+        benchmark::DoNotOptimize(got);
+    }
+}
+
 void parse_quoted_string(benchmark::State &state)
 {
     size_t at = 0;
@@ -161,6 +171,7 @@ BENCHMARK(every_byte_over_field_names);
 BENCHMARK(is_token_over_field_names);
 BENCHMARK(every_byte_over_a_host);
 BENCHMARK(is_reg_name_over_a_host);
+BENCHMARK(parse_host_of_chrome);
 BENCHMARK(parse_quoted_string);
 BENCHMARK(parse_field_value_parameter);
 BENCHMARK(parse_imf_fixdate);
