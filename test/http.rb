@@ -478,3 +478,57 @@ assert('is_token answers the same past 32 bytes') do
   assert_true Webmachine::SpecHttp.token?(long, 64)
   assert_false Webmachine::SpecHttp.token?(long + ' ', 64)
 end
+
+# RFC 3986 3.2.2, which RFC 9110 7.2 uses for the Host field
+# host       = IP-literal / IPv4address / reg-name
+# reg-name   = *( unreserved / pct-encoded / sub-delims )
+# unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+# sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / ","
+#              / ";" / "="
+# A colon is not in the set: it separates the port. Square brackets are
+# not either: they carry an IP-literal, which is read another way.
+REG_NAME = %q{abcdefghijklmnopqrstuvwxyz}.bytes +
+           %q{ABCDEFGHIJKLMNOPQRSTUVWXYZ}.bytes +
+           %q{0123456789}.bytes +
+           %q{-._~!$&'()*+,;=%}.bytes
+
+assert('is_reg_name answers RFC 3986 3.2.2 for every byte, wide and narrow') do
+  256.times do |byte|
+    text = byte.chr
+    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name?(text, 64), "wide #{byte}"
+    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name?(text, 1), "narrow #{byte}"
+  end
+end
+
+assert('is_reg_name agrees with itself at every length up to 40') do
+  (1..40).each do |length|
+    [0, 9, 32, 37, 45, 58, 91, 93, 97, 126, 127, 128, 255].each do |byte|
+      text = ('a' * (length - 1)) + byte.chr
+      wide = Webmachine::SpecHttp.reg_name?(text, 64)
+      narrow = Webmachine::SpecHttp.reg_name?(text, text.size)
+      assert_equal narrow, wide, "length #{length} byte #{byte}"
+      assert_equal REG_NAME.include?(byte), wide, "length #{length} byte #{byte}"
+    end
+  end
+end
+
+# What a browser and a proxy put in the field, and what may not be
+# there. A colon and a bracket are refused here and read elsewhere.
+assert('is_reg_name takes the names a Host field carries') do
+  %w[example.com www.example.com localhost sub.domain.test 10.0.0.1
+     xn--bcher-kva.de a-b-c.example].each do |name|
+    assert_true Webmachine::SpecHttp.reg_name?(name, 64), name
+  end
+  ['example.com:8080', '[::1]', 'exam ple.com', "example\rcom", 'a/b', ''].each do |bad|
+    assert_false Webmachine::SpecHttp.reg_name?(bad, 64), bad
+  end
+end
+
+# A token and a reg-name are different sets, and the two must not drift
+# into each other.
+assert('a reg-name and a token allow different bytes') do
+  assert_true Webmachine::SpecHttp.reg_name?('(', 64)
+  assert_false Webmachine::SpecHttp.token?('(', 64)
+  assert_true Webmachine::SpecHttp.token?('^', 64)
+  assert_false Webmachine::SpecHttp.reg_name?('^', 64)
+end

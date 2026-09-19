@@ -157,6 +157,20 @@ constexpr std::array<unsigned char, 16> low_nibble_bits_of(const std::array<bool
     return table;
 }
 
+inline constexpr std::array<bool, 256> kRegName = [] {
+    std::array<bool, 256> table{};
+    for (const char letter : std::string_view("-._~!$&'()*+,;=%"))
+        table.at(static_cast<unsigned char>(letter)) = true;
+    for (unsigned index = '0'; index <= '9'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'A'; index <= 'Z'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'a'; index <= 'z'; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+inline constexpr auto kRegNameLowBits = low_nibble_bits_of(kRegName);
 inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
 inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
 
@@ -223,6 +237,11 @@ inline bool every_byte_is_allowed(const std::string_view text, const size_t read
 inline bool is_token(const std::string_view text, const size_t readable_bytes)
 {
     return every_byte_is_allowed(text, readable_bytes, kTchar, kTcharLowBits);
+}
+
+inline bool is_reg_name(const std::string_view host, const size_t readable_bytes)
+{
+    return every_byte_is_allowed(host, readable_bytes, kRegName, kRegNameLowBits);
 }
 
 inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::string_view text)
