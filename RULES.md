@@ -20,3 +20,225 @@ file is named for what is in it.
 ## Everything is in English
 
 File contents, documentation and commit messages.
+
+## A declaration says what happens
+
+The function name says what the function does. Each parameter name says
+what is passed. The return type says what comes back. A reader of the
+header alone knows the behaviour.
+
+## A name that a specification gives is the name the code uses
+
+A field, a method, a status, a frame, an opcode, a close code, a rule
+of a grammar: the word of the specification, without translation.
+`tchar`, `token`, `OWS`, `quoted-string`, `field-name`,
+`representation`, `origin`.
+
+Where the C++ standard names the thing instead, the standard wins for
+the same reason: `what()` stays `what()`.
+
+Where nothing names it, the name says its purpose.
+
+The order of a class follows the order of the specification that
+defines it, section by section.
+
+## No method hides anything
+
+No function wraps one library call. No function changes an argument
+unless its name says so. No function raises unless its name says so.
+No function does two things.
+
+## Every argument is const
+
+A function reads its inputs and returns its result. There is no output
+parameter and no pointer that is written through. The return type is
+what the function makes. A function that changes an object is a method
+of that object.
+
+## Nothing is copied to pass it
+
+A type that owns memory is passed by `const&`: `std::string`,
+`std::vector`, a class with a buffer inside.
+
+A view and a scalar are passed by value, because that is already the
+form that does not copy. A `std::string_view` is a pointer and a
+length. It points at the bytes and does not hold them. A reference in
+front of it adds one indirection and takes nothing away.
+
+A function that needs its own copy says so by taking the value, and
+then the caller can move into it.
+
+## A type has no constructor unless it needs one
+
+A type is an aggregate: public members, no constructor of its own, no
+base, nothing virtual. Then it works in a `constexpr` context, the
+compiler can copy it with a move of bytes, and there is no hidden work
+at its creation.
+
+A constructor is written where the type cannot hold a wrong value
+otherwise, or where what the type is demands one. Where that
+constructor also has to allocate, it allocates.
+
+An error is the second case. An error derives from an exception class,
+in C++ as in Ruby, because both languages decide at the type what a
+`catch` and a `rescue` find. A class that carries the methods of an
+exception and does not derive is not one, and no handler that looks
+for an error will see it. `std::runtime_error` holds a string and has
+a vtable, so an error is not an aggregate and not `constexpr`. That is
+what an error is, not a price it pays.
+
+## Use what a library already has
+
+The standard library and every linked library come first. Nothing they
+answer is written here a second time. Read the library in its own
+source before you say it cannot do the thing.
+
+Never do pointer arithmetic by hand. Work in views and indices:
+`std::string_view` or `std::span` for the run, `std::distance` for the
+offset, `std::next` to walk it.
+
+The small ones count as well: `std::min` and `std::max` rather than a
+ternary, `std::from_chars` rather than a digit loop, `std::clamp`
+rather than two ternaries.
+
+What stays ours is what no library answers: a rule a specification
+states.
+
+## An index is checked by the compiler
+
+`std::array` and `std::vector` are read and written with `.at()`,
+never with `[]`.
+
+In a `constexpr` context an index outside the bounds becomes a
+compiler error, because a throw is not a constant expression. At run
+time it costs nothing where the type already proves the bound: gcc
+emits the same four instructions for
+`table.at(static_cast<unsigned char>(c))` and for
+`table[static_cast<unsigned char>(c)]`, measured with `objdump` on
+`-O3 -march=x86-64-v3`.
+
+## Kernighan and Ritchie
+
+`.clang-format` states the layout: `BreakBeforeBraces: Linux`, four
+spaces, the star on the name.
+
+A name is short where its scope is short and says its purpose where
+its scope is long. The C++ Core Guidelines state this as NL.7.
+
+## An error goes to whoever can repair it
+
+A fault of ours is raised. An impossible state, a violated
+precondition, an index that the thrower packed wrong. With a VM in
+hand it is `mrb_raisef` with the right error class. Without a VM it is
+a throw, from `std::logic_error` or a child of it. Nothing catches it.
+The process ends.
+
+A configuration the server cannot read goes three ways, and which one
+depends on who is there to hear it.
+
+At the start there is no configuration to keep. The reader gives the
+error back as a value, `main` writes it and the server does not start.
+
+At a reload from the file nobody is standing there. The error goes to
+the error log, the server keeps the configuration it already has, and
+it serves on. A reload builds the whole new configuration as a value
+first and swaps it in one step, so a failure in the middle leaves the
+old one whole.
+
+At a call from the application there is a caller, and the caller has a
+VM. It is `mrb_raisef`, so the author gets a class, a message and a
+backtrace into their own line.
+
+Everything else is a value and the server keeps serving. A client that
+sends something invalid, a syscall that failed, a file that is gone.
+They come back in `std::expected`.
+
+A value of that kind is still an exception class. It derives from
+`std::runtime_error` for a condition of the world and from
+`std::system_error` for a syscall, with the errno in its `error_code`.
+The type says what the thing is. It does not say how it travels.
+
+Two things arrive thrown that are not ours. mruby throws an
+`mrb_jmpbuf *` at every raise, and `mrb_protect_error` turns it into a
+value. The standard library and the dependencies throw their own. A
+catch names the exact type it can recover from.
+
+`main` and the body of a thread we start catch what reaches them,
+because the alternative is a death with no words. Both write or record
+it and then end. Neither continues.
+
+## Comments live in tests, and they say why
+
+`src/` carries no comments. Not a note, not a section number, not a
+name of a specification. What the code does, the code says. A reader
+who needs more than the declaration has found a name that is wrong,
+and the answer is the better name.
+
+A test carries comments, and they answer one question: why this test
+exists. A section of a specification, an issue, a pull request, a CVE.
+Where the rule is a grammar that a reader does not know by heart, the
+comment says in plain words what the rule allows. What the test does
+is in the test.
+
+    # RFC 9110 5.6.2 Tokens
+    # A token is a name without quotes: a header field name, a method,
+    # a parameter name. It holds letters, digits, and these 15 marks:
+    #     ! # $ % & ' * + - . ^ _ ` | ~
+    # Nothing else. No space, no tab, no colon, no bracket, no quote.
+
+A string that reaches a log, an error page or a client is not a
+comment. `"RFC 9110 5.6.4"` inside an error record is what the
+operator reads at three in the morning. It stays.
+
+## The compiler vectorizes, and we check that it did
+
+A comparison over a run of bytes is written in the form both compilers
+turn into vector instructions: a loop with a count known before it
+starts, over a contiguous buffer, with no early exit and no branch in
+the body. `std::ranges::all_of` and `std::ranges::find_if_not` over a
+`std::string_view` are that form.
+
+Then we read what the compiler did, rather than assume it:
+
+    gcc    -fopt-info-vec -fopt-info-vec-missed
+    clang  -Rpass=loop-vectorize -Rpass-missed=loop-vectorize
+
+Both compilers, and both architectures: x86-64 and aarch64. A loop
+that one of the four does not vectorize is rewritten until it does.
+
+An intrinsic is written only where all four say they cannot, and only
+where an instruction count is lower for the hand written form, both
+arms built with the same `-march=`. Then it is written for AVX2 and
+for NEON at once, with the plain loop as the third branch. AVX2 and
+NEON are the floor of what such code may use.
+
+## Measure before, measure after
+
+A number about speed comes from a measurement in this session, on this
+machine, with both arms built the same way.
+
+Measure the noise floor of the machine first. Ten runs of
+`sysbench cpu` say how small a difference the clock can still read
+there. A difference under that floor is not a difference.
+
+The arms alternate, A B A B A B, five runs each, and the medians are
+compared. A change too small for the clock is counted with valgrind,
+because the count of one binary does not move between runs.
+
+A number with no measurement behind it is not written down.
+
+## Asserts live in tests
+
+No `assert` and no `static_assert` in `src/`, and none in a test
+`.cpp` either. mrbtest counts what `assert` in a `.rb` file reports,
+and a check that mrbtest does not count is a check nobody sees.
+
+One `.cpp` in `test/` holds every binding the `.rb` files need, and
+one `.hpp` beside it for each module under test. The `.cpp` includes
+them.
+
+Where the input of a function is a finite set, every member of the set
+is checked. A predicate over a byte has 256 inputs, so all 256 are
+checked. The expectation is written from the specification and not
+from the table under test, so a wrong table has something to disagree
+with.
