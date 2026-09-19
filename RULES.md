@@ -398,3 +398,54 @@ of a second, so the machine was not the reason. The harness was.
 
 Whether two cases in one process disturb each other is a question for
 the first measurement, not an assumption.
+
+## An error is small where it travels and full where it is read
+
+A function gives back what its caller can use, and nothing more.
+
+- A helper that can fail in one way gives `std::optional`. It needs no
+  payload: the caller knows which helper it called, so the caller names
+  the rule and the offset.
+- Everything else inside the tree gives `std::expected<T, Refusal>`.
+  A `Refusal` is the number of the problem and the offset, eight bytes,
+  in a register. That is enough for a log line.
+- `ParseError`, with the section, the rule, the allowed bytes and an
+  excerpt, is built once, at the outside, where a user calls in: the
+  server's own binary, or somebody who uses this as a library.
+
+We are not a conformance tool. A server refuses and serves on, so the
+detail a refusal carries has to be cheap enough to carry always. Eight
+bytes are. Sixty four are not.
+
+Measured on the timestamp parser: 47.0 ns with a full record in every
+return, 28.5 ns with helpers on `std::optional` and a `Refusal` above
+them. The same full record on `parse_field_value_parameter`, which runs
+once per parameter, cost 16.3 ns to 31.6 ns.
+
+## The optimal case is optimized, and the cold path stays usable
+
+The straight line through a function is the one that succeeds, and it
+is the one that is made fast. Two limits hold that in check.
+
+A cold path does not become pathologically slower for it. Somebody who
+sends a stream of invalid requests must not cost more than somebody who
+sends valid ones would.
+
+An error reaches the end of its function at once. Every test returns
+where the fault is found, and no test waits for five more to be read.
+
+## Every error branch carries [[unlikely]]
+
+`if (...) [[unlikely]] return std::unexpected(...)`. The compiler lays
+the cold block out of the way and stops optimizing it for speed.
+Measured: valid input 10 percent faster, invalid input 6 percent
+slower.
+
+## An error object does not allocate
+
+`std::runtime_error` holds a string, and a string built from a literal
+is one allocation for every refused request. That is a lever an
+attacker pulls. The base takes an empty string, which libstdc++ answers
+with a shared representation and no allocation, and `what()` gives the
+title out of the table of problems. Measured: the error path went 32
+percent faster.

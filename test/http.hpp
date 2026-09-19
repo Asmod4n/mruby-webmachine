@@ -48,7 +48,7 @@ mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
         return cpp_to_mrb_value(mrb, *got);
     mrb_value out[3] = {
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, got.error().offset),
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).found_byte()),
     };
     return mrb_ary_new_from_values(mrb, 3, out);
@@ -65,7 +65,7 @@ mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
     if (!got) {
         mrb_value out[2] = {
             cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+            cpp_to_mrb_value(mrb, got.error().offset),
         };
         return mrb_ary_new_from_values(mrb, 2, out);
     }
@@ -90,7 +90,7 @@ mrb_value spec_parse_imf_fixdate(mrb_state *mrb, mrb_value)
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, got.error().offset),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
@@ -108,7 +108,7 @@ mrb_value spec_parse_rfc850_date(mrb_state *mrb, mrb_value)
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, got.error().offset),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
@@ -124,7 +124,7 @@ mrb_value spec_parse_asctime_date(mrb_state *mrb, mrb_value)
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, got.error().offset),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
@@ -142,7 +142,7 @@ mrb_value spec_parse_http_date(mrb_state *mrb, mrb_value)
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
         cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
-        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, got.error().offset),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
