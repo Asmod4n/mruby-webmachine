@@ -92,6 +92,23 @@ mrb_value spec_parse_imf_fixdate(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+mrb_value spec_parse_rfc850_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int current_year = 0;
+    mrb_get_args(mrb, "si", &text, &length, &current_year);
+    const auto got = http::parse_rfc850_date(std::string_view(text, static_cast<size_t>(length)),
+                                             std::chrono::year{static_cast<int>(current_year)});
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got.error().rule()),
+        cpp_to_mrb_value(mrb, got.error().offset()),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -106,6 +123,8 @@ inline void http_spec(mrb_state *mrb)
                                spec_parse_field_value_parameter, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_imf_fixdate", spec_parse_imf_fixdate,
                                MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_rfc850_date", spec_parse_rfc850_date,
+                               MRB_ARGS_REQ(2));
 }
 
 #endif

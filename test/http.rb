@@ -292,10 +292,24 @@ assert('parse_imf_fixdate reads a leap second') do
                Webmachine::SpecHttp.parse_imf_fixdate('Sun, 31 Dec 1995 23:59:60 GMT')
 end
 
+# The rule that refused says which one it was, and the offset counts
+# from the start of the timestamp and not from the start of the time.
 assert('parse_imf_fixdate refuses an hour above 23') do
   e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Nov 1994 24:49:37 GMT')
-  assert_equal 'IMF-fixdate', e[0]
+  assert_equal 'time-of-day', e[0]
   assert_equal 17, e[1]
+end
+
+assert('parse_imf_fixdate names the byte of a day that is not digits') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 0X Nov 1994 08:49:37 GMT')
+  assert_equal 'DIGIT', e[0]
+  assert_equal 5, e[1]
+end
+
+assert('parse_imf_fixdate names the byte of a month it does not know') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Mai 1994 08:49:37 GMT')
+  assert_equal 'month', e[0]
+  assert_equal 8, e[1]
 end
 
 assert('parse_imf_fixdate refuses a month name it does not know') do
@@ -319,4 +333,54 @@ assert('parse_imf_fixdate refuses anything that is not 29 bytes') do
     assert_equal 'IMF-fixdate', e[0], text
     assert_equal 0, e[1], text
   end
+end
+
+# RFC 9110 5.6.7 obs-date
+# The first of the two formats a sender may no longer generate and a
+# recipient must still accept. Its year has two digits, so the RFC puts
+# the window on the reader: a timestamp that looks more than 50 years
+# ahead means the most recent past year with the same two digits. The
+# current year is an argument, so the answer does not change with the
+# clock of the machine that runs the test.
+
+assert('parse_rfc850_date reads the timestamp of RFC 9110 5.6.7') do
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-94 08:49:37 GMT', 2026)
+end
+
+assert('parse_rfc850_date reads every length of day name') do
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_rfc850_date('Wednesday, 06-Nov-94 08:49:37 GMT', 2026)
+end
+
+# 94 read in 2026 is 2094, which is 68 years ahead, so it is 1994.
+# 70 read in 2026 is 2070, which is 44 years ahead, so it stays.
+assert('parse_rfc850_date puts a year more than 50 ahead into the past') do
+  a = Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-94 08:49:37 GMT', 2026)
+  b = Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-70 08:49:37 GMT', 2026)
+  assert_equal 784_111_777, a
+  assert_equal 3_182_489_377, b
+end
+
+# The same text read in a different year means a different year.
+assert('parse_rfc850_date reads the window from the year it is given') do
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-94 08:49:37 GMT', 1999)
+  assert_equal 3_939_871_777,
+               Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-94 08:49:37 GMT', 2100)
+end
+
+assert('parse_rfc850_date refuses an IMF-fixdate') do
+  e = Webmachine::SpecHttp.parse_rfc850_date('Sun, 06 Nov 1994 08:49:37 GMT', 2026)
+  assert_equal 'rfc850-date', e[0]
+  assert_equal 0, e[1]
+end
+
+assert('parse_rfc850_date names the rule and the byte that refused') do
+  e = Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Mai-94 08:49:37 GMT', 2026)
+  assert_equal 'month', e[0]
+  assert_equal 11, e[1]
+  e = Webmachine::SpecHttp.parse_rfc850_date('Sunday, 06-Nov-94 24:49:37 GMT', 2026)
+  assert_equal 'time-of-day', e[0]
+  assert_equal 18, e[1]
 end

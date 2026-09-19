@@ -39,6 +39,10 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "Jan / Feb / Mar / Apr / May / Jun / Jul / Aug / Sep / Oct / Nov / Dec", 400},
     {"RFC 9110 5.6.7", "IMF-fixdate", "The timestamp is not valid",
      "day-name \",\" SP day SP month SP year SP hour \":\" minute \":\" second SP GMT", 400},
+    {"RFC 9110 5.6.7", "time-of-day", "The timestamp is not valid",
+     "hour \":\" minute \":\" second, hour 00-23, minute 00-59, second 00-60", 400},
+    {"RFC 9110 5.6.7", "rfc850-date", "The timestamp is not valid",
+     "day-name-l \",\" SP day \"-\" month \"-\" 2DIGIT SP time-of-day SP GMT", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -49,6 +53,8 @@ inline constexpr uint16_t kParameterProblem = 4;
 inline constexpr uint16_t kDigitProblem = 5;
 inline constexpr uint16_t kMonthProblem = 6;
 inline constexpr uint16_t kImfFixdateProblem = 7;
+inline constexpr uint16_t kTimeOfDayProblem = 8;
+inline constexpr uint16_t kRfc850DateProblem = 9;
 
 class ParseError : public std::runtime_error
 {
@@ -254,39 +260,84 @@ parse_field_value_parameter(const std::string_view text)
     return FieldValueParameter{name, value, raw.substr(value.size())};
 }
 
+inline std::expected<std::chrono::seconds, ParseError>
+parse_time_of_day(const std::string_view text)
+{
+    if (text.size() != 8 || text.at(2) != ':' || text.at(5) != ':')
+        return std::unexpected(ParseError(kTimeOfDayProblem, text, 0));
+    const auto hour = parse_digits(text.substr(0, 2), 2);
+    if (!hour)
+        return std::unexpected(hour.error());
+    const auto minute = parse_digits(text.substr(3, 2), 2);
+    if (!minute)
+        return std::unexpected(minute.error());
+    const auto second = parse_digits(text.substr(6, 2), 2);
+    if (!second)
+        return std::unexpected(second.error());
+    if (*hour > 23 || *minute > 59 || *second > 60)
+        return std::unexpected(ParseError(kTimeOfDayProblem, text, 0));
+    return std::chrono::hours{*hour} + std::chrono::minutes{*minute} +
+           std::chrono::seconds{*second};
+}
+
 inline std::expected<std::chrono::sys_seconds, ParseError>
 parse_imf_fixdate(const std::string_view text)
 {
     if (text.size() != 29 || text.substr(3, 2) != ", " || text.at(7) != ' ' ||
-        text.at(11) != ' ' || text.at(16) != ' ' || text.at(19) != ':' || text.at(22) != ':' ||
-        text.substr(25) != " GMT")
+        text.at(11) != ' ' || text.at(16) != ' ' || text.substr(25) != " GMT")
         return std::unexpected(ParseError(kImfFixdateProblem, text, 0));
     const auto day = parse_digits(text.substr(5, 2), 2);
     if (!day)
-        return std::unexpected(day.error());
+        return std::unexpected(ParseError(day.error().problem(), text, 5));
     const auto month = parse_month(text.substr(8, 3));
     if (!month)
-        return std::unexpected(month.error());
+        return std::unexpected(ParseError(month.error().problem(), text, 8));
     const auto year = parse_digits(text.substr(12, 4), 4);
     if (!year)
-        return std::unexpected(year.error());
-    const auto hour = parse_digits(text.substr(17, 2), 2);
-    if (!hour)
-        return std::unexpected(hour.error());
-    const auto minute = parse_digits(text.substr(20, 2), 2);
-    if (!minute)
-        return std::unexpected(minute.error());
-    const auto second = parse_digits(text.substr(23, 2), 2);
-    if (!second)
-        return std::unexpected(second.error());
-    if (*hour > 23 || *minute > 59 || *second > 60)
-        return std::unexpected(ParseError(kImfFixdateProblem, text, 17));
+        return std::unexpected(ParseError(year.error().problem(), text, 12));
+    const auto time = parse_time_of_day(text.substr(17, 8));
+    if (!time)
+        return std::unexpected(
+            ParseError(time.error().problem(), text, 17 + time.error().offset()));
     const std::chrono::year_month_day date{std::chrono::year{static_cast<int>(*year)},
                                            std::chrono::month{*month}, std::chrono::day{*day}};
     if (!date.ok())
         return std::unexpected(ParseError(kImfFixdateProblem, text, 5));
-    return std::chrono::sys_days{date} + std::chrono::hours{*hour} +
-           std::chrono::minutes{*minute} + std::chrono::seconds{*second};
+    return std::chrono::sys_days{date} + *time;
+}
+
+inline std::expected<std::chrono::sys_seconds, ParseError>
+parse_rfc850_date(const std::string_view text, const std::chrono::year current_year)
+{
+    const size_t comma = text.find(',');
+    if (comma == std::string_view::npos || text.size() - comma != 24 ||
+        text.substr(comma, 2) != ", ")
+        return std::unexpected(ParseError(kRfc850DateProblem, text, 0));
+    const size_t at = comma + 2;
+    const std::string_view tail = text.substr(at);
+    if (tail.at(2) != '-' || tail.at(6) != '-' || tail.at(9) != ' ' || tail.substr(18) != " GMT")
+        return std::unexpected(ParseError(kRfc850DateProblem, text, at));
+    const auto day = parse_digits(tail.substr(0, 2), 2);
+    if (!day)
+        return std::unexpected(ParseError(day.error().problem(), text, at));
+    const auto month = parse_month(tail.substr(3, 3));
+    if (!month)
+        return std::unexpected(ParseError(month.error().problem(), text, at + 3));
+    const auto short_year = parse_digits(tail.substr(7, 2), 2);
+    if (!short_year)
+        return std::unexpected(ParseError(short_year.error().problem(), text, at + 7));
+    const auto time = parse_time_of_day(tail.substr(10, 8));
+    if (!time)
+        return std::unexpected(
+            ParseError(time.error().problem(), text, at + 10 + time.error().offset()));
+    int full = (static_cast<int>(current_year) / 100) * 100 + static_cast<int>(*short_year);
+    if (full - static_cast<int>(current_year) > 50)
+        full -= 100;
+    const std::chrono::year_month_day date{std::chrono::year{full}, std::chrono::month{*month},
+                                           std::chrono::day{*day}};
+    if (!date.ok())
+        return std::unexpected(ParseError(kRfc850DateProblem, text, at));
+    return std::chrono::sys_days{date} + *time;
 }
 
 }

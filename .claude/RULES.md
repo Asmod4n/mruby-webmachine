@@ -32,3 +32,22 @@ Several pieces may go in one message when:
 
 Anything else is one piece per message: a decision that is new, a name
 with no source, an error path, a question about safety.
+
+## Code is shown before it is written
+
+Every function that has behaviour, and every name that is new, is
+shown to the owner before it goes to disk: the declaration and the
+body as they will stand, with the section of the specification beside
+them. One function per message. The owner answers yes, change, or no.
+A form that repeats is shown once; after the yes, only the names
+follow.
+
+Mechanical work is not shown one by one: a rename from an agreed list,
+a formatter, a deletion the owner already asked for. It is summarised
+before the commit, with the files and the line counts.
+
+## The namespace carries the domain, the name does not repeat it
+
+`http::parse_quoted_string`, not `http::parse_http_quoted_string` and
+not `http_parse_quoted_string` beside a namespace. One of the two says
+where the thing belongs, and it is the namespace.

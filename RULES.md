@@ -292,3 +292,90 @@ register.
 **Then measure, and believe the measurement.** The compiler is right
 more often than the person rewriting the loop. A change that is only
 believed to be faster does not enter the tree.
+
+## A parser sees the whole field value at once
+
+Every function that reads a grammar takes one `std::string_view` and
+reads it to the end. None of them holds a state between calls, and
+none of them can stop in the middle and go on later.
+
+This works because of what stands in front of them. picohttpparser
+reports a header only when the whole field is in the buffer, and HPACK
+gives back whole fields as well. So a field value is contiguous in
+memory by the time a parser sees it.
+
+That is a condition, not a fact of HTTP. A server that reads bytes and
+parses them as they arrive needs a state machine that can stop between
+two bytes, which is what llhttp and Boost.Beast are. If the layer in
+front of these parsers ever changes so that a field value can arrive in
+two pieces, this shape is wrong, and the answer is a state machine and
+not a patch.
+
+## Each part does one thing, and the others do not know how
+
+A module owns the types of its dependency and shows them to nobody.
+The HTTP/1.1 part owns picohttpparser, the HTTP/2 part owns ls-hpack,
+the compression part owns zlib. A type from a dependency does not
+appear in the declaration of another part.
+
+The reason is that one part must change inside without a second part
+changing with it.
+
+## One HTTP, and the versions under it
+
+`Http` holds the semantics of RFC 9110 and RFC 9111: request,
+response, fields, representation, URI, and the rules that read them.
+`Http1`, `Http2` and a later `Http3` turn those values into bytes and
+back, and add nothing of their own. The decision graph reads a request
+and makes a response, and it cannot see which version carried them.
+
+An upgrade is not a state of HTTP. It is the end of it: the resource
+takes the connection and speaks something else, and the graph never
+runs. That belongs to the version, not to `Http`.
+
+## Every function could run in a functional language as it is
+
+A function takes values and returns a value. It reads no global. It
+writes no global. It keeps no static. State that changes is a value
+that goes in and a new value that comes out.
+
+A clock is a value too. A function that needs the current year takes
+it as an argument.
+
+An effect happens in one place, after a pure function decided it. An
+effect is a system call, a ring submission or a call into Ruby.
+
+## A class is one defined kind of work
+
+What a specification defines as one kind of work is one class, and the
+specification names it. RFC 9110 gives `Http`, RFC 9112 gives `Http1`,
+RFC 7541 gives HPACK. The webmachine decision graph gives the classes
+of webmachine, with the names webmachine-ruby uses.
+
+Work that no specification defines waits until it has one.
+
+## A name claims nothing that does not happen
+
+There is no zero copy here, so nothing is named for it. A name that
+says `zero_copy` where the kernel still copies teaches the next reader
+something false.
+
+A name says what happens and, where it is not plain, why. A threshold
+above which the body is sent from its own memory instead of a copy is
+`send_body_without_copy_above`.
+
+## A rule states what holds
+
+A rule does not say how often it is broken, who breaks it, or what
+most people do. Those are claims, and a rule carries none. Where a
+rule has a reason, the reason is one that a reader can check.
+
+## A gem that only the tests need is a test dependency
+
+`spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
+configuration. A gem in the configuration is in every build and in the
+library that ships.
+
+## No bang methods
+
+No method with `!`. A question a caller may ask is a `?` predicate.
