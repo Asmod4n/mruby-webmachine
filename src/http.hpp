@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <expected>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -29,18 +30,21 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "DQUOTE *( qdtext / quoted-pair ) DQUOTE", 400},
     {"RFC 9110 5.6.4", "qdtext", "The field value is not valid",
      "HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text", 400},
+    {"RFC 9110 5.6.6", "parameter", "The field value is not valid",
+     "parameter-name \"=\" parameter-value", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
 inline constexpr uint16_t kTcharProblem = 1;
 inline constexpr uint16_t kQuotedStringProblem = 2;
 inline constexpr uint16_t kQdtextProblem = 3;
+inline constexpr uint16_t kParameterProblem = 4;
 
 class ParseError : public std::runtime_error
 {
 public:
     ParseError(const uint16_t problem, const std::string_view text, const size_t offset)
-        : std::runtime_error(kProblems[problem].title), problem_(problem),
+        : std::runtime_error(kProblems.at(problem).title), problem_(problem),
           offset_(static_cast<uint32_t>(offset)),
           found_byte_(offset < text.size() ? static_cast<unsigned char>(text[offset]) : 0)
     {
@@ -49,11 +53,12 @@ public:
             excerpt_[excerpt_length_++] = letter;
     }
 
-    std::string_view section() const noexcept { return kProblems[problem_].section; }
-    std::string_view rule() const noexcept { return kProblems[problem_].rule; }
-    std::string_view title() const noexcept { return kProblems[problem_].title; }
-    std::string_view allowed() const noexcept { return kProblems[problem_].allowed; }
-    unsigned status() const noexcept { return kProblems[problem_].status; }
+    uint16_t problem() const noexcept { return problem_; }
+    std::string_view section() const noexcept { return kProblems.at(problem_).section; }
+    std::string_view rule() const noexcept { return kProblems.at(problem_).rule; }
+    std::string_view title() const noexcept { return kProblems.at(problem_).title; }
+    std::string_view allowed() const noexcept { return kProblems.at(problem_).allowed; }
+    unsigned status() const noexcept { return kProblems.at(problem_).status; }
     size_t offset() const noexcept { return offset_; }
     unsigned char found_byte() const noexcept { return found_byte_; }
     std::string_view excerpt() const noexcept { return {excerpt_.data(), excerpt_length_}; }
@@ -173,6 +178,48 @@ struct Resource {
     std::string_view target;
     Representation (*select_representation)(const Request);
 };
+
+
+constexpr std::string_view skip_optional_whitespace(const std::string_view text)
+{
+    const size_t start = text.find_first_not_of(" \t");
+    return start == std::string_view::npos ? std::string_view{} : text.substr(start);
+}
+
+struct FieldValueParameter {
+    std::string_view name;
+    std::string_view value;
+    std::string_view rest;
+};
+
+inline std::expected<std::optional<FieldValueParameter>, ParseError>
+parse_field_value_parameter(const std::string_view text)
+{
+    std::string_view rest = skip_optional_whitespace(text);
+    while (rest.starts_with(';'))
+        rest = skip_optional_whitespace(rest.substr(1));
+    if (rest.empty())
+        return std::optional<FieldValueParameter>{};
+    const std::string_view name(rest.begin(), std::ranges::find_if_not(rest, is_tchar));
+    if (name.empty())
+        return std::unexpected(ParseError(kTcharProblem, text, text.size() - rest.size()));
+    const std::string_view after = rest.substr(name.size());
+    if (!after.starts_with('='))
+        return std::unexpected(ParseError(kParameterProblem, text, text.size() - after.size()));
+    const std::string_view raw = after.substr(1);
+    const size_t begins = text.size() - raw.size();
+    if (raw.starts_with('"')) {
+        const auto quoted = parse_quoted_string(raw);
+        if (!quoted)
+            return std::unexpected(
+                ParseError(quoted.error().problem(), text, begins + quoted.error().offset()));
+        return FieldValueParameter{name, *quoted, raw.substr(quoted->size())};
+    }
+    const std::string_view value(raw.begin(), std::ranges::find_if_not(raw, is_tchar));
+    if (value.empty())
+        return std::unexpected(ParseError(kTcharProblem, text, begins));
+    return FieldValueParameter{name, value, raw.substr(value.size())};
+}
 
 }
 

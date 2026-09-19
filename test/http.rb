@@ -165,3 +165,85 @@ assert('parse_quoted_string refuses a control byte behind a backslash') do
   assert_equal 3, e[QS_OFFSET]
   assert_equal 1, e[QS_FOUND]
 end
+
+PARAM_NAME  = 0
+PARAM_VALUE = 1
+PARAM_REST  = 2
+
+# RFC 9110 5.6.6 Parameters
+# A parameter is a name and a value behind a semicolon, appended to an
+# item in a field value: the charset of a media type, the weight of an
+# Accept entry. The value is a token or a quoted string. No space is
+# allowed around the equals sign.
+#
+# The binding gives three strings for a parameter, nil when none is
+# left, and two entries, the rule and the offset, for a refusal.
+
+assert('parse_field_value_parameter reads a name and a token value') do
+  p = Webmachine::SpecHttp.parse_field_value_parameter(';charset=utf-8')
+  assert_equal 'charset', p[PARAM_NAME]
+  assert_equal 'utf-8', p[PARAM_VALUE]
+  assert_equal '', p[PARAM_REST]
+end
+
+# A caller walks a list of parameters, so each read says where it ended.
+assert('parse_field_value_parameter gives back what is left') do
+  p = Webmachine::SpecHttp.parse_field_value_parameter(';a=1;b=2')
+  assert_equal 'a', p[PARAM_NAME]
+  assert_equal '1', p[PARAM_VALUE]
+  assert_equal ';b=2', p[PARAM_REST]
+end
+
+# The value keeps its quotes. Removing them needs a copy, and that is
+# another function.
+assert('parse_field_value_parameter reads a quoted value whole') do
+  p = Webmachine::SpecHttp.parse_field_value_parameter(';charset="utf-8"')
+  assert_equal '"utf-8"', p[PARAM_VALUE]
+end
+
+# Optional whitespace stands around the semicolon and nowhere else.
+assert('parse_field_value_parameter steps over whitespace at the semicolon') do
+  p = Webmachine::SpecHttp.parse_field_value_parameter(" \t; \tq=0.8")
+  assert_equal 'q', p[PARAM_NAME]
+  assert_equal '0.8', p[PARAM_VALUE]
+end
+
+# The grammar allows a semicolon with no parameter behind it.
+assert('parse_field_value_parameter steps over an empty parameter') do
+  p = Webmachine::SpecHttp.parse_field_value_parameter(';;charset=utf-8')
+  assert_equal 'charset', p[PARAM_NAME]
+end
+
+assert('parse_field_value_parameter gives nil when nothing is left') do
+  assert_nil Webmachine::SpecHttp.parse_field_value_parameter('')
+  assert_nil Webmachine::SpecHttp.parse_field_value_parameter(';')
+  assert_nil Webmachine::SpecHttp.parse_field_value_parameter("; \t")
+end
+
+# Two parsers that disagree about a space here read two different
+# media types, and that is how a sniffing bug starts.
+assert('parse_field_value_parameter refuses a space around the equals sign') do
+  e = Webmachine::SpecHttp.parse_field_value_parameter(';charset =utf-8')
+  assert_equal 'parameter', e[0]
+  assert_equal 8, e[1]
+end
+
+assert('parse_field_value_parameter refuses a name that is not a token') do
+  e = Webmachine::SpecHttp.parse_field_value_parameter(';"a"=1')
+  assert_equal 'tchar', e[0]
+  assert_equal 1, e[1]
+end
+
+assert('parse_field_value_parameter refuses a missing value') do
+  e = Webmachine::SpecHttp.parse_field_value_parameter(';charset=')
+  assert_equal 'tchar', e[0]
+  assert_equal 9, e[1]
+end
+
+# The offset counts from the start of the text the caller handed over,
+# not from the start of the quoted string inside it.
+assert('parse_field_value_parameter counts the offset from the whole text') do
+  e = Webmachine::SpecHttp.parse_field_value_parameter(";charset=\"a\rb\"")
+  assert_equal 'qdtext', e[0]
+  assert_equal 11, e[1]
+end
