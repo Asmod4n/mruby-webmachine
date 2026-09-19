@@ -379,3 +379,22 @@ library that ships.
 ## No bang methods
 
 No method with `!`. A question a caller may ask is a `?` predicate.
+
+## A number about speed comes from Google Benchmark
+
+No hand written loop with a clock around it. Google Benchmark decides
+how many iterations a case needs, repeats it, and reports the median
+and the deviation, so a number arrives with the spread that made it.
+
+A measurement compares before against after, on this machine, in this
+session, with both arms built the same way. It does not compare one
+machine with another, so the version of the library does not matter.
+`libbenchmark-dev` from the system is enough.
+
+This rule exists because a hand written harness gave 29, 45, 63 and 74
+nanoseconds for one unchanged function, and 43 against 64 in two runs
+of one binary. sysbench read 2.5 percent of spread over runs of a fifth
+of a second, so the machine was not the reason. The harness was.
+
+Whether two cases in one process disturb each other is a question for
+the first measurement, not an assumption.

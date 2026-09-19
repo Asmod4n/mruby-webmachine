@@ -384,3 +384,51 @@ assert('parse_rfc850_date names the rule and the byte that refused') do
   assert_equal 'time-of-day', e[0]
   assert_equal 18, e[1]
 end
+
+# RFC 9110 5.6.7 obs-date
+# The second obsolete format. It names no zone, and a recipient reads
+# it as GMT. Its day is two digits or a space and one digit, which is
+# the only place in the three formats where a field changes width.
+
+assert('parse_asctime_date reads a two digit day') do
+  assert_equal 784_975_777, Webmachine::SpecHttp.parse_asctime_date('Sun Nov 16 08:49:37 1994')
+end
+
+assert('parse_asctime_date reads a day behind a space') do
+  assert_equal 784_111_777, Webmachine::SpecHttp.parse_asctime_date('Sun Nov  6 08:49:37 1994')
+end
+
+assert('parse_asctime_date refuses two spaces where the day stands') do
+  e = Webmachine::SpecHttp.parse_asctime_date('Sun Nov    08:49:37 1994')
+  assert_equal 'DIGIT', e[0]
+  assert_equal 8, e[1]
+end
+
+assert('parse_asctime_date names the rule and the byte that refused') do
+  e = Webmachine::SpecHttp.parse_asctime_date('Sun Mai  6 08:49:37 1994')
+  assert_equal 'month', e[0]
+  assert_equal 4, e[1]
+  e = Webmachine::SpecHttp.parse_asctime_date('Sun Nov  6 08:49:60 199X')
+  assert_equal 'DIGIT', e[0]
+  assert_equal 20, e[1]
+end
+
+# RFC 9110 5.6.7: a recipient must accept all three formats. Only the
+# first may still be sent.
+
+assert('parse_http_date reads all three formats as the same moment') do
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_http_date('Sun, 06 Nov 1994 08:49:37 GMT', 2026)
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_http_date('Sunday, 06-Nov-94 08:49:37 GMT', 2026)
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_http_date('Sun Nov  6 08:49:37 1994', 2026)
+end
+
+# The message names the format a sender is allowed to use, because the
+# other two are the ones the sender should not have tried.
+assert('parse_http_date answers with the fixdate rule when no format fits') do
+  e = Webmachine::SpecHttp.parse_http_date('yesterday', 2026)
+  assert_equal 'IMF-fixdate', e[0]
+  assert_equal 0, e[1]
+end

@@ -24,9 +24,9 @@ mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
     mrb_int length = 0;
     mrb_int offset = 0;
     mrb_get_args(mrb, "isi", &problem, &text, &length, &offset);
-    const http::ParseError error(static_cast<uint16_t>(problem),
-                                 std::string_view(text, static_cast<size_t>(length)),
-                                 static_cast<size_t>(offset));
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const http::ParseError error(
+        http::Refusal{static_cast<uint16_t>(problem), static_cast<uint32_t>(offset)}, whole);
     mrb_value out[8] = {
         cpp_to_mrb_value(mrb, error.section()),    cpp_to_mrb_value(mrb, error.rule()),
         cpp_to_mrb_value(mrb, error.title()),      cpp_to_mrb_value(mrb, error.allowed()),
@@ -41,14 +41,15 @@ mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
     const auto got =
-        http::parse_quoted_string(std::string_view(text, static_cast<size_t>(length)));
+        http::parse_quoted_string(whole);
     if (got.has_value())
         return cpp_to_mrb_value(mrb, *got);
     mrb_value out[3] = {
-        cpp_to_mrb_value(mrb, got.error().rule()),
-        cpp_to_mrb_value(mrb, got.error().offset()),
-        cpp_to_mrb_value(mrb, got.error().found_byte()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).found_byte()),
     };
     return mrb_ary_new_from_values(mrb, 3, out);
 }
@@ -58,12 +59,13 @@ mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
     const auto got =
-        http::parse_field_value_parameter(std::string_view(text, static_cast<size_t>(length)));
+        http::parse_field_value_parameter(whole);
     if (!got) {
         mrb_value out[2] = {
-            cpp_to_mrb_value(mrb, got.error().rule()),
-            cpp_to_mrb_value(mrb, got.error().offset()),
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
         };
         return mrb_ary_new_from_values(mrb, 2, out);
     }
@@ -82,12 +84,13 @@ mrb_value spec_parse_imf_fixdate(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
-    const auto got = http::parse_imf_fixdate(std::string_view(text, static_cast<size_t>(length)));
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_imf_fixdate(whole);
     if (got.has_value())
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
-        cpp_to_mrb_value(mrb, got.error().rule()),
-        cpp_to_mrb_value(mrb, got.error().offset()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
@@ -98,13 +101,48 @@ mrb_value spec_parse_rfc850_date(mrb_state *mrb, mrb_value)
     mrb_int length = 0;
     mrb_int current_year = 0;
     mrb_get_args(mrb, "si", &text, &length, &current_year);
-    const auto got = http::parse_rfc850_date(std::string_view(text, static_cast<size_t>(length)),
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_rfc850_date(whole,
                                              std::chrono::year{static_cast<int>(current_year)});
     if (got.has_value())
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
-        cpp_to_mrb_value(mrb, got.error().rule()),
-        cpp_to_mrb_value(mrb, got.error().offset()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_asctime_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_asctime_date(whole);
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_http_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int current_year = 0;
+    mrb_get_args(mrb, "si", &text, &length, &current_year);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_http_date(whole,
+                                           std::chrono::year{static_cast<int>(current_year)});
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).offset()),
     };
     return mrb_ary_new_from_values(mrb, 2, out);
 }
@@ -124,6 +162,10 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_imf_fixdate", spec_parse_imf_fixdate,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_rfc850_date", spec_parse_rfc850_date,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_asctime_date", spec_parse_asctime_date,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_http_date", spec_parse_http_date,
                                MRB_ARGS_REQ(2));
 }
 
