@@ -147,6 +147,17 @@ mrb_value spec_parse_http_date(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+mrb_value spec_is_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int readable = 0;
+    mrb_get_args(mrb, "si", &text, &length, &readable);
+    return mrb_bool_value(
+        http::is_token(std::string_view(text, static_cast<size_t>(length)),
+                       static_cast<size_t>(readable)));
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -154,6 +165,7 @@ inline void http_spec(mrb_state *mrb)
     struct RClass *wm = mrb_define_module(mrb, "Webmachine");
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

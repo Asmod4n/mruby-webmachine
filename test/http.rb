@@ -432,3 +432,49 @@ assert('parse_http_date answers with the fixdate rule when no format fits') do
   assert_equal 'IMF-fixdate', e[0]
   assert_equal 0, e[1]
 end
+
+# RFC 9110 5.6.2 Tokens
+# is_token reads a whole run at once. Where the caller can read 32
+# bytes from the start of the run, it loads all of them and masks what
+# lies behind the run, which is how it answers in one step instead of
+# one step per byte. The two ways have to agree, byte for byte and
+# length for length, or a field name would be refused on one machine
+# and taken on another.
+
+assert('is_token agrees with is_tchar for every byte, wide and narrow') do
+  256.times do |byte|
+    text = byte.chr
+    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token?(text, 64), "wide #{byte}"
+    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token?(text, 1), "narrow #{byte}"
+  end
+end
+
+assert('is_token agrees with itself at every length up to 40') do
+  (1..40).each do |length|
+    [0, 9, 32, 44, 58, 65, 97, 126, 127, 128, 255].each do |byte|
+      text = ('a' * (length - 1)) + byte.chr
+      wide = Webmachine::SpecHttp.token?(text, 64)
+      narrow = Webmachine::SpecHttp.token?(text, text.size)
+      assert_equal narrow, wide, "length #{length} byte #{byte}"
+      assert_equal TCHAR.include?(byte), wide, "length #{length} byte #{byte}"
+    end
+  end
+end
+
+# The field names a browser sends are all tokens, and the separators
+# around them are not.
+assert('is_token takes the field names of a request and refuses the rest') do
+  %w[Host User-Agent Accept-Encoding Sec-Fetch-Mode X-Forwarded-For].each do |name|
+    assert_true Webmachine::SpecHttp.token?(name, 64), name
+  end
+  ['Host:', 'User Agent', 'a(b)', 'a,b', "a\rb", ''].each do |bad|
+    assert_false Webmachine::SpecHttp.token?(bad, 64), bad
+  end
+end
+
+# A name longer than one wide load falls back, and must answer the same.
+assert('is_token answers the same past 32 bytes') do
+  long = 'x' * 40
+  assert_true Webmachine::SpecHttp.token?(long, 64)
+  assert_false Webmachine::SpecHttp.token?(long + ' ', 64)
+end

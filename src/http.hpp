@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -12,6 +13,12 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+
+#if defined(__AVX2__)
+#include <immintrin.h>
+#elif defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 namespace http
 {
@@ -131,6 +138,91 @@ inline constexpr std::array<bool, 256> kQdtext = [] {
 constexpr bool is_qdtext(const char letter)
 {
     return kQdtext.at(static_cast<unsigned char>(letter));
+}
+
+inline constexpr std::array<unsigned char, 16> kHighNibbleBit = [] {
+    std::array<unsigned char, 16> table{};
+    for (unsigned nibble = 0; nibble < 8; nibble++)
+        table.at(nibble) = static_cast<unsigned char>(1 << nibble);
+    return table;
+}();
+
+constexpr std::array<unsigned char, 16> low_nibble_bits_of(const std::array<bool, 256> &allowed)
+{
+    std::array<unsigned char, 16> table{};
+    for (unsigned byte = 0; byte < 128; byte++)
+        if (allowed.at(byte))
+            table.at(byte & 0x0F) =
+                static_cast<unsigned char>(table.at(byte & 0x0F) | (1 << (byte >> 4)));
+    return table;
+}
+
+inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
+inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
+
+inline bool every_byte_is_allowed(const std::string_view text,
+                                  const std::array<bool, 256> &allowed)
+{
+    for (const char letter : text)
+        if (!allowed.at(static_cast<unsigned char>(letter))) [[unlikely]]
+            return false;
+    return true;
+}
+
+#if defined(__ARM_NEON)
+inline bool neon_block_is_allowed(const unsigned char *at, const size_t length,
+                                  const std::array<unsigned char, 16> &low_bits)
+{
+    const uint8x16_t bytes = vld1q_u8(at);
+    const uint8x16_t low =
+        vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
+    const uint8x16_t high = vqtbl1q_u8(vld1q_u8(kHighNibbleBit.data()), vshrq_n_u8(bytes, 4));
+    const uint8x16_t lanes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    const uint8x16_t beyond = vcgeq_u8(lanes, vdupq_n_u8(static_cast<unsigned char>(length)));
+    return vminvq_u8(vorrq_u8(vandq_u8(low, high), beyond)) != 0;
+}
+#endif
+
+// The caller says how many bytes may be read from text.data(). A field
+// value inside a request buffer has the rest of the request behind it,
+// so the wide load reads past the value and masks what it read.
+inline bool every_byte_is_allowed(const std::string_view text, const size_t readable_bytes,
+                                  const std::array<bool, 256> &allowed,
+                                  [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
+{
+    if (text.empty()) [[unlikely]]
+        return false;
+    if (text.size() > 32 || readable_bytes < 32)
+        return every_byte_is_allowed(text, allowed);
+#if defined(__AVX2__)
+    const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(text.data()));
+    const __m256i low = _mm256_shuffle_epi8(
+        _mm256_broadcastsi128_si256(
+            _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data()))),
+        _mm256_and_si256(bytes, _mm256_set1_epi8(0x0F)));
+    const __m256i high = _mm256_shuffle_epi8(
+        _mm256_broadcastsi128_si256(
+            _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data()))),
+        _mm256_and_si256(_mm256_srli_epi16(bytes, 4), _mm256_set1_epi8(0x0F)));
+    const uint32_t refused = static_cast<uint32_t>(_mm256_movemask_epi8(
+        _mm256_cmpeq_epi8(_mm256_and_si256(low, high), _mm256_setzero_si256())));
+    const uint32_t inside = text.size() == 32 ? ~0u : (1u << text.size()) - 1;
+    return (refused & inside) == 0;
+#elif defined(__ARM_NEON)
+    const unsigned char *const at = reinterpret_cast<const unsigned char *>(text.data());
+    if (!neon_block_is_allowed(at, text.size(), low_bits)) [[unlikely]]
+        return false;
+    if (text.size() <= 16)
+        return true;
+    return neon_block_is_allowed(std::next(at, 16), text.size() - 16, low_bits);
+#else
+    return every_byte_is_allowed(text, allowed);
+#endif
+}
+
+inline bool is_token(const std::string_view text, const size_t readable_bytes)
+{
+    return every_byte_is_allowed(text, readable_bytes, kTchar, kTcharLowBits);
 }
 
 inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::string_view text)

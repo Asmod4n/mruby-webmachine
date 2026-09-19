@@ -1,5 +1,8 @@
 #include <benchmark/benchmark.h>
 
+#include <string>
+#include <vector>
+
 #include "http.hpp"
 
 namespace
@@ -40,6 +43,60 @@ void is_tchar(benchmark::State &state)
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
+// The field names of a real request, as views into the buffer that
+// carries it, so the wide load has the rest of the request behind it.
+const std::string kChrome =
+    "GET /index.html HTTP/1.1\r\n"
+    "Host: www.example.com\r\n"
+    "Connection: keep-alive\r\n"
+    "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
+    "sec-ch-ua-mobile: ?0\r\n"
+    "sec-ch-ua-platform: \"Linux\"\r\n"
+    "Upgrade-Insecure-Requests: 1\r\n"
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
+    "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
+    "Sec-Fetch-Site: none\r\n"
+    "Sec-Fetch-Mode: navigate\r\n"
+    "Accept-Encoding: gzip, deflate, br, zstd\r\n"
+    "Accept-Language: en-US,en;q=0.9\r\n"
+    "\r\n";
+
+std::vector<std::string_view> field_names_of(const std::string &request)
+{
+    std::vector<std::string_view> names;
+    const std::string_view whole(request);
+    size_t at = whole.find("\r\n") + 2;
+    while (at + 1 < whole.size() && whole.substr(at, 2) != "\r\n") {
+        names.push_back(whole.substr(at, whole.find(':', at) - at));
+        at = whole.find("\r\n", at) + 2;
+    }
+    return names;
+}
+
+const std::vector<std::string_view> kChromeFieldNames = field_names_of(kChrome);
+
+void is_token_over_field_names(benchmark::State &state)
+{
+    for (auto _ : state) {
+        bool all = true;
+        for (const std::string_view name : kChromeFieldNames)
+            all = all && http::is_token(name, kChrome.size() -
+                                                  static_cast<size_t>(name.data() -
+                                                                      kChrome.data()));
+        benchmark::DoNotOptimize(all);
+    }
+}
+
+void every_byte_over_field_names(benchmark::State &state)
+{
+    for (auto _ : state) {
+        bool all = true;
+        for (const std::string_view name : kChromeFieldNames)
+            all = all && http::is_token(name, name.size());
+        benchmark::DoNotOptimize(all);
+    }
+}
+
 void parse_quoted_string(benchmark::State &state)
 {
     size_t at = 0;
@@ -77,6 +134,8 @@ void parse_http_date(benchmark::State &state)
 }
 
 BENCHMARK(is_tchar);
+BENCHMARK(every_byte_over_field_names);
+BENCHMARK(is_token_over_field_names);
 BENCHMARK(parse_quoted_string);
 BENCHMARK(parse_field_value_parameter);
 BENCHMARK(parse_imf_fixdate);

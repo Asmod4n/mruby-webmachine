@@ -449,3 +449,56 @@ attacker pulls. The base takes an empty string, which libstdc++ answers
 with a shared representation and no allocation, and `what()` gives the
 title out of the table of problems. Measured: the error path went 32
 percent faster.
+
+## A wide read is allowed where the caller says how far it may read
+
+A function that classifies bytes reads 32 at a time and masks what
+lies behind the run it was given. That is only sound where those bytes
+exist, so the caller says: `is_token(name, readable_bytes)`, where
+`readable_bytes` counts from the start of the run. A field value in a
+request buffer has the rest of the request behind it. A value standing
+alone has nothing, passes its own size, and takes the narrow way.
+
+There is no default. A default would let a caller take the slow way
+for ever without noticing.
+
+Both ways answer the same, and a test holds them against each other
+over all 256 bytes at every length.
+
+## A byte set is a table, and the table makes its own vector form
+
+The set is written once as `std::array<bool, 256>`, from the ABNF.
+`low_nibble_bits_of` computes the 16 byte table the vector code needs,
+at compile time, from that same array. Nobody writes a set twice.
+
+Neither compiler vectorizes the scalar form: a 256 entry table is a
+gather, and gcc says so. The set written as nine range comparisons is
+not vectorized either, and measured slower than the table, 174 ns
+against 117. So the intrinsic is written, for AVX2 and NEON at once,
+with the table as the third branch.
+
+Measured in the tree, the twelve field names of a request from Chrome:
+90.9 ns byte by byte, 37.7 ns with the wide read.
+
+The technique is simdjson's, and it was chosen over the one the fast
+servers use. picohttpparser, and so h2o and libreactor, scan with
+`_mm_cmpestri`, which holds eight ranges; `tchar` needs nine, so
+picohttpparser scans only for control bytes and checks the token
+against a table byte by byte. `_mm_cmpestri` also has no counterpart in
+NEON.
+
+## What a request may cost
+
+The fastest row this project has measured is in the archive, in
+`bench/results/forgecore.log`: 10 165 746 requests a second over
+HTTP/2 on one thread, so 98 nanoseconds per request and core. That is
+the yardstick, until a row replaces it.
+
+Read what that row measured before holding a number against it: no
+TLS, no body, and an answer whose every field came out of the HPACK
+table. It is the cost of moving frames, and a request that does work
+costs more.
+
+HTTP/2 reaches it partly because a field name arrives as an index and
+has no bytes to check. HTTP/1.1 reads every name off the wire, so the
+same work costs it more, and that is where it is worth removing.
