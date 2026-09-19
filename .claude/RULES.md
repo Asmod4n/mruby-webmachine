@@ -51,3 +51,14 @@ before the commit, with the files and the line counts.
 `http::parse_quoted_string`, not `http::parse_http_quoted_string` and
 not `http_parse_quoted_string` beside a namespace. One of the two says
 where the thing belongs, and it is the namespace.
+
+## The repository says who commits
+
+`git commit` takes the identity the repository is configured with. A
+session never passes `-c user.name` or `-c user.email`, and never puts
+a person's address on a commit it wrote itself.
+
+This rule exists because nine commits went out with the owner's
+private relay address under the name Claude. The address is public in
+a repository once it is pushed, and the only repair is a rewrite of
+every commit and a forced push.
