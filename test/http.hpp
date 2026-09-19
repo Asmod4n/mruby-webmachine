@@ -36,6 +36,23 @@ mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 8, out);
 }
 
+mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const auto got =
+        http::parse_quoted_string(std::string_view(text, static_cast<size_t>(length)));
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, *got);
+    mrb_value out[3] = {
+        cpp_to_mrb_value(mrb, got.error().rule()),
+        cpp_to_mrb_value(mrb, got.error().offset()),
+        cpp_to_mrb_value(mrb, got.error().found_byte()),
+    };
+    return mrb_ary_new_from_values(mrb, 3, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -44,6 +61,8 @@ inline void http_spec(mrb_state *mrb)
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
+                               MRB_ARGS_REQ(1));
 }
 
 #endif

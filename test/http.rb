@@ -92,3 +92,76 @@ assert('each problem carries its own section and rule') do
   assert_equal 'quoted-string', q[RULE]
   assert_equal 'The field value is not valid', q[TITLE]
 end
+
+QS_RULE   = 0
+QS_OFFSET = 1
+QS_FOUND  = 2
+
+# RFC 9110 5.6.4 Quoted Strings
+# A field value in double quotes holds more than a token does: a space,
+# a colon, a slash, and every byte from 0x80 up. Two bytes need a
+# backslash in front of them to stand inside: the double quote itself
+# and the backslash. A control byte may not stand there at all.
+
+assert('parse_quoted_string gives back the quoted-string with both quotes') do
+  assert_equal '"ab"', Webmachine::SpecHttp.parse_quoted_string('"ab"')
+  assert_equal '""', Webmachine::SpecHttp.parse_quoted_string('""')
+end
+
+# A parameter list holds more after the value, and the caller has to
+# know where this one ended.
+assert('parse_quoted_string stops at the closing quote') do
+  assert_equal '"ab"', Webmachine::SpecHttp.parse_quoted_string('"ab"; q=1')
+end
+
+# A backslash puts a quote inside the value, and the value keeps it.
+assert('parse_quoted_string reads a quoted-pair') do
+  assert_equal '"a\\"b"', Webmachine::SpecHttp.parse_quoted_string('"a\\"b"')
+  assert_equal '"a\\\\b"', Webmachine::SpecHttp.parse_quoted_string('"a\\\\b"')
+end
+
+# These are the bytes a token refuses and a quoted-string takes.
+assert('parse_quoted_string takes a space, a colon and a slash') do
+  assert_equal '"a b/c:d"', Webmachine::SpecHttp.parse_quoted_string('"a b/c:d"')
+end
+
+# obs-text is allowed here and nowhere else.
+assert('parse_quoted_string takes a byte above 0x7F') do
+  assert_equal "\"a\x80b\"", Webmachine::SpecHttp.parse_quoted_string("\"a\x80b\"")
+end
+
+assert('parse_quoted_string refuses a value that does not open with a quote') do
+  e = Webmachine::SpecHttp.parse_quoted_string('ab')
+  assert_equal 'quoted-string', e[QS_RULE]
+  assert_equal 0, e[QS_OFFSET]
+end
+
+# A truncated read and a value cut off by a peer look the same here.
+assert('parse_quoted_string refuses a value that never closes') do
+  e = Webmachine::SpecHttp.parse_quoted_string('"ab')
+  assert_equal 'quoted-string', e[QS_RULE]
+  assert_equal 3, e[QS_OFFSET]
+end
+
+# A backslash at the end asks for a byte that is not there.
+assert('parse_quoted_string refuses a backslash with nothing behind it') do
+  e = Webmachine::SpecHttp.parse_quoted_string('"ab\\')
+  assert_equal 'quoted-string', e[QS_RULE]
+  assert_equal 4, e[QS_OFFSET]
+end
+
+# A CR inside a field value is how request smuggling travels.
+assert('parse_quoted_string refuses a control byte and names it') do
+  e = Webmachine::SpecHttp.parse_quoted_string("\"a\rb\"")
+  assert_equal 'qdtext', e[QS_RULE]
+  assert_equal 2, e[QS_OFFSET]
+  assert_equal 13, e[QS_FOUND]
+end
+
+# A backslash does not make a control byte allowed.
+assert('parse_quoted_string refuses a control byte behind a backslash') do
+  e = Webmachine::SpecHttp.parse_quoted_string("\"a\\\x01b\"")
+  assert_equal 'qdtext', e[QS_RULE]
+  assert_equal 3, e[QS_OFFSET]
+  assert_equal 1, e[QS_FOUND]
+end
