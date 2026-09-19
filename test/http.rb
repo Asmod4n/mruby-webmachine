@@ -247,3 +247,76 @@ assert('parse_field_value_parameter counts the offset from the whole text') do
   assert_equal 'qdtext', e[0]
   assert_equal 11, e[1]
 end
+
+# RFC 9110 5.6.7 Date/Time Formats
+# One timestamp format a sender may generate: a fixed width of 29
+# bytes, always in GMT, always with English month and day names.
+# strftime and strptime follow the locale of the machine, so a German
+# host would read Mai where the wire says May. The month names are a
+# table here for that reason.
+
+assert('parse_imf_fixdate reads the timestamp of RFC 9110 5.6.7') do
+  assert_equal 784_111_777,
+               Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Nov 1994 08:49:37 GMT')
+end
+
+assert('parse_imf_fixdate reads the start of the epoch') do
+  assert_equal 0, Webmachine::SpecHttp.parse_imf_fixdate('Thu, 01 Jan 1970 00:00:00 GMT')
+end
+
+# A timestamp past this one no longer fits in a signed 32 bit number,
+# and the answer has to stay right.
+assert('parse_imf_fixdate reads a timestamp past 2038') do
+  assert_equal 2_147_483_647,
+               Webmachine::SpecHttp.parse_imf_fixdate('Tue, 19 Jan 2038 03:14:07 GMT')
+  assert_equal 4_102_444_800,
+               Webmachine::SpecHttp.parse_imf_fixdate('Fri, 01 Jan 2100 00:00:00 GMT')
+end
+
+# The calendar of std::chrono knows the leap years, so this tree does
+# not count them itself.
+assert('parse_imf_fixdate reads the 29th of February in a leap year') do
+  assert_equal 1_582_934_400,
+               Webmachine::SpecHttp.parse_imf_fixdate('Sat, 29 Feb 2020 00:00:00 GMT')
+end
+
+assert('parse_imf_fixdate refuses the 29th of February in a common year') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Mon, 29 Feb 2021 00:00:00 GMT')
+  assert_equal 'IMF-fixdate', e[0]
+  assert_equal 5, e[1]
+end
+
+# A leap second is 60, and the second after it is the next minute.
+assert('parse_imf_fixdate reads a leap second') do
+  assert_equal 820_454_400,
+               Webmachine::SpecHttp.parse_imf_fixdate('Sun, 31 Dec 1995 23:59:60 GMT')
+end
+
+assert('parse_imf_fixdate refuses an hour above 23') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Nov 1994 24:49:37 GMT')
+  assert_equal 'IMF-fixdate', e[0]
+  assert_equal 17, e[1]
+end
+
+assert('parse_imf_fixdate refuses a month name it does not know') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Mai 1994 08:49:37 GMT')
+  assert_equal 'month', e[0]
+end
+
+assert('parse_imf_fixdate refuses a digit place that holds a letter') do
+  e = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 0X Nov 1994 08:49:37 GMT')
+  assert_equal 'DIGIT', e[0]
+end
+
+# The two obsolete formats are read by their own functions, not by this
+# one, and a cut off timestamp is not a timestamp.
+assert('parse_imf_fixdate refuses anything that is not 29 bytes') do
+  ['Sun, 06 Nov 1994 08:49:37',
+   'Sunday, 06-Nov-94 08:49:37 GMT',
+   'Sun Nov  6 08:49:37 1994',
+   ''].each do |text|
+    e = Webmachine::SpecHttp.parse_imf_fixdate(text)
+    assert_equal 'IMF-fixdate', e[0], text
+    assert_equal 0, e[1], text
+  end
+end

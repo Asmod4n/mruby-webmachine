@@ -77,6 +77,21 @@ mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 3, out);
 }
 
+mrb_value spec_parse_imf_fixdate(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const auto got = http::parse_imf_fixdate(std::string_view(text, static_cast<size_t>(length)));
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got.error().rule()),
+        cpp_to_mrb_value(mrb, got.error().offset()),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -89,6 +104,8 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_field_value_parameter",
                                spec_parse_field_value_parameter, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_imf_fixdate", spec_parse_imf_fixdate,
+                               MRB_ARGS_REQ(1));
 }
 
 #endif

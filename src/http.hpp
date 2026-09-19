@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <expected>
 #include <cstdint>
@@ -32,6 +34,11 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text", 400},
     {"RFC 9110 5.6.6", "parameter", "The field value is not valid",
      "parameter-name \"=\" parameter-value", 400},
+    {"RFC 5234 B.1", "DIGIT", "The field value is not valid", "%x30-39", 400},
+    {"RFC 9110 5.6.7", "month", "The timestamp is not valid",
+     "Jan / Feb / Mar / Apr / May / Jun / Jul / Aug / Sep / Oct / Nov / Dec", 400},
+    {"RFC 9110 5.6.7", "IMF-fixdate", "The timestamp is not valid",
+     "day-name \",\" SP day SP month SP year SP hour \":\" minute \":\" second SP GMT", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -39,6 +46,9 @@ inline constexpr uint16_t kTcharProblem = 1;
 inline constexpr uint16_t kQuotedStringProblem = 2;
 inline constexpr uint16_t kQdtextProblem = 3;
 inline constexpr uint16_t kParameterProblem = 4;
+inline constexpr uint16_t kDigitProblem = 5;
+inline constexpr uint16_t kMonthProblem = 6;
+inline constexpr uint16_t kImfFixdateProblem = 7;
 
 class ParseError : public std::runtime_error
 {
@@ -180,6 +190,29 @@ struct Resource {
 };
 
 
+inline std::expected<unsigned, ParseError>
+parse_digits(const std::string_view text, const std::optional<size_t> count = std::nullopt)
+{
+    if (text.empty() || (count && text.size() != *count))
+        return std::unexpected(ParseError(kDigitProblem, text, 0));
+    unsigned value = 0;
+    const auto done = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (done.ec != std::errc{} || done.ptr != text.data() + text.size())
+        return std::unexpected(ParseError(kDigitProblem, text, 0));
+    return value;
+}
+
+inline constexpr std::array kMonthNames = std::to_array<std::string_view>(
+    {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"});
+
+inline std::expected<unsigned, ParseError> parse_month(const std::string_view text)
+{
+    const auto found = std::ranges::find(kMonthNames, text);
+    if (found == kMonthNames.end())
+        return std::unexpected(ParseError(kMonthProblem, text, 0));
+    return static_cast<unsigned>(std::distance(kMonthNames.begin(), found)) + 1;
+}
+
 constexpr std::string_view skip_optional_whitespace(const std::string_view text)
 {
     const size_t start = text.find_first_not_of(" \t");
@@ -219,6 +252,41 @@ parse_field_value_parameter(const std::string_view text)
     if (value.empty())
         return std::unexpected(ParseError(kTcharProblem, text, begins));
     return FieldValueParameter{name, value, raw.substr(value.size())};
+}
+
+inline std::expected<std::chrono::sys_seconds, ParseError>
+parse_imf_fixdate(const std::string_view text)
+{
+    if (text.size() != 29 || text.substr(3, 2) != ", " || text.at(7) != ' ' ||
+        text.at(11) != ' ' || text.at(16) != ' ' || text.at(19) != ':' || text.at(22) != ':' ||
+        text.substr(25) != " GMT")
+        return std::unexpected(ParseError(kImfFixdateProblem, text, 0));
+    const auto day = parse_digits(text.substr(5, 2), 2);
+    if (!day)
+        return std::unexpected(day.error());
+    const auto month = parse_month(text.substr(8, 3));
+    if (!month)
+        return std::unexpected(month.error());
+    const auto year = parse_digits(text.substr(12, 4), 4);
+    if (!year)
+        return std::unexpected(year.error());
+    const auto hour = parse_digits(text.substr(17, 2), 2);
+    if (!hour)
+        return std::unexpected(hour.error());
+    const auto minute = parse_digits(text.substr(20, 2), 2);
+    if (!minute)
+        return std::unexpected(minute.error());
+    const auto second = parse_digits(text.substr(23, 2), 2);
+    if (!second)
+        return std::unexpected(second.error());
+    if (*hour > 23 || *minute > 59 || *second > 60)
+        return std::unexpected(ParseError(kImfFixdateProblem, text, 17));
+    const std::chrono::year_month_day date{std::chrono::year{static_cast<int>(*year)},
+                                           std::chrono::month{*month}, std::chrono::day{*day}};
+    if (!date.ok())
+        return std::unexpected(ParseError(kImfFixdateProblem, text, 5));
+    return std::chrono::sys_days{date} + std::chrono::hours{*hour} +
+           std::chrono::minutes{*minute} + std::chrono::seconds{*second};
 }
 
 }

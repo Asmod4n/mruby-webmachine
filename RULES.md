@@ -253,3 +253,42 @@ with.
 `git clone --recursive`. A repository that has no submodule today can
 have one tomorrow, and a clone without them fails later and somewhere
 else.
+
+## Make the work easy for the compiler
+
+The compiler produces the fast code. Our part is to leave it nothing
+to be careful about.
+
+**Let it see everything.** A function the compiler cannot see, it
+cannot inline. The parsing code is in headers for that reason, and
+what is not gets `-flto`.
+
+**Nothing is allocated on the path that succeeds.** An allocation is a
+call the compiler cannot look into, and it ends every assumption it
+had about memory.
+
+**A result is read as soon as it is made.** Six results gathered into a
+list, only to find the first failure afterwards, read all six fields
+before anything is wrong and copy six objects that are not trivial.
+Write the six tests one after the other instead. Each one ends the
+function where the fault is.
+
+**No exception is thrown on that path either.** An error is a value,
+so the straight line through a function has no unwinding in it.
+
+**An indirect call stops inlining.** A virtual method, a
+`std::function`, a pointer to a function: the compiler has to assume
+the worst about all of them. A table of values is not an indirect
+call. A table of function pointers is.
+
+**A fixed size, checked once, at the top.** After `text.size() != 29`
+the compiler knows the length of every `substr` below it and drops the
+tests. A check in the middle of the work cannot do that.
+
+**Do not take the address of a local.** A pointer that leaves the
+function forces the value into memory. Views and indices keep it in a
+register.
+
+**Then measure, and believe the measurement.** The compiler is right
+more often than the person rewriting the loop. A change that is only
+believed to be faster does not enter the tree.
