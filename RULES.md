@@ -376,6 +376,24 @@ rule has a reason, the reason is one that a reader can check.
 configuration. A gem in the configuration is in every build and in the
 library that ships.
 
+## mruby has the methods CRuby has
+
+Every Array, Hash, String, Enumerable, Numeric, Symbol and Kernel method
+of CRuby is in mruby. They live in the `-ext` gems, and a gem that is not
+named in `mrbgem.rake` is not in the build.
+
+So `undefined method 'sum' for Array` does not mean mruby has no `sum`.
+`Enumerable#sum` is in `mruby-enum-ext`, and that gem was not named. The
+message reads exactly like a missing method and it is a missing line in
+`mrbgem.rake`.
+
+Never write around it. A hand rolled `inject` in place of `sum`, or a
+loop in place of `each_with_index`, hides a build that is short a gem and
+leaves the next test to find the same wall.
+
+Every `-ext` gem is a test dependency here, so a test is written in plain
+Ruby.
+
 ## No bang methods
 
 No method with `!`. A question a caller may ask is a `?` predicate.

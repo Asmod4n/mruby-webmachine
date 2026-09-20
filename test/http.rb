@@ -680,7 +680,7 @@ end
 # 5.1 "only needs an additional check that field names do not include
 # uppercase characters". So this is the token table with A to Z taken
 # out, and nothing else changes.
-UPPERCASE = %q{ABCDEFGHIJKLMNOPQRSTUVWXYZ}.bytes
+UPPERCASE = ('A'..'Z').to_a.map { |c| c.bytes.first }
 
 assert('lowercase_token? answers RFC 9113 8.2.1 for every one of the 256 bytes') do
   256.times do |byte|
@@ -780,9 +780,9 @@ ASTERISK  = 3
 # The bytes go in little-endian order, so the number is the bytes.
 assert('method_number packs the bytes of a method') do
   assert_equal 0, Webmachine::SpecHttp.method_number('')
-  assert_equal 'GET'.bytes.each_with_index.map { |b, i| b << (i * 8) }.inject(0) { |a, n| a + n },
+  assert_equal 'GET'.bytes.each_with_index.map { |b, i| b << (i * 8) }.sum,
                Webmachine::SpecHttp.method_number('GET')
-  assert_equal 'CONNECT'.bytes.each_with_index.map { |b, i| b << (i * 8) }.inject(0) { |a, n| a + n },
+  assert_equal 'CONNECT'.bytes.each_with_index.map { |b, i| b << (i * 8) }.sum,
                Webmachine::SpecHttp.method_number('CONNECT')
 end
 
