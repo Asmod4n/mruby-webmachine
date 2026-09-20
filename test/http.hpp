@@ -2,12 +2,14 @@
 
 #include <mruby.h>
 #include <mruby/array.h>
+#include <mruby/string.h>
 #include <mruby/cpp_to_mrb_value.hpp>
 
 #include <algorithm>
 #include <variant>
 #include <vector>
 
+#include "../src/flow.hpp"
 #include "../src/http.hpp"
 
 namespace
@@ -607,6 +609,119 @@ mrb_value spec_resolved_range(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+// The table as data: a name, its callback, its clause and its two
+// targets. A target is the name of a node, or "" and a status where the
+// walk ends.
+mrb_value spec_flow_node(mrb_state *mrb, mrb_value)
+{
+    const char *want = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &want, &length);
+    const std::string_view name(want, static_cast<size_t>(length));
+    for (size_t at = 0; at < flow::kFlow.size(); at++) {
+        const flow::FlowNode &node = flow::kFlow.at(at);
+        if (flow::name_of(node.id) != name)
+            continue;
+        mrb_value out[6] = {
+            cpp_to_mrb_value(mrb, node.callback == nullptr ? "" : node.callback),
+            cpp_to_mrb_value(mrb, node.clause),
+            cpp_to_mrb_value(mrb, flow::name_of(node.on_true.node)),
+            cpp_to_mrb_value(mrb, node.on_true.status),
+            cpp_to_mrb_value(mrb, flow::name_of(node.on_false.node)),
+            cpp_to_mrb_value(mrb, node.on_false.status),
+        };
+        return mrb_ary_new_from_values(mrb, 6, out);
+    }
+    return mrb_nil_value();
+}
+
+mrb_value spec_flow_names(mrb_state *mrb, mrb_value)
+{
+    const mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(flow::kFlow.size()));
+    for (const flow::FlowNode &node : flow::kFlow)
+        mrb_ary_push(mrb, out, cpp_to_mrb_value(mrb, flow::name_of(node.id)));
+    return out;
+}
+
+std::optional<http::EntityTag> spec_selected_tag(const mrb_value tag)
+{
+    if (mrb_nil_p(tag))
+        return std::nullopt;
+    const auto got = http::parse_entity_tag(
+        std::string_view(RSTRING_PTR(tag), static_cast<size_t>(RSTRING_LEN(tag))));
+    if (!got)
+        return std::nullopt;
+    return *got;
+}
+
+mrb_value spec_if_match_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_bool exists = FALSE;
+    mrb_value tag = mrb_nil_value();
+    mrb_get_args(mrb, "sbo", &field, &length, &exists, &tag);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_match_passes(whole, exists != FALSE, spec_selected_tag(tag));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
+mrb_value spec_if_none_match_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_bool exists = FALSE;
+    mrb_value tag = mrb_nil_value();
+    mrb_get_args(mrb, "sbo", &field, &length, &exists, &tag);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_none_match_passes(whole, exists != FALSE, spec_selected_tag(tag));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
+std::optional<std::chrono::sys_seconds> spec_moment(const mrb_value seconds)
+{
+    if (mrb_nil_p(seconds))
+        return std::nullopt;
+    return std::chrono::sys_seconds{std::chrono::seconds{mrb_integer(seconds)}};
+}
+
+mrb_value spec_if_modified_since_passes(mrb_state *mrb, mrb_value)
+{
+    mrb_int since = 0;
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "io", &since, &last_modified);
+    return mrb_bool_value(http::if_modified_since_passes(
+        std::chrono::sys_seconds{std::chrono::seconds{since}}, spec_moment(last_modified)));
+}
+
+mrb_value spec_if_unmodified_since_passes(mrb_state *mrb, mrb_value)
+{
+    mrb_int since = 0;
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "io", &since, &last_modified);
+    return mrb_bool_value(http::if_unmodified_since_passes(
+        std::chrono::sys_seconds{std::chrono::seconds{since}}, spec_moment(last_modified)));
+}
+
+mrb_value spec_if_range_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_value tag = mrb_nil_value();
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "soo", &field, &length, &tag, &last_modified);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_range_passes(whole, spec_selected_tag(tag),
+                                           spec_moment(last_modified), std::chrono::year{2026});
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -664,6 +779,18 @@ inline void http_spec(mrb_state *mrb)
                                spec_parse_byte_range_spec, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "resolved_range", spec_resolved_range,
                                MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "flow_node", spec_flow_node, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "flow_names", spec_flow_names, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "if_match_passes", spec_if_match_passes,
+                               MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_none_match_passes",
+                               spec_if_none_match_passes, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_modified_since_passes",
+                               spec_if_modified_since_passes, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_unmodified_since_passes",
+                               spec_if_unmodified_since_passes, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes,
+                               MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

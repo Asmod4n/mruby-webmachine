@@ -1178,6 +1178,79 @@ constexpr bool weak_comparison(const EntityTag left, const EntityTag right)
     return left.opaque_tag == right.opaque_tag;
 }
 
+inline std::expected<bool, Refusal> if_match_passes(const std::string_view field,
+                                                    const bool representation_exists,
+                                                    const std::optional<EntityTag> selected)
+{
+    if (field == "*")
+        return representation_exists;
+    std::string_view rest = field;
+    while (const auto element = parse_list_element(rest)) {
+        const auto tag = parse_entity_tag(element->element);
+        if (!tag) [[unlikely]]
+            return std::unexpected(moved_forward(
+                tag.error(),
+                static_cast<size_t>(std::distance(field.data(), element->element.data()))));
+        if (selected && strong_comparison(*tag, *selected))
+            return true;
+        rest = element->rest;
+    }
+    return false;
+}
+
+inline std::expected<bool, Refusal> if_none_match_passes(const std::string_view field,
+                                                         const bool representation_exists,
+                                                         const std::optional<EntityTag> selected)
+{
+    if (field == "*")
+        return !representation_exists;
+    std::string_view rest = field;
+    while (const auto element = parse_list_element(rest)) {
+        const auto tag = parse_entity_tag(element->element);
+        if (!tag) [[unlikely]]
+            return std::unexpected(moved_forward(
+                tag.error(),
+                static_cast<size_t>(std::distance(field.data(), element->element.data()))));
+        if (selected && weak_comparison(*tag, *selected))
+            return false;
+        rest = element->rest;
+    }
+    return true;
+}
+
+constexpr bool
+if_modified_since_passes(const std::chrono::sys_seconds since,
+                         const std::optional<std::chrono::sys_seconds> last_modified)
+{
+    return !last_modified || *last_modified > since;
+}
+
+constexpr bool
+if_unmodified_since_passes(const std::chrono::sys_seconds since,
+                           const std::optional<std::chrono::sys_seconds> last_modified)
+{
+    return last_modified.has_value() && *last_modified <= since;
+}
+
+inline constexpr size_t kIfRangeQuoteWithin = 3;
+
+inline std::expected<bool, Refusal>
+if_range_passes(const std::string_view field, const std::optional<EntityTag> selected,
+                const std::optional<std::chrono::sys_seconds> last_modified,
+                const std::chrono::year current_year)
+{
+    if (field.substr(0, kIfRangeQuoteWithin).find('"') != std::string_view::npos) {
+        const auto tag = parse_entity_tag(field);
+        if (!tag) [[unlikely]]
+            return std::unexpected(tag.error());
+        return selected.has_value() && strong_comparison(*tag, *selected);
+    }
+    const auto date = parse_http_date(field, current_year);
+    if (!date) [[unlikely]]
+        return std::unexpected(date.error());
+    return last_modified.has_value() && *last_modified == *date;
+}
+
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,
                                                                   const uint64_t method)
 {

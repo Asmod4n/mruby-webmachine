@@ -1492,3 +1492,169 @@ assert('resolved_range says which range no representation can answer') do
   assert_false Webmachine::SpecHttp.resolved_range('0-0', 0)
   assert_false Webmachine::SpecHttp.resolved_range('-1', 0)
 end
+
+FLOW_CALLBACK = 0
+FLOW_CLAUSE   = 1
+FLOW_TRUE     = 2
+FLOW_TRUE_END = 3
+FLOW_FALSE    = 4
+FLOW_FALSE_END = 5
+
+def flow_targets(name)
+  node = Webmachine::SpecHttp.flow_node(name)
+  [[node[FLOW_TRUE], node[FLOW_TRUE_END]], [node[FLOW_FALSE], node[FLOW_FALSE_END]]]
+end
+
+# The graph is webmachine's, node letter for node letter, so a resource
+# written against webmachine-ruby runs here. What a table cannot have is
+# an edge to a node that is not there, or a node nobody reaches.
+assert('the flow table has no dangling edge and no unreachable node') do
+  names = Webmachine::SpecHttp.flow_names
+  names.each do |name|
+    flow_targets(name).each do |target, status|
+      assert_true target.empty? || names.include?(target), "#{name} -> #{target}"
+      assert_true target.empty? ? status > 0 : status == 0, "#{name} -> #{target} #{status}"
+    end
+  end
+  seen = ['B13']
+  walk = ['B13']
+  until walk.empty?
+    flow_targets(walk.shift).each do |target, _|
+      next if target.empty? || seen.include?(target)
+      seen << target
+      walk << target
+    end
+  end
+  assert_equal names.sort, seen.sort
+end
+
+# Every edge names the clause of RFC 9110 it implements. A node without
+# one is a decision nobody can check against the document.
+assert('every node of the flow names its clause') do
+  Webmachine::SpecHttp.flow_names.each do |name|
+    clause = Webmachine::SpecHttp.flow_node(name)[FLOW_CLAUSE]
+    assert_true clause.include?('RFC') || clause.include?('GET/HEAD'), "#{name}: #{clause}"
+  end
+end
+
+# RFC 9110 13.2.2 step 2: If-Unmodified-Since is evaluated "when
+# recipient is the origin server, If-Match is not present, and
+# If-Unmodified-Since is present". webmachine's graph, which was drawn
+# against RFC 2616, walks from a satisfied If-Match into H10 and asks
+# both. A request that carries a matching If-Match and a stale
+# If-Unmodified-Since is answered 412 there and 2xx by RFC 9110.
+assert('a satisfied If-Match does not ask If-Unmodified-Since') do
+  assert_equal 'I12', flow_targets('G9')[0][0]
+  assert_equal 'I12', flow_targets('G11')[0][0]
+  assert_equal 'H10', flow_targets('G8')[1][0]
+end
+
+# RFC 9110 13.2.2 step 4: If-Modified-Since is evaluated "when the method
+# is GET or HEAD, If-None-Match is not present, and If-Modified-Since is
+# present". The graph walked from a failed If-None-Match into L13 and
+# asked the date as well. Step 3 ends at step 5, not at step 4.
+assert('an If-None-Match that is present decides alone') do
+  assert_equal 'M16', flow_targets('K13')[1][0]
+  assert_equal 'L13', flow_targets('I12')[1][0]
+end
+
+# RFC 2616 14.25 told a server to ignore an If-Modified-Since that lies
+# in the future. RFC 9110 13.1.3 has no such rule - the condition is
+# false where the last modification is earlier or equal, and true
+# otherwise. The node that held the old rule is gone.
+assert('no node reads a date in the future as a rule of its own') do
+  assert_nil Webmachine::SpecHttp.flow_node('L15')
+  assert_equal 'L17', flow_targets('L14')[0][0]
+end
+
+# RFC 9110 12.5.2: "Accept-Charset is deprecated". Two nodes negotiated
+# a field that no client sends and no server should honour.
+assert('the charset nodes are gone') do
+  assert_nil Webmachine::SpecHttp.flow_node('E5')
+  assert_nil Webmachine::SpecHttp.flow_node('E6')
+  assert_equal 'F6', flow_targets('D5')[0][0]
+  assert_equal 'F6', flow_targets('D4')[1][0]
+end
+
+# The spine of the graph is what an application author knows, and it may
+# not move while the preconditions are corrected.
+assert('the graph still answers the statuses webmachine answers') do
+  assert_equal 503, flow_targets('B13')[1][1]
+  assert_equal 501, flow_targets('B12')[1][1]
+  assert_equal 405, flow_targets('B10')[1][1]
+  assert_equal 415, flow_targets('B5')[1][1]
+  assert_equal 412, flow_targets('G11')[1][1]
+  assert_equal 304, flow_targets('J18')[0][1]
+  assert_equal 412, flow_targets('J18')[1][1]
+  assert_equal 404, flow_targets('L7')[1][1]
+  assert_equal 410, flow_targets('M5')[1][1]
+  assert_equal 201, flow_targets('P11')[0][1]
+  assert_equal 204, flow_targets('O20')[1][1]
+end
+
+# RFC 9110 13.1.1, the three steps: "*" is true where a current
+# representation exists; a list is true where one tag matches; otherwise
+# false. "An origin server MUST use the strong comparison function",
+# which is why a weak tag never satisfies it.
+assert('if_match_passes follows the three steps of RFC 9110 13.1.1') do
+  assert_true Webmachine::SpecHttp.if_match_passes('*', true, '"a"')
+  assert_false Webmachine::SpecHttp.if_match_passes('*', false, nil)
+  assert_true Webmachine::SpecHttp.if_match_passes('"xyzzy"', true, '"xyzzy"')
+  assert_true Webmachine::SpecHttp.if_match_passes('"a", "xyzzy", "c3piozzzz"', true, '"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_match_passes('"r2d2xxxx"', true, '"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_match_passes('W/"xyzzy"', true, '"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_match_passes('"xyzzy"', true, 'W/"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_match_passes('"xyzzy"', true, nil)
+  assert_equal 'entity-tag', Webmachine::SpecHttp.if_match_passes('xyzzy', true, '"xyzzy"')
+end
+
+# RFC 9110 13.1.2, the same three steps with the answers turned over,
+# and the weak comparison: a cache revalidating with W/"x" against "x"
+# is told it is still fresh.
+assert('if_none_match_passes follows the three steps of RFC 9110 13.1.2') do
+  assert_false Webmachine::SpecHttp.if_none_match_passes('*', true, '"a"')
+  assert_true Webmachine::SpecHttp.if_none_match_passes('*', false, nil)
+  assert_false Webmachine::SpecHttp.if_none_match_passes('"xyzzy"', true, '"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_none_match_passes('W/"xyzzy"', true, '"xyzzy"')
+  assert_false Webmachine::SpecHttp.if_none_match_passes('"a", "xyzzy"', true, '"xyzzy"')
+  assert_true Webmachine::SpecHttp.if_none_match_passes('"r2d2xxxx"', true, '"xyzzy"')
+  assert_true Webmachine::SpecHttp.if_none_match_passes('"xyzzy"', true, nil)
+end
+
+# RFC 9110 13.1.3: false where the last modification is earlier or equal
+# to the date given, true otherwise. A representation that names no last
+# modification reaches step 2, so the condition is true and the method
+# runs - no 304 on a guess.
+assert('if_modified_since_passes reads the two steps of RFC 9110 13.1.3') do
+  assert_false Webmachine::SpecHttp.if_modified_since_passes(1000, 1000)
+  assert_false Webmachine::SpecHttp.if_modified_since_passes(1000, 999)
+  assert_true Webmachine::SpecHttp.if_modified_since_passes(1000, 1001)
+  assert_true Webmachine::SpecHttp.if_modified_since_passes(1000, nil)
+end
+
+# RFC 9110 13.1.4: true where the last modification is earlier or equal,
+# false otherwise. A representation with no last modification reaches
+# step 2 here as well, and there step 2 is false - which is 412, and why
+# the graph asks last_modified before it asks this.
+assert('if_unmodified_since_passes reads the two steps of RFC 9110 13.1.4') do
+  assert_true Webmachine::SpecHttp.if_unmodified_since_passes(1000, 1000)
+  assert_true Webmachine::SpecHttp.if_unmodified_since_passes(1000, 999)
+  assert_false Webmachine::SpecHttp.if_unmodified_since_passes(1000, 1001)
+  assert_false Webmachine::SpecHttp.if_unmodified_since_passes(1000, nil)
+end
+
+# RFC 9110 13.1.5: "A valid entity-tag can be distinguished from a valid
+# HTTP-date by examining the first three characters for a DQUOTE." The
+# tag is compared strongly, so a weak one never matches; the date must
+# match the last modification exactly, not merely be later.
+assert('if_range_passes tells a tag from a date as RFC 9110 13.1.5 says') do
+  assert_true Webmachine::SpecHttp.if_range_passes('"xyzzy"', '"xyzzy"', nil)
+  assert_false Webmachine::SpecHttp.if_range_passes('"r2d2"', '"xyzzy"', nil)
+  assert_false Webmachine::SpecHttp.if_range_passes('W/"xyzzy"', '"xyzzy"', nil)
+  assert_false Webmachine::SpecHttp.if_range_passes('"xyzzy"', nil, nil)
+  moment = Webmachine::SpecHttp.parse_imf_fixdate('Sun, 06 Nov 1994 08:49:37 GMT')
+  assert_true Webmachine::SpecHttp.if_range_passes('Sun, 06 Nov 1994 08:49:37 GMT', nil, moment)
+  assert_false Webmachine::SpecHttp.if_range_passes('Sun, 06 Nov 1994 08:49:38 GMT', nil, moment)
+  assert_false Webmachine::SpecHttp.if_range_passes('Sun, 06 Nov 1994 08:49:37 GMT', nil, nil)
+  assert_equal 'IMF-fixdate', Webmachine::SpecHttp.if_range_passes('not a date', nil, moment)
+end
