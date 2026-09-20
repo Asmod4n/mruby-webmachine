@@ -1134,5 +1134,40 @@ inside the VM. The key is evaluated before any VM call, and it is stored
 beside its entry in LMDB, where an mruby array cannot go. So: the same
 discipline, plain structs, `const` after the route is added.
 
-Two environments, because LMDB has one writer each: the catalogue a tool
-writes, and the cache the server writes.
+Two environments, because LMDB has one writer each, and the server is
+the writer of neither. A tool compiles the catalogue, another process
+writes the cache, and the server opens both the way it already opens the
+password file: `MDB_RDONLY | MDB_NOSUBDIR | MDB_NOTLS`. What the server
+writes is its logs.
+
+One read transaction per thread, and a count on it. A response that
+sends bytes out of the map holds the transaction, because a value from
+`mdb_get` lives until the end of its transaction and the send reads it
+long after the handler returned. When the count falls to zero the
+transaction resets, and the next use renews it. So every response in
+flight shares one snapshot, one reader slot is held per thread, and the
+snapshot moves on in the first quiet moment.
+
+It has to move on, because a held snapshot is a file that grows: LMDB
+cannot reuse a page that is older than its oldest reader.
+
+The writer therefore tells the server when it has committed. Not for
+correctness - a renew reads the newest snapshot by itself - but for
+promptness, because under steady load the count is rarely zero and the
+server would sit on an old snapshot without knowing. The message carries
+the route and the key, an empty key for everything under that route, and
+both empty for everything, so the server can drop what it derived rather
+than all of it.
+
+A unix datagram socket carries it. It has a path, so the writer finds it
+with nothing handed over - an eventfd would have to be passed along a
+socket, and then the socket is there anyway. The server reads it on the
+ring like any other descriptor, so there is no second way of waking it.
+A datagram has an edge, so a message is a message. And either side runs
+without the other: `sendto` fails with `ENOENT` and the writer goes on,
+where a FIFO would block it until somebody reads.
+
+Not inotify on the data file: LMDB writes with `write` or with `msync`
+depending on `writemap`, and an event is not promised. Not a generation
+number inside the database either - reading it needs the renew it is
+supposed to ask for.
