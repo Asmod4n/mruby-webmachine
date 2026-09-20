@@ -401,6 +401,69 @@ inline size_t allowed_run_length(const std::string_view padded,
 #endif
 }
 
+#if defined(__AVX2__)
+inline uint32_t avx2_field_value_refusals(const char *at)
+{
+    const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(at));
+    const __m256i below_space = _mm256_cmpeq_epi8(
+        _mm256_max_epu8(bytes, _mm256_set1_epi8(0x1f)), _mm256_set1_epi8(0x1f));
+    const __m256i horizontal_tab = _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8('\t'));
+    const __m256i delete_byte = _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8(0x7f));
+    return static_cast<uint32_t>(_mm256_movemask_epi8(
+        _mm256_or_si256(_mm256_andnot_si256(horizontal_tab, below_space), delete_byte)));
+}
+#elif defined(__ARM_NEON)
+inline uint64_t neon_field_value_refusals(const unsigned char *at)
+{
+    const uint8x16_t bytes = vld1q_u8(at);
+    const uint8x16_t below_space = vcleq_u8(bytes, vdupq_n_u8(0x1f));
+    const uint8x16_t horizontal_tab = vceqq_u8(bytes, vdupq_n_u8('\t'));
+    const uint8x16_t delete_byte = vceqq_u8(bytes, vdupq_n_u8(0x7f));
+    const uint8x16_t refused =
+        vorrq_u8(vbicq_u8(below_space, horizontal_tab), delete_byte);
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(refused), 4)), 0);
+}
+#endif
+
+inline size_t field_value_run_length(const std::string_view padded)
+{
+    static_assert(32 <= kWidePadding);
+#if defined(__AVX2__)
+    for (size_t at = 0; at < padded.size(); at += 32) {
+        const uint32_t refused = avx2_field_value_refusals(std::next(padded.data(), at));
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
+    }
+    return padded.size();
+#elif defined(__ARM_NEON)
+    const unsigned char *const from = reinterpret_cast<const unsigned char *>(padded.data());
+    for (size_t at = 0; at < padded.size(); at += 16) {
+        const uint64_t refused = neon_field_value_refusals(std::next(from, at));
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)) /
+                                     kNeonNibblesPerByte,
+                            padded.size());
+    }
+    return padded.size();
+#else
+    const auto found = std::ranges::find_if_not(padded, [](const char letter) {
+        const unsigned char byte = static_cast<unsigned char>(letter);
+        return (byte >= 0x20 || byte == '\t') && byte != 0x7f;
+    });
+    return static_cast<size_t>(std::distance(padded.begin(), found));
+#endif
+}
+
+inline bool is_field_value(const std::string_view text)
+{
+    if (text.empty())
+        return true;
+    if (text.front() == ' ' || text.front() == '\t' || text.back() == ' ' ||
+        text.back() == '\t')
+        return false;
+    return field_value_run_length(text) == text.size();
+}
+
 inline bool is_token(const std::string_view text)
 {
     return !text.empty() && allowed_run_length(text, kTchar, kTcharLowBits) == text.size();
