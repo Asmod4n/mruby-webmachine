@@ -1073,3 +1073,66 @@ costs more.
 HTTP/2 reaches it partly because a field name arrives as an index and
 has no bytes to check. HTTP/1.1 reads every name off the wire, so the
 same work costs it more, and that is where it is worth removing.
+
+## The cache key names the part, never the value
+
+The decision is recorded here because it was reasoned through before
+RFC 9111 was written, and the reasoning is not in the RFC.
+
+RFC 9111 4.1 keys a cached response by the target URI. That is the rule
+for a cache that stands outside and knows nothing of the origin's
+semantics. Ours stands inside the origin, so it may key on anything it
+knows to be enough - and what is enough, only the resource knows.
+`/animals/dogs`, `/animals/dogs?utm_source=mail` and
+`/animals/dogs?session=abc` are three target URIs and one body.
+
+So the key has two halves, and each side names only what it can see:
+
+- **The resource names the parts.** Not their values: `parameter sort`
+  and never `sort=dogs`. An expression that holds no value is a function
+  of the request, so the server can evaluate the same expression on the
+  next request, before the handler runs. That is what lets a hit skip
+  the handler rather than only skip the body.
+- **The server adds what the resource cannot know.** The identity of the
+  route, so two resources cannot collide; the method; and the axes
+  `Vary` names, so a gzip answer never reaches a client that reads none.
+
+The names come from the route, in the notation the route already uses -
+a literal is a string, a name is a symbol, `:*` is the splat. A route
+names path segments today, and it grows to name a query parameter, a
+cookie and a field, so that every named part of a request is declared
+once, in one place, at `route.add`. A name the route does not know is a
+refusal at startup.
+
+Which of those names built *this* body is the handler's to say, and
+nobody else's. The body is built inside the block, so a hit never builds
+it:
+
+    def to_html
+      cache([:kind, :sort], 5.minutes) { build_body }
+    end
+
+A fragment is not a response. Its key is the route and the names, and
+that is all: no `Vary`, no conditional requests, no Authorization rule.
+Storing a whole response is RFC 9111 in full, and it is a second thing.
+
+Three rules the server keeps whatever the resource declared. A key that
+names a session makes the entry private. `Authorization` in the request
+means the shared cache does not store the response - RFC 9111 3 states
+it as a condition, and 3.5 names the three directives that lift it:
+`must-revalidate`, `public`, `s-maxage`. And a read transaction stays
+open until the send completes, because a value from `mdb_get` lives
+until the end of its transaction and the send reads it after the handler
+has returned.
+
+The expression is compiled once, at `route.add`, into C++ data and not
+into mruby data. mruby-mustache is the shape to follow and the place to
+stop following it: its `Template.compile` tokenizes, checks the shape
+once and freezes every op, which is right, and it keeps the ops as a
+frozen mruby array, which is right there because the render is already
+inside the VM. The key is evaluated before any VM call, and it is stored
+beside its entry in LMDB, where an mruby array cannot go. So: the same
+discipline, plain structs, `const` after the route is added.
+
+Two environments, because LMDB has one writer each: the catalogue a tool
+writes, and the cache the server writes.
