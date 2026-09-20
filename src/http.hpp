@@ -183,6 +183,7 @@ inline constexpr uint64_t kPostNumber = method_number("POST");
 inline constexpr uint64_t kPutNumber = method_number("PUT");
 inline constexpr uint64_t kDeleteNumber = method_number("DELETE");
 inline constexpr uint64_t kTraceNumber = method_number("TRACE");
+inline constexpr uint64_t kQueryNumber = method_number("QUERY");
 
 enum class Method : uint8_t {
     kUnknown,
@@ -194,6 +195,7 @@ enum class Method : uint8_t {
     kConnect,
     kOptions,
     kTrace,
+    kQuery,
 };
 
 constexpr Method method_of(const std::string_view text)
@@ -215,6 +217,8 @@ constexpr Method method_of(const std::string_view text)
         return Method::kOptions;
     case kTraceNumber:
         return Method::kTrace;
+    case kQueryNumber:
+        return Method::kQuery;
     default:
         return Method::kUnknown;
     }
@@ -222,10 +226,12 @@ constexpr Method method_of(const std::string_view text)
 
 // RFC 9110 9.2.1: "Of the request methods defined by this specification,
 // the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
+// RFC 10008 2.1 adds QUERY: "QUERY requests are safe with regard to the
+// target resource."
 constexpr bool is_safe(const Method method)
 {
     return method == Method::kGet || method == Method::kHead || method == Method::kOptions ||
-           method == Method::kTrace;
+           method == Method::kTrace || method == Method::kQuery;
 }
 
 // RFC 9110 9.2.2: "Of the request methods defined by this specification,
@@ -237,10 +243,13 @@ constexpr bool is_idempotent(const Method method)
 
 // RFC 9110 9.2.3: "This specification defines caching semantics for GET,
 // HEAD, and POST, although the overwhelming majority of cache
-// implementations only support GET and HEAD."
+// implementations only support GET and HEAD." RFC 10008 2.7: "The
+// response to a QUERY method is cacheable; a cache MAY use it to satisfy
+// subsequent QUERY requests."
 constexpr bool is_cacheable(const Method method)
 {
-    return method == Method::kGet || method == Method::kHead || method == Method::kPost;
+    return method == Method::kGet || method == Method::kHead || method == Method::kPost ||
+           method == Method::kQuery;
 }
 
 constexpr char ascii_lowered(const char letter)

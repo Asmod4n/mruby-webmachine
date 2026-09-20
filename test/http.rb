@@ -1410,6 +1410,7 @@ SPEC_DELETE         = 5
 SPEC_CONNECT        = 6
 SPEC_OPTIONS        = 7
 SPEC_TRACE          = 8
+SPEC_QUERY          = 9
 
 # RFC 9110 9.2.1: "Of the request methods defined by this specification,
 # the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
@@ -1425,7 +1426,12 @@ assert('the eight methods of RFC 9110 9.3 and what 9.2 says about them') do
    ['DELETE',  SPEC_DELETE,      false, true,  false],
    ['CONNECT', SPEC_CONNECT,     false, false, false],
    ['OPTIONS', SPEC_OPTIONS,     true,  true,  false],
-   ['TRACE',   SPEC_TRACE,       true,  true,  false]].each do |name, number, safe, idem, cache|
+   ['TRACE',   SPEC_TRACE,       true,  true,  false],
+   # RFC 10008 2.1 and 2.7: QUERY is safe, idempotent, and its response
+   # is cacheable for later QUERY requests. It exists because a POST
+   # response, per RFC 9110 9.3.3, "cannot be satisfied by a cached POST
+   # response because POST is potentially unsafe".
+   ['QUERY',   SPEC_QUERY,       true,  true,  true]].each do |name, number, safe, idem, cache|
     got = Webmachine::SpecHttp.method_properties(name)
     assert_equal [number, safe, idem, cache], got, name
   end
@@ -1434,7 +1440,7 @@ end
 # A method is a token, and one longer than eight bytes cannot even be a
 # number here, so WebDAV lands on unknown rather than on a wrong answer.
 assert('an unknown method is unknown, and nothing about it is assumed') do
-  ['PATCH', 'PROPFIND', 'get', 'Get', '', 'GETT', 'REPORT'].each do |name|
+  ['PATCH', 'PROPFIND', 'get', 'Get', '', 'GETT', 'REPORT', 'QUER'].each do |name|
     assert_equal [SPEC_UNKNOWN_METHOD, false, false, false],
                  Webmachine::SpecHttp.method_properties(name), name
   end
