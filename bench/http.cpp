@@ -883,6 +883,147 @@ void classify_once_libc_four(benchmark::State &state)
     }
 }
 
+// Can we hold to HTTP and still beat it. The one thing glibc cannot do
+// and this tree can: read past the end of a name. The ring leaves
+// kWidePadding bytes behind every byte of the pool, so a name of four
+// bytes can be loaded as eight and the bytes that are not the name are
+// masked away. The needle is a literal, so its word is a constant and the
+// whole comparison is a load, an and, the fold and one compare.
+constexpr uint64_t ascii_word_at(const std::string_view text, const size_t at)
+{
+    uint64_t word = 0;
+    for (size_t index = 0; index < 8 && at + index < text.size(); index++)
+        word |= static_cast<uint64_t>(static_cast<unsigned char>(text.at(at + index)))
+                << (index * 8);
+    return word;
+}
+
+inline uint64_t padded_word_at(const std::string_view text, const size_t at)
+{
+    uint64_t word = 0;
+    std::memcpy(&word, std::next(text.data(), static_cast<ptrdiff_t>(at)), 8);
+    const size_t left = text.size() - at;
+    return left >= 8 ? word : word & ((uint64_t{1} << (left * 8)) - 1);
+}
+
+// The fold above is right for tchar and wrong for a byte above 0x7f: the
+// carry of 0xc1 + 0x3f lands in the next byte. A field name is tchar, but
+// the comparison runs before anything says so, so bit 7 is taken out of
+// the range test and put back as the last and.
+uint64_t ascii_lowered_word_safe(const uint64_t word)
+{
+    const uint64_t high = 0x8080808080808080ull;
+    const uint64_t seven = word & ~high;
+    const uint64_t at_least_a = seven + 0x3f3f3f3f3f3f3f3full;
+    const uint64_t at_most_z = seven + 0x2525252525252525ull;
+    return word | ((at_least_a & ~at_most_z & ~word & high) >> 2);
+}
+
+inline bool name_is_safe(const std::string_view name, const std::string_view lowercase)
+{
+    if (name.size() != lowercase.size())
+        return false;
+    if (ascii_lowered_word_safe(padded_word_at(name, 0)) != ascii_word_at(lowercase, 0))
+        return false;
+    if (name.size() <= 8)
+        return true;
+    if (ascii_lowered_word_safe(padded_word_at(name, 8)) != ascii_word_at(lowercase, 8))
+        return false;
+    return name.size() <= 16 || equal_ignoring_case_wide(name.substr(16), lowercase.substr(16));
+}
+
+std::string_view safe_field_lookup(const std::vector<ChromeField> &fields,
+                                   const std::string_view name)
+{
+    for (size_t at = 0; at < fields.size(); at++)
+        if (name_is_safe(fields[at].name, name))
+            return fields[at].value;
+    return std::string_view{};
+}
+
+void safe_four_lookups(benchmark::State &state)
+{
+    for (auto _ : state) {
+        size_t seen = safe_field_lookup(kChromeFields, "host").size() +
+                      safe_field_lookup(kChromeFields, "accept").size() +
+                      safe_field_lookup(kChromeFields, "accept-encoding").size() +
+                      safe_field_lookup(kChromeFields, "accept-language").size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+inline bool name_is(const std::string_view name, const std::string_view lowercase)
+{
+    if (name.size() != lowercase.size())
+        return false;
+    if (ascii_lowered_word(padded_word_at(name, 0)) != ascii_word_at(lowercase, 0))
+        return false;
+    if (name.size() <= 8)
+        return true;
+    if (ascii_lowered_word(padded_word_at(name, 8)) != ascii_word_at(lowercase, 8))
+        return false;
+    return name.size() <= 16 || equal_ignoring_case_wide(name.substr(16), lowercase.substr(16));
+}
+
+std::string_view padded_field_lookup(const std::vector<ChromeField> &fields,
+                                     const std::string_view name)
+{
+    for (size_t at = 0; at < fields.size(); at++)
+        if (name_is(fields[at].name, name))
+            return fields[at].value;
+    return std::string_view{};
+}
+
+void padded_four_lookups(benchmark::State &state)
+{
+    for (auto _ : state) {
+        size_t seen = padded_field_lookup(kChromeFields, "host").size() +
+                      padded_field_lookup(kChromeFields, "accept").size() +
+                      padded_field_lookup(kChromeFields, "accept-encoding").size() +
+                      padded_field_lookup(kChromeFields, "accept-language").size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+KnownFields classify_once_padded(const std::vector<ChromeField> &fields)
+{
+    KnownFields known{};
+    for (const ChromeField field : fields) {
+        const size_t length = field.name.size();
+        if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
+            continue;
+        switch (length) {
+        case 4:
+            if (name_is(field.name, "host"))
+                known.host = field.value;
+            break;
+        case 6:
+            if (name_is(field.name, "accept"))
+                known.accept = field.value;
+            break;
+        case 15:
+            if (name_is(field.name, "accept-encoding"))
+                known.accept_encoding = field.value;
+            else if (name_is(field.name, "accept-language"))
+                known.accept_language = field.value;
+            break;
+        default:
+            break;
+        }
+    }
+    return known;
+}
+
+void classify_once_padded_four(benchmark::State &state)
+{
+    for (auto _ : state) {
+        const KnownFields known = classify_once_padded(kChromeFields);
+        size_t seen = known.host.size() + known.accept.size() +
+                      known.accept_encoding.size() + known.accept_language.size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
 void classify_once_four(benchmark::State &state)
 {
     for (auto _ : state) {
@@ -928,6 +1069,9 @@ BENCHMARK(wide_four_lookups);
 BENCHMARK(classify_once_four);
 BENCHMARK(classify_once_wide_four);
 BENCHMARK(classify_once_libc_four);
+BENCHMARK(padded_four_lookups);
+BENCHMARK(classify_once_padded_four);
+BENCHMARK(safe_four_lookups);
 BENCHMARK(parameter_walk_archive);
 BENCHMARK(parameter_walk_new);
 BENCHMARK(charset_quoted_archive_keeps_quotes);
