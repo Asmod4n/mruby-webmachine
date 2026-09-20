@@ -326,6 +326,38 @@ mrb_value spec_parse_request_target(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 6, out);
 }
 
+mrb_value spec_next_segment(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const http::PathWalk walk =
+        http::next_segment(std::string_view(text, static_cast<size_t>(length)));
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, walk.segment),
+        cpp_to_mrb_value(mrb, walk.rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_path_has_dot_segment(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::path_has_dot_segment(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_remove_dot_segments(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, http::remove_dot_segments(std::string_view(text, static_cast<size_t>(length))));
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -349,6 +381,11 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_request_target", spec_parse_request_target,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "next_segment", spec_next_segment, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "path_has_dot_segment?", spec_path_has_dot_segment,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "remove_dot_segments", spec_remove_dot_segments,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

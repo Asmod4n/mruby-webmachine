@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -799,6 +800,78 @@ inline std::expected<RequestTarget, Refusal> parse_absolute_form(const std::stri
     if (!origin) [[unlikely]]
         return std::unexpected(moved_forward(origin.error(), end));
     return RequestTarget{TargetForm::kAbsolute, scheme, *host, origin->path, origin->query};
+}
+
+struct PathWalk {
+    std::string_view segment;
+    std::string_view rest;
+};
+
+// RFC 3986 3.3: a path is segments behind slashes, and the walk gives
+// them one at a time. "/a/" holds two segments, "a" and the empty one
+// the trailing slash makes, so the caller stops on an empty rest and
+// not on an empty segment.
+inline PathWalk next_segment(const std::string_view path)
+{
+    const std::string_view after = path.substr(path.starts_with('/') ? 1 : 0);
+    const size_t slash = after.find('/');
+    if (slash == std::string_view::npos)
+        return PathWalk{after, {}};
+    return PathWalk{after.substr(0, slash), after.substr(slash)};
+}
+
+constexpr bool is_dot_segment(const std::string_view segment)
+{
+    return segment == "." || segment == "..";
+}
+
+inline bool path_has_dot_segment(const std::string_view path)
+{
+    std::string_view rest = path;
+    while (!rest.empty()) {
+        const PathWalk walk = next_segment(rest);
+        if (is_dot_segment(walk.segment)) [[unlikely]]
+            return true;
+        rest = walk.rest;
+    }
+    return false;
+}
+
+// RFC 3986 5.2.4, the five cases of its loop in its order. RFC 3986
+// 6.2.2.3 asks a recipient to run it over a path that is already
+// absolute, because a "." or a ".." names the same resource as the path
+// without it. A path that carries none comes back unchanged, which
+// path_has_dot_segment answers without building anything.
+inline std::string remove_dot_segments(const std::string_view path)
+{
+    std::string output;
+    output.reserve(path.size());
+    std::string_view input = path;
+    while (!input.empty()) {
+        if (input.starts_with("../")) {
+            input.remove_prefix(3);
+        } else if (input.starts_with("./")) {
+            input.remove_prefix(2);
+        } else if (input.starts_with("/./") || input == "/.") {
+            input.remove_prefix(2);
+            if (input.empty())
+                input = "/";
+        } else if (input.starts_with("/../") || input == "/..") {
+            input.remove_prefix(3);
+            if (input.empty())
+                input = "/";
+            const size_t slash = output.rfind('/');
+            output.resize(slash == std::string::npos ? 0 : slash);
+        } else if (is_dot_segment(input)) {
+            input = {};
+        } else {
+            const size_t slash = input.find('/', 1);
+            const size_t end = slash == std::string_view::npos ? input.size() : slash;
+            output.append(input.substr(0, end));
+            input.remove_prefix(end);
+        }
+    }
+    return output;
 }
 
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,

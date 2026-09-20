@@ -986,3 +986,92 @@ assert('parse_request_target reads the asterisk-form') do
   e = Webmachine::SpecHttp.parse_request_target('*', 'GET')
   assert_equal 'request-target', e[0]
 end
+
+WALK_SEGMENT = 0
+WALK_REST    = 1
+
+# RFC 3986 3.3: a path is segments behind slashes. The trailing slash of
+# "/a/" makes a segment of its own, and it is the difference between a
+# directory and a file everywhere this tree looks at a path.
+assert('next_segment walks a path one segment at a time') do
+  walk = Webmachine::SpecHttp.next_segment('/a/b/c')
+  assert_equal 'a', walk[WALK_SEGMENT]
+  assert_equal '/b/c', walk[WALK_REST]
+  walk = Webmachine::SpecHttp.next_segment('/c')
+  assert_equal 'c', walk[WALK_SEGMENT]
+  assert_equal '', walk[WALK_REST]
+  walk = Webmachine::SpecHttp.next_segment('/')
+  assert_equal '', walk[WALK_SEGMENT]
+  assert_equal '', walk[WALK_REST]
+end
+
+def walk_path(path)
+  out = []
+  rest = path
+  until rest.empty?
+    walk = Webmachine::SpecHttp.next_segment(rest)
+    out << walk[WALK_SEGMENT]
+    rest = walk[WALK_REST]
+  end
+  out
+end
+
+assert('next_segment gives a trailing slash its empty segment') do
+  assert_equal ['a', 'b'], walk_path('/a/b')
+  assert_equal ['a', ''], walk_path('/a/')
+  assert_equal [''], walk_path('/')
+  assert_equal [], walk_path('')
+  assert_equal ['a', '', 'b'], walk_path('/a//b')
+end
+
+# RFC 3986 6.2.2.3: "." and ".." are removed only where they are
+# complete segments. "/..foo" and "/a.." are names and stay names.
+assert('path_has_dot_segment reads a complete segment and not a prefix') do
+  ['/a/./b', '/a/../b', '/.', '/..', '/a/.', '/a/..', '/./', '/../'].each do |dotted|
+    assert_true Webmachine::SpecHttp.path_has_dot_segment?(dotted), dotted
+  end
+  ['/a/b', '/', '', '/..foo', '/a../b', '/.well-known/x', '/a/...', '/%2e%2e/'].each do |plain|
+    assert_false Webmachine::SpecHttp.path_has_dot_segment?(plain), plain
+  end
+end
+
+# RFC 3986 5.2.4 states the routine, and 6.2.2.3 says a recipient runs
+# it over a path that is already absolute: a "." or a ".." names the
+# resource the path without it names.
+assert('remove_dot_segments answers the example of RFC 3986 5.2.4') do
+  assert_equal '/a/g', Webmachine::SpecHttp.remove_dot_segments('/a/b/c/./../../g')
+  assert_equal 'mid/6', Webmachine::SpecHttp.remove_dot_segments('mid/content=5/../6')
+end
+
+# RFC 3986 5.4.2, the abnormal examples: a ".." that would climb above
+# the root is discarded and does not escape.
+assert('remove_dot_segments does not climb above the root') do
+  assert_equal '/g', Webmachine::SpecHttp.remove_dot_segments('/../g')
+  assert_equal '/g', Webmachine::SpecHttp.remove_dot_segments('/../../../g')
+  assert_equal '/etc/passwd',
+               Webmachine::SpecHttp.remove_dot_segments('/../../../../etc/passwd')
+  assert_equal '/b', Webmachine::SpecHttp.remove_dot_segments('/a/../../b')
+end
+
+# The trailing slash survives the routine, because "/a/b/.." names the
+# directory "/a/" and not the file "/a".
+assert('remove_dot_segments keeps the slash a dot segment leaves behind') do
+  assert_equal '/a/', Webmachine::SpecHttp.remove_dot_segments('/a/b/..')
+  assert_equal '/a/', Webmachine::SpecHttp.remove_dot_segments('/a/b/../')
+  assert_equal '/a/b', Webmachine::SpecHttp.remove_dot_segments('/a/./b')
+  assert_equal '/', Webmachine::SpecHttp.remove_dot_segments('/.')
+  assert_equal '/', Webmachine::SpecHttp.remove_dot_segments('/a/..')
+  assert_equal '/..foo/', Webmachine::SpecHttp.remove_dot_segments('/..foo/.')
+end
+
+# The two answer one question, so they may not disagree: the predicate
+# is true for exactly the paths the routine changes. The hot path asks
+# the predicate and builds nothing.
+assert('path_has_dot_segment is true for the paths remove_dot_segments changes') do
+  ['/', '/a/b/c', '/a/b/', '/a//b', '/..foo', '/a../b', '/a/./b', '/a/../b', '/.', '/..',
+   '/a/b/c/./../../g', '/../../x', '/a/b/..', '/./.', '/...', '/a/%2e/b', 'a/b', './a',
+   '../a', 'a/../b', '.', '..', ''].each do |path|
+    changed = Webmachine::SpecHttp.remove_dot_segments(path) != path
+    assert_equal changed, Webmachine::SpecHttp.path_has_dot_segment?(path), path
+  end
+end
