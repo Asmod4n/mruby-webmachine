@@ -492,9 +492,56 @@ is not in `refs/` yet; it arrives in the commit of the first function
 that reads it.
 
 The list is true when `ready` runs. An address that arrives later - DHCP,
-an interface that comes up - is not in it. Making it live is a netlink
-socket that stays open, and that is a question for the day something
-needs it, not a promise made here.
+an interface that comes up, a laptop that leaves one network for another
+- is not in it. That is a snapshot, and it is what this tree has today.
+
+Every platform can say when the list changed, and each says it in
+another shape. This is written down because the shape decides what
+slipstreamIO has to build, and one of the three already fits the ring:
+
+- **Linux.** A netlink socket, bound to `RTNLGRP_IPV4_IFADDR` and
+  `RTNLGRP_IPV6_IFADDR`. It is a descriptor, so it is a read the ring
+  carries like any other.
+- **Windows.** `WSAIoctl` with `SIO_ADDRESS_LIST_CHANGE`, which the
+  documentation says to issue overlapped because it blocks. It completes
+  when the address list of that socket's family changes, exactly once,
+  and the application reissues it for the next change; then
+  `SIO_ADDRESS_LIST_QUERY` reads the new list. An overlapped operation
+  that completes later is a ring submission in every way that matters.
+  The nearby error constants, `WSAENETUNREACH` and `WSAENETDOWN`, belong
+  to `SIO_ROUTING_INTERFACE_CHANGE` losing its way, not to this.
+- **Apple.** `nw_path_monitor` of the Network framework, macOS 10.14 and
+  later, which calls a handler on a dispatch queue and carries the
+  available interfaces in the path. It is a callback, so slipstreamIO has
+  to give it a descriptor, the way it gives signals one.
+
+Read from the documentation of the first two; the Apple page did not
+render here and its rows come from the search summary, so they are
+weaker than the others and are marked as such.
+
+An operator who says "serve on every interface" does not want to restart
+the service when an interface arrives. That is the requirement, and half
+of it is already met by the kernel. Measured here:
+
+    bound 0.0.0.0:41101 and listening, before the address exists
+    10.99.0.1 added on lo:9 after bind and listen
+    accepted from 10.99.0.1:59556
+
+A wildcard socket serves an address that did not exist when `bind` and
+`listen` ran. Nothing re-binds, nothing restarts, and this tree does
+nothing for it. What goes stale is only what was reported: `app.urls`.
+So the netlink socket exists to keep a list true, not to keep the server
+reachable, and that is a much smaller thing than it first looked.
+
+Where the ask names one address, the kernel refuses an address the
+machine does not have - `bind 192.0.2.77: [Errno 99] Cannot assign
+requested address` - and that refusal stands. An operator who named one
+address asked for one address.
+
+What is not decided is whether an application hears about a change. A
+new address belongs in `app.urls`; a second hook beside `ready` is a
+question for the day something needs it. `ready` runs once and keeps
+that meaning.
 
 ## A gem that only the tests need is a test dependency
 
