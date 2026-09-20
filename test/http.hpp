@@ -297,6 +297,35 @@ mrb_value spec_parse_host(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+mrb_value spec_parse_request_target(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_int method_length = 0;
+    mrb_get_args(mrb, "ss", &text, &length, &method, &method_length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_request_target(
+        whole, http::method_number(std::string_view(method, static_cast<size_t>(method_length))));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[6] = {
+        cpp_to_mrb_value(mrb, static_cast<int>(got->form)),
+        cpp_to_mrb_value(mrb, got->scheme),
+        cpp_to_mrb_value(mrb, got->authority.uri_host),
+        got->authority.port ? cpp_to_mrb_value(mrb, *got->authority.port) : mrb_nil_value(),
+        cpp_to_mrb_value(mrb, got->path),
+        cpp_to_mrb_value(mrb, got->query),
+    };
+    return mrb_ary_new_from_values(mrb, 6, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -314,11 +343,10 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
-                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "method_number", spec_method_number, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "request_target_form", spec_request_target_form,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_request_target", spec_parse_request_target,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));

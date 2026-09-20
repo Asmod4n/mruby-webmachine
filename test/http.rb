@@ -828,3 +828,161 @@ end
 assert('request_target_form does not fold the method') do
   assert_equal ABSOLUTE, Webmachine::SpecHttp.request_target_form('example.com:80', 'connect')
 end
+
+TARGET_FORM   = 0
+TARGET_SCHEME = 1
+TARGET_HOST   = 2
+TARGET_PORT   = 3
+TARGET_PATH   = 4
+TARGET_QUERY  = 5
+
+# RFC 9112 3.2.1: origin-form = absolute-path [ "?" query ]. The query
+# is what stands behind the first "?" and the parser does not read it
+# any further: RFC 3986 3.4 says the syntax of a query is the
+# resource's own business.
+assert('parse_request_target splits an origin-form at the first question mark') do
+  a = Webmachine::SpecHttp.parse_request_target('/index.html', 'GET')
+  assert_equal ORIGIN, a[TARGET_FORM]
+  assert_equal '/index.html', a[TARGET_PATH]
+  assert_equal '', a[TARGET_QUERY]
+  b = Webmachine::SpecHttp.parse_request_target('/a?q=1&r=2?3', 'GET')
+  assert_equal '/a', b[TARGET_PATH]
+  assert_equal 'q=1&r=2?3', b[TARGET_QUERY]
+  c = Webmachine::SpecHttp.parse_request_target('/a?', 'GET')
+  assert_equal '/a', c[TARGET_PATH]
+  assert_equal '', c[TARGET_QUERY]
+end
+
+# RFC 3986 3.3: pchar carries "%" for a pct-encoded triplet and the
+# sub-delims, so a path holds far more than letters. percent_decode
+# reads the two HEXDIG behind the "%"; this step only sees the bytes.
+assert('parse_request_target takes every byte RFC 3986 3.3 allows in a path') do
+  a = Webmachine::SpecHttp.parse_request_target("/a%20b/c:d@e/f!$&'()*+,;=~-._/", 'GET')
+  assert_equal "/a%20b/c:d@e/f!$&'()*+,;=~-._/", a[TARGET_PATH]
+end
+
+# RFC 3986 3.5: a fragment never reaches a server, so "#" is not a byte
+# of a request target. A client that sends one is either broken or
+# probing, and either way the target is not this resource's name.
+assert('parse_request_target refuses a fragment and a space in the path') do
+  ['/a#b', '/a b', "/a\tb", "/a\x7f", '/a<b', '/a"b'].each do |bad|
+    e = Webmachine::SpecHttp.parse_request_target(bad, 'GET')
+    assert_equal 'absolute-path', e[0], bad
+  end
+end
+
+# The offset is the one the client's bytes have, so the excerpt of a
+# ParseError points at the byte that lost.
+assert('parse_request_target names where a query goes wrong') do
+  e = Webmachine::SpecHttp.parse_request_target('/a?b c', 'GET')
+  assert_equal 'query', e[0]
+  assert_equal 3, e[1]
+end
+
+# RFC 9112 3.2.2: a server accepts the absolute-form even though most
+# clients send it to a proxy alone. RFC 9110 4.2.1:
+# http-URI = "http://" authority path-abempty [ "?" query ].
+assert('parse_request_target reads an absolute-form') do
+  a = Webmachine::SpecHttp.parse_request_target('http://www.example.org/pub/WWW/x.html', 'GET')
+  assert_equal ABSOLUTE, a[TARGET_FORM]
+  assert_equal 'http', a[TARGET_SCHEME]
+  assert_equal 'www.example.org', a[TARGET_HOST]
+  assert_nil a[TARGET_PORT]
+  assert_equal '/pub/WWW/x.html', a[TARGET_PATH]
+  b = Webmachine::SpecHttp.parse_request_target('https://example.com:8443/a?b=1', 'GET')
+  assert_equal 'https', b[TARGET_SCHEME]
+  assert_equal 'example.com', b[TARGET_HOST]
+  assert_equal 8443, b[TARGET_PORT]
+  assert_equal '/a', b[TARGET_PATH]
+  assert_equal 'b=1', b[TARGET_QUERY]
+end
+
+# RFC 3986 6.2.3: "http://example.com" and "http://example.com/" name
+# the same resource. path-abempty may be empty, and the route table
+# knows "/" alone, so the empty path becomes "/" here rather than in
+# every reader.
+assert('parse_request_target gives an absolute-form with no path the path "/"') do
+  a = Webmachine::SpecHttp.parse_request_target('http://example.com', 'GET')
+  assert_equal '/', a[TARGET_PATH]
+  assert_equal '', a[TARGET_QUERY]
+  b = Webmachine::SpecHttp.parse_request_target('http://example.com?q=1', 'GET')
+  assert_equal '/', b[TARGET_PATH]
+  assert_equal 'q=1', b[TARGET_QUERY]
+end
+
+# RFC 3986 3.1: "scheme names are case-insensitive". The bytes stay as
+# the client wrote them; the comparison folds them.
+assert('parse_request_target does not fold the scheme it keeps') do
+  a = Webmachine::SpecHttp.parse_request_target('HTTP://example.com/a', 'GET')
+  assert_equal 'HTTP', a[TARGET_SCHEME]
+  assert_equal '/a', a[TARGET_PATH]
+end
+
+# This server answers for http and https. Another scheme in the target
+# names a resource we do not have, and so does a target that is no form
+# at all.
+assert('parse_request_target refuses a scheme it does not serve') do
+  ['ftp://example.com/x', 'example.com:80', 'gopher://example.com'].each do |bad|
+    e = Webmachine::SpecHttp.parse_request_target(bad, 'GET')
+    assert_equal 'scheme', e[0], bad
+    assert_equal 0, e[1], bad
+  end
+end
+
+# RFC 9110 4.2.4: a recipient of an http or https URI "SHOULD parse for
+# userinfo and treat its presence as an error; it is likely being used
+# to obscure the authority for the sake of phishing attacks".
+assert('parse_request_target refuses a userinfo') do
+  e = Webmachine::SpecHttp.parse_request_target('http://user@example.com/', 'GET')
+  assert_equal 'userinfo', e[0]
+  assert_equal 11, e[1]
+  e = Webmachine::SpecHttp.parse_request_target('http://user:pass@evil.example/', 'GET')
+  assert_equal 'userinfo', e[0]
+end
+
+# A refusal inside an absolute-form counts from the first byte of the
+# target and not from the first byte of the part that refused.
+assert('parse_request_target counts an offset from the whole target') do
+  e = Webmachine::SpecHttp.parse_request_target('http://exa mple.com/', 'GET')
+  assert_equal 'Host', e[0]
+  assert_equal 7, e[1]
+  e = Webmachine::SpecHttp.parse_request_target('http://example.com/a?b c', 'GET')
+  assert_equal 'query', e[0]
+  assert_equal 21, e[1]
+end
+
+# RFC 9112 3.2.3: authority-form = uri-host ":" port. The port is not
+# optional there, because the tunnel has nothing to take a default
+# from: the request carries no scheme.
+assert('parse_request_target reads an authority-form with a port') do
+  a = Webmachine::SpecHttp.parse_request_target('www.example.com:80', 'CONNECT')
+  assert_equal AUTHORITY, a[TARGET_FORM]
+  assert_equal 'www.example.com', a[TARGET_HOST]
+  assert_equal 80, a[TARGET_PORT]
+  assert_equal '', a[TARGET_PATH]
+  b = Webmachine::SpecHttp.parse_request_target('[2001:db8::1]:443', 'CONNECT')
+  assert_equal '[2001:db8::1]', b[TARGET_HOST]
+  assert_equal 443, b[TARGET_PORT]
+end
+
+assert('parse_request_target refuses an authority-form with no port') do
+  e = Webmachine::SpecHttp.parse_request_target('www.example.com', 'CONNECT')
+  assert_equal 'port', e[0]
+  assert_equal 15, e[1]
+  e = Webmachine::SpecHttp.parse_request_target('www.example.com:', 'CONNECT')
+  assert_equal 'port', e[0]
+end
+
+# RFC 9112 3.2.4: the asterisk-form names the server and not a
+# resource, so it carries no host and no path.
+assert('parse_request_target reads the asterisk-form') do
+  a = Webmachine::SpecHttp.parse_request_target('*', 'OPTIONS')
+  assert_equal ASTERISK, a[TARGET_FORM]
+  assert_equal '', a[TARGET_SCHEME]
+  assert_equal '', a[TARGET_HOST]
+  assert_nil a[TARGET_PORT]
+  assert_equal '', a[TARGET_PATH]
+  assert_equal '', a[TARGET_QUERY]
+  e = Webmachine::SpecHttp.parse_request_target('*', 'GET')
+  assert_equal 'request-target', e[0]
+end

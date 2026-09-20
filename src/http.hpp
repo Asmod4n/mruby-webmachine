@@ -3,17 +3,18 @@
 
 #include <algorithm>
 #include <array>
-#include <iterator>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <expected>
-#include <cstdint>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #if defined(__AVX2__)
 #include <immintrin.h>
@@ -57,6 +58,13 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
     {"RFC 3986 3.2.3", "port", "The Host field is not valid", "*DIGIT, at most 65535", 400},
     {"RFC 9112 3.2", "request-target", "The request target is not valid",
      "origin-form / absolute-form / authority-form / asterisk-form", 400},
+    {"RFC 9110 4.1", "absolute-path", "The request target is not valid",
+     "1*( \"/\" segment ), segment = *pchar", 400},
+    {"RFC 3986 3.4", "query", "The request target is not valid",
+     "*( pchar / \"/\" / \"?\" )", 400},
+    {"RFC 9110 4.2.1", "scheme", "The request target is not valid", "\"http\" / \"https\"", 400},
+    {"RFC 9110 4.2.4", "userinfo", "The request target is not valid",
+     "no userinfo in an http or https URI", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -73,11 +81,20 @@ inline constexpr uint16_t kAsctimeDateProblem = 10;
 inline constexpr uint16_t kHostProblem = 11;
 inline constexpr uint16_t kPortProblem = 12;
 inline constexpr uint16_t kRequestTargetProblem = 13;
+inline constexpr uint16_t kAbsolutePathProblem = 14;
+inline constexpr uint16_t kQueryProblem = 15;
+inline constexpr uint16_t kSchemeProblem = 16;
+inline constexpr uint16_t kUserinfoProblem = 17;
 
 struct Refusal {
     uint16_t problem;
     uint32_t offset;
 };
+
+constexpr Refusal moved_forward(const Refusal refusal, const size_t forward)
+{
+    return Refusal{refusal.problem, static_cast<uint32_t>(refusal.offset + forward)};
+}
 
 class ParseError : public std::runtime_error
 {
@@ -232,7 +249,32 @@ inline constexpr std::array<bool, 256> kLowercaseTchar = [] {
     return table;
 }();
 
+// RFC 3986 3.3: segment = *pchar, and pchar = unreserved / pct-encoded /
+// sub-delims / ":" / "@". The "%" of a pct-encoded triplet is a byte of
+// the set; the two HEXDIG behind it are percent_decode's to check.
+inline constexpr std::array<bool, 256> kPathByte = [] {
+    std::array<bool, 256> table{};
+    for (const char letter : std::string_view("-._~%!$&'()*+,;=:@/"))
+        table.at(static_cast<unsigned char>(letter)) = true;
+    for (unsigned index = '0'; index <= '9'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'A'; index <= 'Z'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'a'; index <= 'z'; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+// RFC 3986 3.4: query = *( pchar / "/" / "?" ).
+inline constexpr std::array<bool, 256> kQueryByte = [] {
+    std::array<bool, 256> table = kPathByte;
+    table.at('?') = true;
+    return table;
+}();
+
 inline constexpr auto kIpLiteralLowBits = low_nibble_bits_of(kIpLiteral);
+inline constexpr auto kPathByteLowBits = low_nibble_bits_of(kPathByte);
+inline constexpr auto kQueryByteLowBits = low_nibble_bits_of(kQueryByte);
 inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
 inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
 inline constexpr auto kLowercaseTcharLowBits = low_nibble_bits_of(kLowercaseTchar);
@@ -673,6 +715,117 @@ inline std::expected<TargetForm, Refusal> request_target_form(const std::string_
     if (text.starts_with('/'))
         return TargetForm::kOrigin;
     return TargetForm::kAbsolute;
+}
+
+struct RequestTarget {
+    TargetForm form;
+    std::string_view scheme;
+    Host authority;
+    std::string_view path;
+    std::string_view query;
+};
+
+inline std::expected<std::string_view, Refusal> parse_query(const std::string_view text)
+{
+    if (!text.empty() && !every_byte_is_allowed(text, kQueryByte, kQueryByteLowBits)) [[unlikely]]
+        return std::unexpected(Refusal{kQueryProblem, 0});
+    return text;
+}
+
+struct OriginForm {
+    std::string_view path;
+    std::string_view query;
+};
+
+// RFC 9112 3.2.1: origin-form = absolute-path [ "?" query ].
+inline std::expected<OriginForm, Refusal> parse_origin_form(const std::string_view text)
+{
+    if (!text.starts_with('/')) [[unlikely]]
+        return std::unexpected(Refusal{kAbsolutePathProblem, 0});
+    const size_t question = text.find('?');
+    const std::string_view path = text.substr(0, question);
+    if (!every_byte_is_allowed(path, kPathByte, kPathByteLowBits)) [[unlikely]]
+        return std::unexpected(Refusal{kAbsolutePathProblem, 0});
+    if (question == std::string_view::npos)
+        return OriginForm{path, {}};
+    const auto query = parse_query(text.substr(question + 1));
+    if (!query) [[unlikely]]
+        return std::unexpected(moved_forward(query.error(), question + 1));
+    return OriginForm{path, *query};
+}
+
+// RFC 9112 3.2.3: authority-form = uri-host ":" port. Both are there.
+inline std::expected<Host, Refusal> parse_authority_form(const std::string_view text)
+{
+    const auto host = parse_host(text);
+    if (!host) [[unlikely]]
+        return host;
+    if (!host->port) [[unlikely]]
+        return std::unexpected(Refusal{kPortProblem, static_cast<uint32_t>(text.size())});
+    return *host;
+}
+
+// RFC 9112 3.2.2: absolute-form = absolute-URI, which for this server is
+// the http-URI and the https-URI of RFC 9110 4.2.1 and 4.2.2:
+// "http://" authority path-abempty [ "?" query ]. RFC 9110 4.2.4 says a
+// recipient treats a userinfo as an error, because it hides the
+// authority from a reader.
+inline std::expected<RequestTarget, Refusal> parse_absolute_form(const std::string_view text)
+{
+    const size_t mark = text.find("://");
+    if (mark == std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kSchemeProblem, 0});
+    const std::string_view scheme = text.substr(0, mark);
+    if (!equal_ignoring_case(scheme, "http") && !equal_ignoring_case(scheme, "https")) [[unlikely]]
+        return std::unexpected(Refusal{kSchemeProblem, 0});
+    const size_t from = mark + 3;
+    const size_t end = text.find_first_of("/?", from);
+    const std::string_view authority = text.substr(from, end - from);
+    const size_t user = authority.find('@');
+    if (user != std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kUserinfoProblem, static_cast<uint32_t>(from + user)});
+    const auto host = parse_host(authority);
+    if (!host) [[unlikely]]
+        return std::unexpected(moved_forward(host.error(), from));
+    if (end == std::string_view::npos)
+        return RequestTarget{TargetForm::kAbsolute, scheme, *host, "/", {}};
+    if (text.at(end) == '?') {
+        const auto query = parse_query(text.substr(end + 1));
+        if (!query) [[unlikely]]
+            return std::unexpected(moved_forward(query.error(), end + 1));
+        return RequestTarget{TargetForm::kAbsolute, scheme, *host, "/", *query};
+    }
+    const auto origin = parse_origin_form(text.substr(end));
+    if (!origin) [[unlikely]]
+        return std::unexpected(moved_forward(origin.error(), end));
+    return RequestTarget{TargetForm::kAbsolute, scheme, *host, origin->path, origin->query};
+}
+
+inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,
+                                                                  const uint64_t method)
+{
+    const auto form = request_target_form(text, method);
+    if (!form) [[unlikely]]
+        return std::unexpected(form.error());
+    switch (*form) {
+    case TargetForm::kOrigin: {
+        const auto origin = parse_origin_form(text);
+        if (!origin) [[unlikely]]
+            return std::unexpected(origin.error());
+        return RequestTarget{*form, {}, {}, origin->path, origin->query};
+    }
+    case TargetForm::kAbsolute:
+        return parse_absolute_form(text);
+    case TargetForm::kAuthority: {
+        const auto authority = parse_authority_form(text);
+        if (!authority) [[unlikely]]
+            return std::unexpected(authority.error());
+        return RequestTarget{*form, {}, *authority, {}, {}};
+    }
+    case TargetForm::kAsterisk:
+        return RequestTarget{*form, {}, {}, {}, {}};
+    }
+    std::unreachable();
 }
 
 }
