@@ -1224,6 +1224,70 @@ inline std::expected<unsigned, Refusal> language_weight(const std::string_view a
     return weight;
 }
 
+struct Chosen {
+    size_t at;
+    unsigned weight;
+};
+
+inline std::expected<std::optional<Chosen>, Refusal>
+choose_media_type(const std::span<const MediaType> provided, const std::string_view accept)
+{
+    std::optional<Chosen> best;
+    for (size_t at = 0; at < provided.size(); at++) {
+        const auto weight = media_type_weight(accept, provided[at]);
+        if (!weight) [[unlikely]]
+            return std::unexpected(weight.error());
+        if (*weight != 0 && (!best || *weight > best->weight))
+            best = Chosen{at, *weight};
+    }
+    return best;
+}
+
+inline std::expected<std::optional<Chosen>, Refusal>
+choose_coding(const std::span<const std::string_view> provided,
+              const std::string_view accept_encoding)
+{
+    std::optional<Chosen> best;
+    for (size_t at = 0; at < provided.size(); at++) {
+        const auto weight = coding_weight(accept_encoding, provided[at]);
+        if (!weight) [[unlikely]]
+            return std::unexpected(weight.error());
+        if (*weight != 0 && (!best || *weight > best->weight))
+            best = Chosen{at, *weight};
+    }
+    return best;
+}
+
+inline std::expected<std::optional<Chosen>, Refusal>
+choose_language(const std::span<const std::string_view> provided,
+                const std::string_view accept_language)
+{
+    std::optional<Chosen> best;
+    for (size_t at = 0; at < provided.size(); at++) {
+        const auto weight = language_weight(accept_language, provided[at]);
+        if (!weight) [[unlikely]]
+            return std::unexpected(weight.error());
+        if (*weight != 0 && (!best || *weight > best->weight))
+            best = Chosen{at, *weight};
+    }
+    return best;
+}
+
+enum class SelectingField : uint8_t { kAccept, kAcceptEncoding, kAcceptLanguage };
+
+constexpr std::string_view field_name_of(const SelectingField field)
+{
+    switch (field) {
+    case SelectingField::kAccept:
+        return "accept";
+    case SelectingField::kAcceptEncoding:
+        return "accept-encoding";
+    case SelectingField::kAcceptLanguage:
+        return "accept-language";
+    }
+    return {};
+}
+
 struct RangesSpecifier {
     std::string_view range_unit;
     std::string_view range_set;

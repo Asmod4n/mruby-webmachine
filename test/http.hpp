@@ -603,6 +603,95 @@ mrb_value spec_language_weight(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+// The provided lists arrive from Ruby, which has no padding behind its
+// strings, and choose_coding asks is_token, which reads wide. So every
+// one of them is copied where the wall is real.
+mrb_value spec_choose_media_type(mrb_state *mrb, mrb_value)
+{
+    const char *accept = nullptr;
+    mrb_int accept_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &accept, &accept_length, &list);
+    std::vector<Padded> held;
+    std::vector<http::MediaType> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held) {
+        const auto media = http::parse_media_type(one.view());
+        if (!media)
+            return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
+        provided.push_back(*media);
+    }
+    const auto got = http::choose_media_type(provided,
+                                             std::string_view(accept,
+                                                              static_cast<size_t>(accept_length)));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_choose_coding(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int field_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &field, &field_length, &list);
+    const Padded whole(field, field_length);
+    std::vector<Padded> held;
+    std::vector<std::string_view> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held)
+        provided.push_back(one.view());
+    const auto got = http::choose_coding(provided, whole.view());
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole.view()).rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_choose_language(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int field_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &field, &field_length, &list);
+    const std::string_view whole(field, static_cast<size_t>(field_length));
+    std::vector<Padded> held;
+    std::vector<std::string_view> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held)
+        provided.push_back(one.view());
+    const auto got = http::choose_language(provided, whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -860,6 +949,11 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "coding_weight", spec_coding_weight, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_media_type", spec_choose_media_type,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_coding", spec_choose_coding, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_language", spec_choose_language,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "language_weight", spec_language_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range,

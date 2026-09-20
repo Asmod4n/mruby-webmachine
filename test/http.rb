@@ -1445,6 +1445,35 @@ assert('media_type_weight refuses a range with a wildcard type and a named subty
   assert_equal ['media-type', 0], Webmachine::SpecHttp.media_type_weight('*/json', 'text/plain')
 end
 
+# RFC 9110 12.5.1: "Accept: audio/*; q=0.2, audio/basic is interpreted as
+# 'I prefer audio/basic, but send me any audio type if it is the best
+# available after an 80% markdown in quality'." A tie goes to the earlier
+# provided type, because that order is the resource's own preference -
+# the same order C3 takes when no Accept field stands at all.
+assert('choose_media_type takes the heaviest, and the first of equals') do
+  two = ['text/html', 'application/json']
+  assert_equal [0, 1000], Webmachine::SpecHttp.choose_media_type('text/html', two)
+  assert_equal [1, 1000], Webmachine::SpecHttp.choose_media_type('application/json', two)
+  assert_equal [0, 1000], Webmachine::SpecHttp.choose_media_type('*/*', two)
+  assert_equal [1, 900], Webmachine::SpecHttp.choose_media_type('text/html;q=0.8, */*;q=0.9', two)
+  assert_nil Webmachine::SpecHttp.choose_media_type('image/png', two)
+  assert_nil Webmachine::SpecHttp.choose_media_type('*/*;q=0', two)
+end
+
+# RFC 9110 15.5.7 (406) is what a nil answer becomes at C4, D5 and F7.
+assert('choose_coding and choose_language answer nothing where nothing fits') do
+  codings = ['gzip', 'br']
+  assert_equal [0, 1000], Webmachine::SpecHttp.choose_coding('gzip, deflate', codings)
+  assert_equal [1, 1000], Webmachine::SpecHttp.choose_coding('br;q=1.0, gzip;q=0.5', codings)
+  assert_nil Webmachine::SpecHttp.choose_coding('deflate', codings)
+  assert_equal [0, 1000], Webmachine::SpecHttp.choose_coding('*', codings)
+
+  tags = ['en', 'de-AT']
+  assert_equal [1, 1000], Webmachine::SpecHttp.choose_language('de, en;q=0.5', tags)
+  assert_equal [0, 500], Webmachine::SpecHttp.choose_language('de;q=0, en;q=0.5', tags)
+  assert_nil Webmachine::SpecHttp.choose_language('fr', tags)
+end
+
 # RFC 9110 12.5.3 states three rules for a server, and these are them.
 # Rule 2 is the one that is easy to get wrong: a representation with no
 # content coding is acceptable by default "unless specifically excluded
