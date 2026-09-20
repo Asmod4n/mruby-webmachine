@@ -400,6 +400,33 @@ that is always computed: the reader cannot tell which case they are in.
 (`io_uring_prep_cmd_getsockname`). A kernel that cannot do it is a
 kernel this server does not run on, and the refusal says so at boot.
 
+`conf.url = "http://0.0.0.0:0"` is a valid ask and the one this exists
+for. What ada makes of the forms an operator writes was measured
+against the vendored copy, and one row of it is a trap:
+
+| written | `get_protocol` | `get_hostname` | `get_port` | `get_pathname` |
+|---|---|---|---|---|
+| `http://0.0.0.0:0` | `http:` | `0.0.0.0` | `0` | `/` |
+| `http://0.0.0.0:80` | `http:` | `0.0.0.0` | *empty* | `/` |
+| `https://0.0.0.0:443` | `https:` | `0.0.0.0` | *empty* | `/` |
+| `http://0.0.0.0` | `http:` | `0.0.0.0` | *empty* | `/` |
+| `http://[::]:0` | `http:` | `[::]` | `0` | `/` |
+| `unix:///run/a.sock` | `unix:` | *empty* | *empty* | `/run/a.sock` |
+| `unix://relative.sock` | `unix:` | `relative.sock` | *empty* | *empty* |
+| `http://0.0.0.0:65536` | refused by ada | | | |
+
+An empty port is not port 0. ada drops the port that is the scheme's
+default and keeps every other, so an empty `get_port()` means 80 under
+http and 443 under https, and `"0"` means the kernel chooses. Code that
+reads the empty string as a zero binds an ephemeral port where the
+operator wrote 80.
+
+Two more the table states. `:080` and `:00` come back normalized, so
+the digits are ada's to check and the range as well - 65536 never
+arrives here. And a `unix://` URL with no third slash makes a host and
+no path, which names no socket and is refused with the path it did not
+have.
+
 ## A gem that only the tests need is a test dependency
 
 `spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
