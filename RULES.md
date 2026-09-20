@@ -663,9 +663,11 @@ costs:
 
 The precondition for laxness is that the bytes which are dangerous
 everywhere - CR, LF, NUL, the control bytes - are refused before any
-field parser runs lax. On HTTP/1.1 picohttpparser has already refused
-them, and nothing is added in front of it. HTTP/2 and HTTP/3 have no
-such parser, which is why is_field_value exists.
+field parser runs lax, and picohttpparser refuses them. Not only off the
+wire: `phr_is_field_name` and `phr_is_field_value` are there so that
+what HPACK and QPACK hand over is held to the same definition, which is
+what RFC 9113 8.2.1 asks of an HTTP/2 recipient. Nothing of ours stands
+in front of that or beside it.
 
 One shape was tried against that question. Read the field value once and
 keep the structure in a register: a 32 byte block gives two masks from
@@ -717,8 +719,9 @@ pass on the day something asks for it.
 Three things the spike does not settle, for the day it is built. It
 covers a value of 32 bytes or less and falls back above that, and a block
 loop needs the bit test to cross a block. It leans on picohttpparser
-having refused every control byte already, which holds on HTTP/1.1 and
-is what is_field_value answers for what HPACK and QPACK hand over. And it had a bug the
+having refused every control byte already, which holds for every version
+because phr_is_field_value is asked for the ones that arrive out of a
+dynamic table. And it had a bug the
 numbers would have carried: RFC 9110 5.6.6 allows OWS around the
 semicolon, the spike read the space as part of the parameter name, and
 `text/html; charset=utf-8` - which the tree reads correctly today - was

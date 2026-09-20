@@ -1572,44 +1572,6 @@ assert('date_is_required is the 2xx, 3xx and 4xx of RFC 9110 6.6.1') do
   end
 end
 
-# RFC 9110 5.5: field-vchar = VCHAR / obs-text, obs-text = %x80-FF, so a
-# byte above 0x7f is allowed and only the controls are not. The reason to
-# check at all is RFC 9113 8.2.1, which is about HPACK and QPACK rather
-# than about HTTP/1.1: "Failure to validate fields can be exploited for
-# request smuggling attacks. In particular, unvalidated fields might
-# enable attacks when messages are forwarded using HTTP/1.1, where
-# characters such as carriage return (CR), line feed (LF), and COLON are
-# used as delimiters." picohttpparser already refuses these off the wire;
-# a field out of a dynamic table has been read by nobody.
-assert('is_field_value takes obs-text and refuses every control') do
-  assert_true Webmachine::SpecHttp.field_value?('text/html, application/json')
-  assert_true Webmachine::SpecHttp.field_value?("a\tb")
-  assert_true Webmachine::SpecHttp.field_value?("caf\xc3\xa9")
-  assert_true Webmachine::SpecHttp.field_value?("\x80\xff")
-  assert_true Webmachine::SpecHttp.field_value?('')
-  assert_false Webmachine::SpecHttp.field_value?("a\rb")
-  assert_false Webmachine::SpecHttp.field_value?("a\nb")
-  assert_false Webmachine::SpecHttp.field_value?("a\0b")
-  assert_false Webmachine::SpecHttp.field_value?("a\x7fb")
-  assert_false Webmachine::SpecHttp.field_value?("a\x1fb")
-  # RFC 9113 8.2.1: "A field value MUST NOT start or end with an ASCII
-  # whitespace character."
-  assert_false Webmachine::SpecHttp.field_value?(' a')
-  assert_false Webmachine::SpecHttp.field_value?("a\t")
-end
-
-# A run longer than one vector block, so the loop is walked and not only
-# its first round.
-assert('is_field_value walks past the first block') do
-  long = 'a' * 200
-  assert_true Webmachine::SpecHttp.field_value?(long)
-  [0, 31, 32, 63, 64, 100, 199].each do |at|
-    bad = long.dup
-    bad[at] = "\n"
-    assert_false Webmachine::SpecHttp.field_value?(bad), at.to_s
-  end
-end
-
 SPEC_LIST           = 0
 SPEC_REFUSE         = 1
 SPEC_MUST_AGREE     = 2

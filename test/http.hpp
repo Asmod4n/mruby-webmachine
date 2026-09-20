@@ -813,15 +813,6 @@ mrb_value spec_date_is_required(mrb_state *mrb, mrb_value)
     return mrb_bool_value(http::date_is_required(static_cast<unsigned>(status)));
 }
 
-mrb_value spec_is_field_value(mrb_state *mrb, mrb_value)
-{
-    const char *text = nullptr;
-    mrb_int length = 0;
-    mrb_get_args(mrb, "s", &text, &length);
-    const Padded whole(text, length);
-    return mrb_bool_value(http::is_field_value(whole.view()));
-}
-
 mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -1078,7 +1069,6 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "spell_accept_query", spec_spell_accept_query,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "date_is_a_validator?",
