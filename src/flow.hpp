@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <string_view>
 #include <cstdint>
 
 namespace flow
@@ -86,13 +87,13 @@ constexpr Target halt(const uint16_t status)
 struct FlowNode {
     Node id;
     Kind kind;
-    const char *callback;
-    const char *clause;
+    std::string_view callback;
+    std::string_view clause;
     Target on_true;
     Target on_false;
 };
 
-inline constexpr std::array<const char *, static_cast<size_t>(Node::kCount) + 1> kNames = {{
+inline constexpr std::array<std::string_view, static_cast<size_t>(Node::kCount) + 1> kNames = {{
     "B13",
     "B12",
     "B11",
@@ -152,7 +153,7 @@ inline constexpr std::array<const char *, static_cast<size_t>(Node::kCount) + 1>
     "",
 }};
 
-constexpr const char *name_of(const Node id)
+constexpr std::string_view name_of(const Node id)
 {
     return kNames.at(static_cast<size_t>(id));
 }
@@ -212,22 +213,22 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
     {Node::kG7, Kind::kResource, "resource_exists?",
      "RFC 9110 12.5.5: Vary lands here",
      to(Node::kG8), to(Node::kH7)},
-    {Node::kG8, Kind::kRequest, nullptr,
+    {Node::kG8, Kind::kRequest, {},
      "RFC 9110 13.1.1: If-Match present?",
      to(Node::kG9), to(Node::kH10)},
-    {Node::kG9, Kind::kRequest, nullptr,
+    {Node::kG9, Kind::kRequest, {},
      "RFC 9110 13.1.1: If-Match is '*'?; a true If-Match skips If-Unmodified-Since",
      to(Node::kI12), to(Node::kG11)},
     {Node::kG11, Kind::kResource, "generate_etag",
      "RFC 9110 13.1.1 / 15.5.13 (412); a true If-Match skips If-Unmodified-Since",
      to(Node::kI12), halt(412)},
-    {Node::kH7, Kind::kRequest, nullptr,
+    {Node::kH7, Kind::kRequest, {},
      "RFC 9110 13.1.1: If-Match '*' against a missing resource is 412",
      halt(412), to(Node::kI7)},
-    {Node::kH10, Kind::kRequest, nullptr,
+    {Node::kH10, Kind::kRequest, {},
      "RFC 9110 13.1.4: If-Unmodified-Since present?",
      to(Node::kH11), to(Node::kI12)},
-    {Node::kH11, Kind::kRequest, nullptr,
+    {Node::kH11, Kind::kRequest, {},
      "RFC 9110 5.6.7: IUS parses as HTTP-date?",
      to(Node::kH12), to(Node::kI12)},
     {Node::kH12, Kind::kResource, "last_modified",
@@ -236,16 +237,16 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
     {Node::kI4, Kind::kResource, "moved_permanently?",
      "RFC 9110 15.4.2 (301) + Location",
      halt(301), to(Node::kP3)},
-    {Node::kI7, Kind::kRequest, nullptr,
+    {Node::kI7, Kind::kRequest, {},
      "RFC 9110 9.3.4: PUT?",
      to(Node::kI4), to(Node::kK7)},
-    {Node::kI12, Kind::kRequest, nullptr,
+    {Node::kI12, Kind::kRequest, {},
      "RFC 9110 13.1.2: If-None-Match present?",
      to(Node::kI13), to(Node::kL13)},
-    {Node::kI13, Kind::kRequest, nullptr,
+    {Node::kI13, Kind::kRequest, {},
      "RFC 9110 13.1.2: If-None-Match is '*'?",
      to(Node::kJ18), to(Node::kK13)},
-    {Node::kJ18, Kind::kRequest, nullptr,
+    {Node::kJ18, Kind::kRequest, {},
      "RFC 9110 13.1.2: GET/HEAD gets 304 (15.4.5), others 412 (15.5.13)",
      halt(304), halt(412)},
     {Node::kK5, Kind::kResource, "moved_permanently?",
@@ -260,25 +261,25 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
     {Node::kL5, Kind::kResource, "moved_temporarily?",
      "RFC 9110 15.4.8 (307) + Location",
      halt(307), to(Node::kM5)},
-    {Node::kL7, Kind::kRequest, nullptr,
+    {Node::kL7, Kind::kRequest, {},
      "RFC 9110 15.5.5 (404): only POST may proceed",
      to(Node::kM7), halt(404)},
-    {Node::kL13, Kind::kRequest, nullptr,
+    {Node::kL13, Kind::kRequest, {},
      "RFC 9110 13.1.3: If-Modified-Since present?",
      to(Node::kL14), to(Node::kM16)},
-    {Node::kL14, Kind::kRequest, nullptr,
+    {Node::kL14, Kind::kRequest, {},
      "RFC 9110 5.6.7: IMS parses as HTTP-date?",
      to(Node::kL17), to(Node::kM16)},
     {Node::kL17, Kind::kResource, "last_modified",
      "RFC 9110 13.1.3 / 15.4.5 (304)",
      to(Node::kM16), halt(304)},
-    {Node::kM5, Kind::kRequest, nullptr,
+    {Node::kM5, Kind::kRequest, {},
      "RFC 9110 15.5.11 (410): only POST may revive",
      to(Node::kN5), halt(410)},
     {Node::kM7, Kind::kResource, "allow_missing_post?",
      "RFC 9110 9.3.3 / 15.5.5 (404)",
      to(Node::kN11), halt(404)},
-    {Node::kM16, Kind::kRequest, nullptr,
+    {Node::kM16, Kind::kRequest, {},
      "RFC 9110 9.3.5: DELETE?",
      to(Node::kM20), to(Node::kN16)},
     {Node::kM20, Kind::kAction, "delete_resource",
@@ -293,22 +294,22 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
     {Node::kN11, Kind::kAction, "post_is_create?",
      "RFC 9110 9.3.3: create_path/base_uri or process_post; redirect is 303 (15.4.4)",
      halt(303), to(Node::kP11)},
-    {Node::kN16, Kind::kRequest, nullptr,
+    {Node::kN16, Kind::kRequest, {},
      "RFC 9110 9.3.3: POST?",
      to(Node::kN11), to(Node::kO16)},
     {Node::kO14, Kind::kAction, "is_conflict?",
      "RFC 9110 15.5.10 (409); false runs content_types_accepted (accept_helper)",
      halt(409), to(Node::kP11)},
-    {Node::kO16, Kind::kRequest, nullptr,
+    {Node::kO16, Kind::kRequest, {},
      "RFC 9110 9.3.4: PUT?",
      to(Node::kO14), to(Node::kO18)},
     {Node::kO18, Kind::kAction, "content_types_provided",
      "GET/HEAD render the body through the negotiated handler; caching headers land here",
      to(Node::kO18c), to(Node::kO18c)},
-    {Node::kO18c, Kind::kRequest, nullptr,
+    {Node::kO18c, Kind::kRequest, {},
      "RFC 9110 14.2: a Range on a GET, in a unit this server serves; any other is ignored",
      to(Node::kO18d), to(Node::kO18b)},
-    {Node::kO18d, Kind::kRequest, nullptr,
+    {Node::kO18d, Kind::kRequest, {},
      "RFC 9110 13.2.2 step 5 / 13.1.5: no If-Range, or its validator matches; otherwise the "
      "Range is ignored and the whole representation is sent",
      to(Node::kO18e), to(Node::kO18b)},
@@ -318,13 +319,13 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
     {Node::kO18b, Kind::kResource, "multiple_choices?",
      "RFC 9110 15.4.1 (300) / 15.3.1 (200)",
      halt(300), halt(200)},
-    {Node::kO20, Kind::kRequest, nullptr,
+    {Node::kO20, Kind::kRequest, {},
      "RFC 9110 15.3.5 (204): response carries no entity",
      to(Node::kO18), halt(204)},
     {Node::kP3, Kind::kAction, "is_conflict?",
      "RFC 9110 15.5.10 (409); false runs content_types_accepted (accept_helper)",
      halt(409), to(Node::kP11)},
-    {Node::kP11, Kind::kRequest, nullptr,
+    {Node::kP11, Kind::kRequest, {},
      "RFC 9110 15.3.2 (201): Location was set",
      halt(201), to(Node::kO20)},
 }};

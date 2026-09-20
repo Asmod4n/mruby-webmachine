@@ -529,7 +529,7 @@ struct Request {
 };
 
 struct Response {
-    unsigned status;
+    uint16_t status;
     std::span<const Field> header_section;
     std::span<const std::byte> content;
     std::span<const Field> trailer_section;
@@ -1157,7 +1157,7 @@ inline std::expected<uint64_t, Refusal> parse_content_length(const std::string_v
     return length;
 }
 
-inline constexpr unsigned kMostPreferred = 1000;
+inline constexpr uint16_t kMostPreferred = 1000;
 
 inline constexpr size_t kQvaluePointAt = 1;
 inline constexpr size_t kQvalueDigitsAt = 2;
@@ -1184,29 +1184,30 @@ parse_content_length_list(const std::string_view combined)
     return *agreed;
 }
 
-inline std::expected<unsigned, Refusal> parse_qvalue(const std::string_view text)
+inline std::expected<uint16_t, Refusal> parse_qvalue(const std::string_view text)
 {
     if (text.empty() || (text.front() != '0' && text.front() != '1')) [[unlikely]]
         return std::unexpected(Refusal{kQvalueProblem, 0});
-    const unsigned whole = text.front() == '1' ? kMostPreferred : 0;
+    const uint16_t whole = text.front() == '1' ? kMostPreferred : 0;
     if (text.size() == 1)
         return whole;
     if (text.at(kQvaluePointAt) != '.' || text.size() > kQvalueLength) [[unlikely]]
         return std::unexpected(Refusal{kQvalueProblem, kQvaluePointAt});
-    unsigned thousandths = 0;
-    unsigned place = 100;
+    uint16_t thousandths = 0;
+    uint16_t place = 100;
     for (size_t at = kQvalueDigitsAt; at < text.size(); ++at) {
         if (!is_digit(text.at(at))) [[unlikely]]
             return std::unexpected(Refusal{kQvalueProblem, static_cast<uint32_t>(at)});
-        thousandths += static_cast<unsigned>(text.at(at) - '0') * place;
-        place /= 10;
+        thousandths = static_cast<uint16_t>(thousandths +
+                                            static_cast<unsigned>(text.at(at) - '0') * place);
+        place = static_cast<uint16_t>(place / 10);
     }
     if (whole == kMostPreferred && thousandths != 0) [[unlikely]]
         return std::unexpected(Refusal{kQvalueProblem, kQvalueDigitsAt});
-    return whole + thousandths;
+    return static_cast<uint16_t>(whole + thousandths);
 }
 
-inline std::expected<unsigned, Refusal> weight_of(const std::string_view parameters)
+inline std::expected<uint16_t, Refusal> weight_of(const std::string_view parameters)
 {
     const auto found = value_of_parameter(parameters, "q");
     if (!found) [[unlikely]]
@@ -1254,11 +1255,11 @@ media_range_precedence(const MediaType range, const MediaType media_type)
     }
 }
 
-inline std::expected<unsigned, Refusal> media_type_weight(const std::string_view accept,
+inline std::expected<uint16_t, Refusal> media_type_weight(const std::string_view accept,
                                                           const MediaType media_type)
 {
     unsigned most_specific = 0;
-    unsigned weight = 0;
+    uint16_t weight = 0;
     std::string_view rest = accept;
     while (const auto element = parse_list_element(rest)) {
         const size_t at =
@@ -1298,11 +1299,11 @@ inline std::string_view parameters_of(const std::string_view element)
     return semicolon == std::string_view::npos ? std::string_view{} : element.substr(semicolon);
 }
 
-inline std::expected<unsigned, Refusal> coding_weight(const std::string_view accept_encoding,
+inline std::expected<uint16_t, Refusal> coding_weight(const std::string_view accept_encoding,
                                                       const std::string_view coding)
 {
     unsigned most_specific = 0;
-    unsigned weight = 0;
+    uint16_t weight = 0;
     std::string_view rest = accept_encoding;
     while (const auto element = parse_list_element(rest)) {
         const size_t at =
@@ -1354,11 +1355,11 @@ inline unsigned language_range_precedence(const std::string_view range)
                      static_cast<unsigned>(std::ranges::count(range, '-'));
 }
 
-inline std::expected<unsigned, Refusal> language_weight(const std::string_view accept_language,
+inline std::expected<uint16_t, Refusal> language_weight(const std::string_view accept_language,
                                                         const std::string_view tag)
 {
     unsigned most_specific = 0;
-    unsigned weight = 0;
+    uint16_t weight = 0;
     std::string_view rest = accept_language;
     while (const auto element = parse_list_element(rest)) {
         const size_t at =
@@ -1385,7 +1386,7 @@ inline std::expected<unsigned, Refusal> language_weight(const std::string_view a
 
 struct Chosen {
     size_t at;
-    unsigned weight;
+    uint16_t weight;
 };
 
 inline std::expected<std::optional<Chosen>, Refusal>

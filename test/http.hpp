@@ -860,7 +860,7 @@ mrb_value spec_flow_node(mrb_state *mrb, mrb_value)
         if (flow::name_of(node.id) != name)
             continue;
         mrb_value out[6] = {
-            cpp_to_mrb_value(mrb, node.callback == nullptr ? "" : node.callback),
+            cpp_to_mrb_value(mrb, node.callback),
             cpp_to_mrb_value(mrb, node.clause),
             cpp_to_mrb_value(mrb, flow::name_of(node.on_true.node)),
             cpp_to_mrb_value(mrb, node.on_true.status),
