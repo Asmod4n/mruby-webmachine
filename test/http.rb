@@ -1348,3 +1348,55 @@ assert('parse_content_length reads a number and refuses what is not one') do
     assert_equal 'Content-Length', Webmachine::SpecHttp.parse_content_length(bad), bad
   end
 end
+
+# RFC 9110 12.4.2 Quality Values
+#   weight = OWS ";" OWS "q=" qvalue
+#   qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+# "The weight is normalized to a real number in the range 0 through 1,
+# where 0.001 is the least preferred and 1 is the most preferred; a
+# value of 0 means 'not acceptable'." Three decimals and no more, so the
+# value is carried as thousandths: a whole number compares exactly where
+# a float would need a tolerance.
+assert('parse_qvalue reads the thousandths RFC 9110 12.4.2 allows') do
+  assert_equal 1000, Webmachine::SpecHttp.parse_qvalue('1')
+  assert_equal 1000, Webmachine::SpecHttp.parse_qvalue('1.')
+  assert_equal 1000, Webmachine::SpecHttp.parse_qvalue('1.0')
+  assert_equal 1000, Webmachine::SpecHttp.parse_qvalue('1.000')
+  assert_equal 0, Webmachine::SpecHttp.parse_qvalue('0')
+  assert_equal 0, Webmachine::SpecHttp.parse_qvalue('0.000')
+  assert_equal 500, Webmachine::SpecHttp.parse_qvalue('0.5')
+  assert_equal 800, Webmachine::SpecHttp.parse_qvalue('0.8')
+  assert_equal 50, Webmachine::SpecHttp.parse_qvalue('0.05')
+  assert_equal 5, Webmachine::SpecHttp.parse_qvalue('0.005')
+  assert_equal 1, Webmachine::SpecHttp.parse_qvalue('0.001')
+  assert_equal 999, Webmachine::SpecHttp.parse_qvalue('0.999')
+end
+
+# The grammar names two shapes and nothing else: a zero with up to three
+# digits behind it, or a one with up to three zeros. Everything a client
+# might try instead is refused, and the offset says where.
+assert('parse_qvalue refuses what the two shapes do not allow') do
+  ['', '2', '-1', '+1', '.5', '0.1234', '1.001', '1.1', '0,5', '0.5 ', ' 0.5', 'q=0.5',
+   '0.abc', '11', '1.0000'].each do |bad|
+    e = Webmachine::SpecHttp.parse_qvalue(bad)
+    assert_kind_of Array, e, bad
+    assert_equal 'qvalue', e[0], bad
+  end
+  assert_equal 2, Webmachine::SpecHttp.parse_qvalue('0.x')[1]
+  assert_equal 1, Webmachine::SpecHttp.parse_qvalue('0,5')[1]
+end
+
+# RFC 9110 12.4.2: "If no 'q' parameter is present, the default weight
+# is 1." The name is case-insensitive like every parameter name, and RFC
+# 9110 5.6.6 makes the quoted and the unquoted value the same, so a
+# client that writes q="0.5" gets the same answer.
+assert('weight_of answers 1 where no q parameter stands') do
+  assert_equal 1000, Webmachine::SpecHttp.weight_of('')
+  assert_equal 1000, Webmachine::SpecHttp.weight_of(';charset=utf-8')
+  assert_equal 800, Webmachine::SpecHttp.weight_of(';q=0.8')
+  assert_equal 800, Webmachine::SpecHttp.weight_of(';Q=0.8')
+  assert_equal 800, Webmachine::SpecHttp.weight_of(';q="0.8"')
+  assert_equal 800, Webmachine::SpecHttp.weight_of('; charset=utf-8; q=0.8')
+  assert_equal 0, Webmachine::SpecHttp.weight_of(';q=0')
+  assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
+end

@@ -509,6 +509,35 @@ mrb_value spec_parse_content_length(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+mrb_value spec_parse_qvalue(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_qvalue(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_weight_of(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::weight_of(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -557,6 +586,9 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_content_length",
                                spec_parse_content_length, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

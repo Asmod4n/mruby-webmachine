@@ -76,6 +76,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 400},
     {"RFC 9110 8.6", "Content-Length", "The Content-Length field is not valid",
      "1*DIGIT, and the number fits in 64 bits", 400},
+    {"RFC 9110 12.4.2", "qvalue", "The quality value is not valid",
+     "( \"0\" [ \".\" 0*3DIGIT ] ) / ( \"1\" [ \".\" 0*3(\"0\") ] )", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -100,6 +102,7 @@ inline constexpr uint16_t kPctEncodedProblem = 18;
 inline constexpr uint16_t kEntityTagProblem = 19;
 inline constexpr uint16_t kMediaTypeProblem = 20;
 inline constexpr uint16_t kContentLengthProblem = 21;
+inline constexpr uint16_t kQvalueProblem = 22;
 
 struct Refusal {
     uint16_t problem;
@@ -998,6 +1001,40 @@ inline std::expected<uint64_t, Refusal> parse_content_length(const std::string_v
     if (done.ec != std::errc{} || done.ptr != end) [[unlikely]]
         return std::unexpected(Refusal{kContentLengthProblem, 0});
     return length;
+}
+
+inline constexpr unsigned kMostPreferred = 1000;
+
+inline std::expected<unsigned, Refusal> parse_qvalue(const std::string_view text)
+{
+    if (text.empty() || (text.front() != '0' && text.front() != '1')) [[unlikely]]
+        return std::unexpected(Refusal{kQvalueProblem, 0});
+    const unsigned whole = text.front() == '1' ? kMostPreferred : 0;
+    if (text.size() == 1)
+        return whole;
+    if (text.at(1) != '.' || text.size() > 5) [[unlikely]]
+        return std::unexpected(Refusal{kQvalueProblem, 1});
+    unsigned thousandths = 0;
+    unsigned place = 100;
+    for (size_t at = 2; at < text.size(); ++at) {
+        if (!is_digit(text.at(at))) [[unlikely]]
+            return std::unexpected(Refusal{kQvalueProblem, static_cast<uint32_t>(at)});
+        thousandths += static_cast<unsigned>(text.at(at) - '0') * place;
+        place /= 10;
+    }
+    if (whole == kMostPreferred && thousandths != 0) [[unlikely]]
+        return std::unexpected(Refusal{kQvalueProblem, 2});
+    return whole + thousandths;
+}
+
+inline std::expected<unsigned, Refusal> weight_of(const std::string_view parameters)
+{
+    const auto found = value_of_parameter(parameters, "q");
+    if (!found) [[unlikely]]
+        return std::unexpected(found.error());
+    if (!*found)
+        return kMostPreferred;
+    return parse_qvalue(unquoted_token(**found));
 }
 
 struct EntityTag {
