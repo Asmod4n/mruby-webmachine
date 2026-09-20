@@ -1401,6 +1401,33 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
 
+# RFC 9110 6.6.1 gives one example, and 5.6.7 gives the other. The
+# spelling and the reading share the named positions, so a round trip
+# through both is the strongest thing the test can say.
+assert('spell_imf_fixdate writes what parse_imf_fixdate reads') do
+  [['Tue, 15 Nov 1994 08:12:31 GMT', 784887151],
+   ['Sun, 06 Nov 1994 08:49:37 GMT', 784111777],
+   ['Thu, 01 Jan 1970 00:00:00 GMT', 0],
+   ['Mon, 29 Feb 2016 23:59:59 GMT', 1456790399],
+   ['Tue, 19 Jan 2038 03:14:07 GMT', 2147483647]].each do |spelled, at|
+    assert_equal spelled, Webmachine::SpecHttp.spell_imf_fixdate(at), spelled
+    assert_equal at, Webmachine::SpecHttp.parse_imf_fixdate(spelled), spelled
+  end
+end
+
+# RFC 9110 6.6.1: "An origin server with a clock ... MUST generate a Date
+# header field in all 2xx (Successful), 3xx (Redirection), and 4xx
+# (Client Error) responses, and MAY generate a Date header field in 1xx
+# (Informational) and 5xx (Server Error) responses."
+assert('date_is_required is the 2xx, 3xx and 4xx of RFC 9110 6.6.1') do
+  [200, 204, 301, 304, 400, 404, 416, 499].each do |status|
+    assert_true Webmachine::SpecHttp.date_required?(status), status.to_s
+  end
+  [100, 101, 500, 503].each do |status|
+    assert_false Webmachine::SpecHttp.date_required?(status), status.to_s
+  end
+end
+
 # RFC 9110 5.5: field-vchar = VCHAR / obs-text, obs-text = %x80-FF, so a
 # byte above 0x7f is allowed and only the controls are not. The reason to
 # check at all is RFC 9113 8.2.1, which is about HPACK and QPACK rather

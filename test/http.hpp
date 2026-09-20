@@ -714,6 +714,22 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+mrb_value spec_spell_imf_fixdate(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    const auto spelled = http::spell_imf_fixdate(
+        std::chrono::sys_seconds{std::chrono::seconds{static_cast<int64_t>(seconds)}});
+    return cpp_to_mrb_value(mrb, std::string_view(spelled.data(), spelled.size()));
+}
+
+mrb_value spec_date_is_required(mrb_state *mrb, mrb_value)
+{
+    mrb_int status = 0;
+    mrb_get_args(mrb, "i", &status);
+    return mrb_bool_value(http::date_is_required(static_cast<unsigned>(status)));
+}
+
 mrb_value spec_is_field_value(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -980,6 +996,10 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_content_length_list",

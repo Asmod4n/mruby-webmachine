@@ -717,6 +717,56 @@ parse_imf_fixdate(const std::string_view text)
     return std::chrono::sys_days{date} + *time;
 }
 
+// RFC 9110 5.6.7: day-name = %s"Mon" / %s"Tue" / %s"Wed" / %s"Thu" /
+// %s"Fri" / %s"Sat" / %s"Sun", and %s means the case is part of the rule.
+inline constexpr std::array kDayNames = std::to_array<std::string_view>(
+    {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"});
+
+constexpr std::array<char, 2> two_digits(const unsigned value)
+{
+    return {static_cast<char>('0' + value / 10 % 10), static_cast<char>('0' + value % 10)};
+}
+
+inline std::array<char, kFixdateLength> spell_imf_fixdate(const std::chrono::sys_seconds moment)
+{
+    const std::chrono::sys_days midnight = std::chrono::floor<std::chrono::days>(moment);
+    const std::chrono::year_month_day date{midnight};
+    const std::chrono::hh_mm_ss<std::chrono::seconds> time{moment - midnight};
+    const unsigned year = static_cast<unsigned>(static_cast<int>(date.year()));
+    std::array<char, kFixdateLength> spelled{};
+    const auto put = [&spelled](const size_t at, const std::string_view text) {
+        std::ranges::copy(text, std::next(spelled.begin(), static_cast<ptrdiff_t>(at)));
+    };
+    const auto put_two = [&spelled](const size_t at, const unsigned value) {
+        const std::array<char, 2> digits = two_digits(value);
+        std::ranges::copy(digits, std::next(spelled.begin(), static_cast<ptrdiff_t>(at)));
+    };
+    put(0, kDayNames.at(std::chrono::weekday{midnight}.iso_encoding() - 1));
+    put(kDayNames.front().size(), ", ");
+    put_two(kFixdateDayAt, static_cast<unsigned>(date.day()));
+    put(kFixdateMonthAt - 1, " ");
+    put(kFixdateMonthAt, kMonthNames.at(static_cast<unsigned>(date.month()) - 1));
+    put(kFixdateYearAt - 1, " ");
+    put_two(kFixdateYearAt, year / 100);
+    put_two(kFixdateYearAt + 2, year % 100);
+    put(kFixdateTimeAt - 1, " ");
+    put_two(kFixdateTimeAt, static_cast<unsigned>(time.hours().count()));
+    put(kFixdateTimeAt + 2, ":");
+    put_two(kFixdateTimeAt + 3, static_cast<unsigned>(time.minutes().count()));
+    put(kFixdateTimeAt + 5, ":");
+    put_two(kFixdateTimeAt + 6, static_cast<unsigned>(time.seconds().count()));
+    put(kFixdateZoneAt, " GMT");
+    return spelled;
+}
+
+// RFC 9110 6.6.1: "An origin server with a clock ... MUST generate a Date
+// header field in all 2xx, 3xx, and 4xx responses, and MAY generate a
+// Date header field in 1xx and 5xx responses."
+constexpr bool date_is_required(const unsigned status)
+{
+    return status >= 200 && status < 500;
+}
+
 inline constexpr size_t kRfc850TailLength = 22;
 inline constexpr size_t kRfc850DayAt = 0;
 inline constexpr size_t kRfc850MonthAt = 3;
