@@ -46,6 +46,7 @@ void is_tchar(benchmark::State &state)
 // The field names of a real request, as views into the buffer that
 // carries it, so the wide load has the rest of the request behind it.
 const std::string kChrome =
+    std::string(
     "GET /index.html HTTP/1.1\r\n"
     "Host: www.example.com\r\n"
     "Connection: keep-alive\r\n"
@@ -59,7 +60,11 @@ const std::string kChrome =
     "Sec-Fetch-Mode: navigate\r\n"
     "Accept-Encoding: gzip, deflate, br, zstd\r\n"
     "Accept-Language: en-US,en;q=0.9\r\n"
-    "\r\n";
+    "\r\n")
+    // The ring gives a wide read kWidePadding bytes behind any byte of the
+    // pool. A std::string gives none, and the last field name here is close
+    // enough to the end for a 32 byte load to pass it.
+    + std::string(http::kWidePadding, '\0');
 
 std::vector<std::string_view> field_names_of(const std::string &request)
 {
@@ -80,9 +85,7 @@ void is_token_over_field_names(benchmark::State &state)
     for (auto _ : state) {
         bool all = true;
         for (const std::string_view name : kChromeFieldNames)
-            all = all && http::is_token(name, kChrome.size() -
-                                                  static_cast<size_t>(name.data() -
-                                                                      kChrome.data()));
+            all = all && http::is_token(name);
         benchmark::DoNotOptimize(all);
     }
 }
@@ -92,7 +95,7 @@ void every_byte_over_field_names(benchmark::State &state)
     for (auto _ : state) {
         bool all = true;
         for (const std::string_view name : kChromeFieldNames)
-            all = all && http::is_token(name, name.size());
+            all = all && http::every_byte_is_allowed(name, http::kTchar);
         benchmark::DoNotOptimize(all);
     }
 }
@@ -104,10 +107,8 @@ const std::string_view kHostOfChrome =
 
 void is_reg_name_over_a_host(benchmark::State &state)
 {
-    const size_t readable =
-        kChrome.size() - static_cast<size_t>(kHostOfChrome.data() - kChrome.data());
     for (auto _ : state) {
-        bool good = http::is_reg_name(kHostOfChrome, readable);
+        bool good = http::is_reg_name(kHostOfChrome);
         benchmark::DoNotOptimize(good);
     }
 }
@@ -115,17 +116,15 @@ void is_reg_name_over_a_host(benchmark::State &state)
 void every_byte_over_a_host(benchmark::State &state)
 {
     for (auto _ : state) {
-        bool good = http::is_reg_name(kHostOfChrome, kHostOfChrome.size());
+        bool good = http::every_byte_is_allowed(kHostOfChrome, http::kRegName);
         benchmark::DoNotOptimize(good);
     }
 }
 
 void parse_host_of_chrome(benchmark::State &state)
 {
-    const size_t readable =
-        kChrome.size() - static_cast<size_t>(kHostOfChrome.data() - kChrome.data());
     for (auto _ : state) {
-        auto got = http::parse_host(kHostOfChrome, readable);
+        auto got = http::parse_host(kHostOfChrome);
         benchmark::DoNotOptimize(got);
     }
 }
