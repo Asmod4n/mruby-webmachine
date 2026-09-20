@@ -1,2 +1,3 @@
 bench/run
 mruby/
+deps/benchmark/build-*/

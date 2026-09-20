@@ -107,7 +107,7 @@ void is_reg_name_over_a_host(benchmark::State &state)
     const size_t readable =
         kChrome.size() - static_cast<size_t>(kHostOfChrome.data() - kChrome.data());
     for (auto _ : state) {
-        const bool good = http::is_reg_name(kHostOfChrome, readable);
+        bool good = http::is_reg_name(kHostOfChrome, readable);
         benchmark::DoNotOptimize(good);
     }
 }
@@ -115,7 +115,7 @@ void is_reg_name_over_a_host(benchmark::State &state)
 void every_byte_over_a_host(benchmark::State &state)
 {
     for (auto _ : state) {
-        const bool good = http::is_reg_name(kHostOfChrome, kHostOfChrome.size());
+        bool good = http::is_reg_name(kHostOfChrome, kHostOfChrome.size());
         benchmark::DoNotOptimize(good);
     }
 }
