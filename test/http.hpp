@@ -692,6 +692,28 @@ mrb_value spec_choose_language(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+mrb_value spec_field_combining(mrb_state *mrb, mrb_value)
+{
+    const char *name = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &name, &length);
+    return cpp_to_mrb_value(
+        mrb, static_cast<int>(
+                 http::field_combining(std::string_view(name, static_cast<size_t>(length)))));
+}
+
+mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_content_length_list(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
 mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -948,6 +970,10 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length_list",
+                               spec_parse_content_length_list, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "coding_weight", spec_coding_weight, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "choose_media_type", spec_choose_media_type,
                                MRB_ARGS_REQ(2));

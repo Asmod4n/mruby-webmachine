@@ -544,6 +544,28 @@ inline std::optional<ListElement> parse_list_element(const std::string_view text
     return ListElement{whole.substr(0, whole.find_last_not_of(" \t") + 1), rest.substr(at)};
 }
 
+enum class FieldCombining : uint8_t { kList, kRefuse, kMustAgree, kNeverCombined };
+
+constexpr FieldCombining field_combining(const std::string_view name)
+{
+    switch (name.size()) {
+    case 4:
+        return equal_ignoring_case(name, "host") ? FieldCombining::kRefuse
+                                                 : FieldCombining::kList;
+    case 10:
+        return equal_ignoring_case(name, "set-cookie") ? FieldCombining::kNeverCombined
+                                                       : FieldCombining::kList;
+    case 12:
+        return equal_ignoring_case(name, "content-type") ? FieldCombining::kRefuse
+                                                         : FieldCombining::kList;
+    case 14:
+        return equal_ignoring_case(name, "content-length") ? FieldCombining::kMustAgree
+                                                           : FieldCombining::kList;
+    default:
+        return FieldCombining::kList;
+    }
+}
+
 struct FieldValueParameter {
     std::string_view name;
     std::string_view value;
@@ -1024,6 +1046,27 @@ inline constexpr unsigned kMostPreferred = 1000;
 inline constexpr size_t kQvaluePointAt = 1;
 inline constexpr size_t kQvalueDigitsAt = 2;
 inline constexpr size_t kQvalueLength = 5;
+
+inline std::expected<uint64_t, Refusal>
+parse_content_length_list(const std::string_view combined)
+{
+    std::optional<uint64_t> agreed;
+    std::string_view rest = combined;
+    while (const auto element = parse_list_element(rest)) {
+        const size_t at =
+            static_cast<size_t>(std::distance(combined.data(), element->element.data()));
+        const auto one = parse_content_length(element->element);
+        if (!one) [[unlikely]]
+            return std::unexpected(moved_forward(one.error(), at));
+        if (agreed && *agreed != *one) [[unlikely]]
+            return std::unexpected(Refusal{kContentLengthProblem, static_cast<uint32_t>(at)});
+        agreed = *one;
+        rest = element->rest;
+    }
+    if (!agreed) [[unlikely]]
+        return std::unexpected(Refusal{kContentLengthProblem, 0});
+    return *agreed;
+}
 
 inline std::expected<unsigned, Refusal> parse_qvalue(const std::string_view text)
 {

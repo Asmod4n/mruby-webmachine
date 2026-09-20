@@ -1401,6 +1401,58 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
 
+SPEC_LIST           = 0
+SPEC_REFUSE         = 1
+SPEC_MUST_AGREE     = 2
+SPEC_NEVER_COMBINED = 3
+
+# RFC 9110 5.2 says what a repeated field name means, unconditionally:
+# "When a field name is repeated within a section, its combined field
+# value consists of the list of corresponding field line values within
+# that section, concatenated in order, with each field line value
+# separated by a comma." So a list is the default and the table holds
+# only the fields where that is wrong.
+assert('field_combining names the fields a repeat must not be appended to') do
+  ['accept', 'accept-encoding', 'via', 'x-whatever', ''].each do |name|
+    assert_equal SPEC_LIST, Webmachine::SpecHttp.field_combining(name), name
+  end
+  # RFC 9112 3.2: "A server MUST respond with a 400 (Bad Request) status
+  # code to any ... request message that contains more than one Host
+  # header field line".
+  assert_equal SPEC_REFUSE, Webmachine::SpecHttp.field_combining('Host')
+  # RFC 9110 8.3: Content-Type "is sometimes incorrectly generated
+  # multiple times ... Recipients often attempt to handle this error by
+  # using the last syntactically valid member of the list, leading to
+  # potential interoperability and security issues". Refusing is the
+  # branch without that hazard.
+  assert_equal SPEC_REFUSE, Webmachine::SpecHttp.field_combining('content-type')
+  # RFC 9112 6.3 rule 5.
+  assert_equal SPEC_MUST_AGREE, Webmachine::SpecHttp.field_combining('Content-Length')
+  # RFC 9110 5.3: Set-Cookie "often appears in a response message across
+  # multiple field lines and does not use the list syntax ... Since it
+  # cannot be combined into a single field value, recipients ought to
+  # handle Set-Cookie as a special case".
+  assert_equal SPEC_NEVER_COMBINED, Webmachine::SpecHttp.field_combining('set-cookie')
+end
+
+# RFC 9112 6.3 rule 5: an invalid Content-Length is unrecoverable
+# "unless the field value can be successfully parsed as a comma-separated
+# list, all values in the list are valid, and all values in the list are
+# the same (in which case, the message is processed with that single
+# value used as the Content-Length field value)".
+assert('parse_content_length_list takes a list only where every member agrees') do
+  assert_equal 42, Webmachine::SpecHttp.parse_content_length_list('42')
+  assert_equal 42, Webmachine::SpecHttp.parse_content_length_list('42, 42, 42')
+  assert_equal 'Content-Length', Webmachine::SpecHttp.parse_content_length_list('42, 43')
+  assert_equal 'Content-Length', Webmachine::SpecHttp.parse_content_length_list('42, x')
+  assert_equal 'Content-Length', Webmachine::SpecHttp.parse_content_length_list('')
+  # RFC 9110 5.6.1.2: "A recipient MUST parse and ignore a reasonable
+  # number of empty list elements", so a trailing comma is one value and
+  # not a refusal.
+  assert_equal 42, Webmachine::SpecHttp.parse_content_length_list('42, ')
+  assert_equal 42, Webmachine::SpecHttp.parse_content_length_list(', 42,, 42 ,')
+end
+
 # RFC 9110 12.5.1, Table 5. The table in the RFC has one wrong row:
 # errata 7138, verified 2022-11-09, says the last one must read 0.3 and
 # not 0.7. The 0.7 is left over from RFC 7231, where the Accept field of
