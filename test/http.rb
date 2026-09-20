@@ -1437,6 +1437,15 @@ assert('the eight methods of RFC 9110 9.3 and what 9.2 says about them') do
   end
 end
 
+# webmachine-ruby's STANDARD_HTTP_METHODS, in its order, and QUERY after
+# it. known_methods is what the server understands - outside it is the
+# 501 of B12 - and it is not allowed_methods, which webmachine defaults
+# to GET and HEAD and which stays that way here.
+assert('known_methods is webmachine plus QUERY') do
+  assert_equal %w[GET HEAD POST PUT DELETE TRACE CONNECT OPTIONS QUERY],
+               Webmachine::SpecHttp.known_methods
+end
+
 # A method is a token, and one longer than eight bytes cannot even be a
 # number here, so WebDAV lands on unknown rather than on a wrong answer.
 assert('an unknown method is unknown, and nothing about it is assumed') do

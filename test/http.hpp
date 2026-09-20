@@ -719,6 +719,14 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
 // std::exception promises. It returns title.data(), which is only a C
 // string as long as every row of the table is a literal. This says so
 // for every row rather than trusting it.
+mrb_value spec_known_methods(mrb_state *mrb, mrb_value)
+{
+    mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kKnownMethods.size()));
+    for (const http::Method method : http::kKnownMethods)
+        mrb_ary_push(mrb, out, cpp_to_mrb_value(mrb, http::method_name_of(method)));
+    return out;
+}
+
 mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -1029,6 +1037,7 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,

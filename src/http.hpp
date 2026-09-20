@@ -224,6 +224,49 @@ constexpr Method method_of(const std::string_view text)
     }
 }
 
+constexpr std::string_view method_name_of(const Method method)
+{
+    switch (method) {
+    case Method::kGet:
+        return "GET";
+    case Method::kHead:
+        return "HEAD";
+    case Method::kPost:
+        return "POST";
+    case Method::kPut:
+        return "PUT";
+    case Method::kDelete:
+        return "DELETE";
+    case Method::kConnect:
+        return "CONNECT";
+    case Method::kOptions:
+        return "OPTIONS";
+    case Method::kTrace:
+        return "TRACE";
+    case Method::kQuery:
+        return "QUERY";
+    case Method::kUnknown:
+        return {};
+    }
+    return {};
+}
+
+// webmachine-ruby's STANDARD_HTTP_METHODS holds the eight of RFC 9110
+// 9.3, and its known_methods returns that list. This one is those eight
+// and QUERY, which RFC 10008 made Standards Track long after webmachine
+// was written. It says what this server understands, so a method outside
+// it is the 501 of B12. What a resource permits is allowed_methods, and
+// that default stays GET and HEAD, as webmachine has it - a resource
+// that wants QUERY says so.
+inline constexpr std::array kKnownMethods =
+    std::to_array({Method::kGet, Method::kHead, Method::kPost, Method::kPut, Method::kDelete,
+                   Method::kTrace, Method::kConnect, Method::kOptions, Method::kQuery});
+
+constexpr bool is_known_method(const Method method)
+{
+    return std::ranges::find(kKnownMethods, method) != kKnownMethods.end();
+}
+
 // RFC 9110 9.2.1: "Of the request methods defined by this specification,
 // the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
 // RFC 10008 2.1 adds QUERY: "QUERY requests are safe with regard to the
