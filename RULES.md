@@ -387,9 +387,7 @@ how many iterations a case needs, repeats it, and reports the median
 and the deviation, so a number arrives with the spread that made it.
 
 A measurement compares before against after, on this machine, in this
-session, with both arms built the same way. It does not compare one
-machine with another, so the version of the library does not matter.
-`libbenchmark-dev` from the system is enough.
+session, with both arms built the same way.
 
 This rule exists because a hand written harness gave 29, 45, 63 and 74
 nanoseconds for one unchanged function, and 43 against 64 in two runs
@@ -398,6 +396,65 @@ of a second, so the machine was not the reason. The harness was.
 
 Whether two cases in one process disturb each other is a question for
 the first measurement, not an assumption.
+
+A number is tied to the binary that produced it, and a relink is a new
+binary. The same source, one machine, alternating at raised priority
+and a load of 0.09, read 66 ns against one build of the timing library
+and 90 against two others - and with `-falign-functions=64
+-falign-loops=64 -falign-jumps=64` all three read 89.0 plus or minus
+0.5. Nothing about the library explained it. Linking something else
+moved the hot loop, and where a loop sits is worth a third of its cost.
+
+So: the alignment flags are always on, two arms are compared inside one
+binary, and an absolute nanosecond figure is never carried from one
+build to the next. Below roughly a third, the clock cannot answer a
+question across binaries at all, and `bench/instructions.sh` is what
+can - it counts what the binary executed, and that count does not move.
+
+This was learned the long way. A relink changed a median by 30 percent,
+it was called code layout, then an instruction count disagreed and the
+layout reading was dropped, and four wrong mechanisms were proposed -
+a debug timing library, a version bump, AVX-512 licence throttling and
+the machine's own load - before the flags settled it. Each one was
+plausible and each one was stated before it was tested.
+
+The library is built here all the same, from `deps/benchmark` pinned by
+commit, `CMAKE_BUILD_TYPE=Release`, and the same `-march` as the
+harness so one binary does not hold two instruction sets. Not because
+it distorts a number - it does not - but because Debian's carries no
+`NDEBUG`, warns about it on stderr where nobody looked, and
+`pkg-config --modversion` answered "1.8.3" and said none of it.
+`WM_MARCH=` pins the ISA and the build directory is named for it.
+
+Every row records `benchmark_lib`, `ran_as`, `bench_nice` and
+`bench_threads_max`, and Google Benchmark adds `library_build_type`
+itself.
+
+## The bench takes the machine, and says how much of it
+
+One cpu fewer than the box has, for the whole measurement, the server
+and the client together, so one of them stays out of it.
+
+The run goes to nice -15 and everything else this user owns goes to
++15, skipping the run's own ancestors. Thirty points; ten does not do
+it, and +19 alone cannot build the gap from above. No sudo: a negative
+nice needs `RLIMIT_NICE`, granted once to a user in
+`/etc/security/limits.d`, and without the grant this is a no-op rather
+than a refusal. The row records whether it got it.
+
+On an idle machine this buys nothing. It exists for a machine that is
+not idle, and the thing that is not idle here is us: an agent building
+and testing in the background moves one arm of a comparison and not the
+others. Measured today - a `cmake --parallel` left the one minute load
+at 1.86 while a benchmark ran.
+
+And the run is never root. Root holds CAP_SYS_NICE and CAP_IPC_LOCK, so
+`RLIMIT_NICE` and `RLIMIT_MEMLOCK` are advisory for it, and io_uring
+charges its SQ and CQ rings against memlock: on 6.18 with an 8192 KiB
+limit, root opened 512 rings of 32768 entries without a refusal where an
+unprivileged user was stopped at two. A provided buffer pool is ordinary
+memory and is not charged. Where no `bench` user exists the run goes
+ahead as the caller, and the row says which it was.
 
 ## An error is small where it travels and full where it is read
 
