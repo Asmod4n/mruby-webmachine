@@ -1148,8 +1148,26 @@ transaction resets, and the next use renews it. So every response in
 flight shares one snapshot, one reader slot is held per thread, and the
 snapshot moves on in the first quiet moment.
 
-It has to move on, because a held snapshot is a file that grows: LMDB
-cannot reuse a page that is older than its oldest reader.
+It has to move on, because a held snapshot is a file that grows. LMDB
+says so in its own header - "Read transactions prevent reuse of pages
+freed by newer write transactions, thus the database can grow quickly" -
+and measured against the liblmdb of this tree it is not a small effect.
+200 rounds, each overwriting the same 64 keys with 4 KiB, so the content
+stays 256 KiB throughout:
+
+    no reader                536 576 -> 1 605 632 bytes
+    one open read transaction 536 576 -> 108 244 992 bytes
+
+A hundred times over, for the same writes. At 2000 rounds the arm with
+the reader ran a 1 GiB map out of space and the arm without it stood at
+one and a half megabytes. The reader writes nothing; it holds down what
+the writer would otherwise take back.
+
+A reader that dies holds it down forever: its slot stays in the lock
+file, and the header names that case too - "stale reader transactions
+left behind by an aborted program cause further writes to grow the
+database quickly". `mdb_reader_check` clears it, and it belongs in the
+writer.
 
 The writer therefore tells the server when it has committed. Not for
 correctness - a renew reads the newest snapshot by itself - but for
