@@ -1811,6 +1811,32 @@ def flow_targets(name)
   [[node[FLOW_TRUE], node[FLOW_TRUE_END]], [node[FLOW_FALSE], node[FLOW_FALSE_END]]]
 end
 
+# QUERY (RFC 10008) is safe and idempotent and answers with a
+# representation, so it belongs exactly where GET and HEAD go - and the
+# graph takes it there without a new edge. The way to O18 is three
+# negative method filters in a row, and a QUERY answers no to all three.
+# This holds the chain down so that a later edit cannot quietly reroute
+# it.
+assert('a method that is neither DELETE nor POST nor PUT walks M16 to O18') do
+  assert_equal 'DELETE?', Webmachine::SpecHttp.flow_node('M16')[FLOW_CLAUSE].split(': ').last
+  assert_equal 'N16', Webmachine::SpecHttp.flow_node('M16')[FLOW_FALSE]
+  assert_equal 'POST?', Webmachine::SpecHttp.flow_node('N16')[FLOW_CLAUSE].split(': ').last
+  assert_equal 'O16', Webmachine::SpecHttp.flow_node('N16')[FLOW_FALSE]
+  assert_equal 'PUT?', Webmachine::SpecHttp.flow_node('O16')[FLOW_CLAUSE].split(': ').last
+  assert_equal 'O18', Webmachine::SpecHttp.flow_node('O16')[FLOW_FALSE]
+end
+
+# RFC 9110 14.2: "A server MUST ignore a Range header field received with
+# a request method that is unrecognized or for which range handling is
+# not defined. For this specification, GET is the only method for which
+# range handling is defined." So a QUERY reaches O18 and leaves the range
+# branch alone.
+assert('the range branch says it is for GET alone') do
+  clause = Webmachine::SpecHttp.flow_node('O18c')[FLOW_CLAUSE]
+  assert_true clause.include?('GET is the only method for which range handling is defined'),
+              clause
+end
+
 # The graph is webmachine's, node letter for node letter, so a resource
 # written against webmachine-ruby runs here. What a table cannot have is
 # an edge to a node that is not there, or a node nobody reaches.

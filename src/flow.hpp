@@ -304,10 +304,12 @@ inline constexpr std::array<FlowNode, static_cast<size_t>(Node::kCount)> kFlow =
      "RFC 9110 9.3.4: PUT?",
      to(Node::kO14), to(Node::kO18)},
     {Node::kO18, Kind::kAction, "content_types_provided",
-     "GET/HEAD render the body through the negotiated handler; caching headers land here",
+     "GET, HEAD and QUERY (RFC 10008) render the body through the negotiated handler; "
+     "caching headers land here",
      to(Node::kO18c), to(Node::kO18c)},
     {Node::kO18c, Kind::kRequest, {},
-     "RFC 9110 14.2: a Range on a GET, in a unit this server serves; any other is ignored",
+     "RFC 9110 14.2: a Range on a GET - \"GET is the only method for which range handling is "
+     "defined\" - in a unit this server serves; any other is ignored",
      to(Node::kO18d), to(Node::kO18b)},
     {Node::kO18d, Kind::kRequest, {},
      "RFC 9110 13.2.2 step 5 / 13.1.5: no If-Range, or its validator matches; otherwise the "
