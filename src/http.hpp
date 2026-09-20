@@ -118,6 +118,8 @@ constexpr Refusal moved_forward(const Refusal refusal, const size_t forward)
     return Refusal{refusal.problem, static_cast<uint32_t>(refusal.offset + forward)};
 }
 
+inline constexpr size_t kExcerptBefore = 16;
+
 class ParseError : public std::runtime_error
 {
 public:
@@ -127,7 +129,8 @@ public:
                           ? static_cast<unsigned char>(text.at(refusal.offset))
                           : 0)
     {
-        const size_t back = refusal.offset < 16 ? 0 : refusal.offset - 16;
+        const size_t back =
+            refusal.offset < kExcerptBefore ? 0 : refusal.offset - kExcerptBefore;
         const size_t from = std::min(back, text.size());
         for (const char letter : text.substr(from, excerpt_.size()))
             excerpt_.at(excerpt_length_++) = letter;
@@ -598,13 +601,19 @@ parse_field_value_parameter(const std::string_view text)
     return FieldValueParameter{name, value, raw.substr(value.size())};
 }
 
+inline constexpr size_t kTimeOfDayLength = 8;
+inline constexpr size_t kHourAt = 0;
+inline constexpr size_t kMinuteAt = 3;
+inline constexpr size_t kSecondAt = 6;
+
 inline std::optional<std::chrono::seconds> parse_time_of_day(const std::string_view text)
 {
-    if (text.size() != 8 || text.at(2) != ':' || text.at(5) != ':') [[unlikely]]
+    if (text.size() != kTimeOfDayLength || text.at(kMinuteAt - 1) != ':' ||
+        text.at(kSecondAt - 1) != ':') [[unlikely]]
         return std::nullopt;
-    const auto hour = parse_digits(text.substr(0, 2), 2);
-    const auto minute = parse_digits(text.substr(3, 2), 2);
-    const auto second = parse_digits(text.substr(6, 2), 2);
+    const auto hour = parse_digits(text.substr(kHourAt, 2), 2);
+    const auto minute = parse_digits(text.substr(kMinuteAt, 2), 2);
+    const auto second = parse_digits(text.substr(kSecondAt, 2), 2);
     if (!hour || !minute || !second) [[unlikely]]
         return std::nullopt;
     if (*hour > 23 || *minute > 59 || *second > 60) [[unlikely]]
@@ -613,54 +622,71 @@ inline std::optional<std::chrono::seconds> parse_time_of_day(const std::string_v
            std::chrono::seconds{*second};
 }
 
+inline constexpr size_t kFixdateLength = 29;
+inline constexpr size_t kFixdateDayAt = 5;
+inline constexpr size_t kFixdateMonthAt = 8;
+inline constexpr size_t kFixdateYearAt = 12;
+inline constexpr size_t kFixdateTimeAt = 17;
+inline constexpr size_t kFixdateZoneAt = 25;
+
 inline std::expected<std::chrono::sys_seconds, Refusal>
 parse_imf_fixdate(const std::string_view text)
 {
-    if (text.size() != 29 || text.substr(3, 2) != ", " || text.at(7) != ' ' ||
-        text.at(11) != ' ' || text.at(16) != ' ' || text.substr(25) != " GMT") [[unlikely]]
-        return std::unexpected(Refusal{kImfFixdateProblem, static_cast<uint32_t>(0)});
-    const auto day = parse_digits(text.substr(5, 2), 2);
+    if (text.size() != kFixdateLength || text.substr(kFixdateDayAt - 2, 2) != ", " ||
+        text.at(kFixdateMonthAt - 1) != ' ' || text.at(kFixdateYearAt - 1) != ' ' ||
+        text.at(kFixdateTimeAt - 1) != ' ' || text.substr(kFixdateZoneAt) != " GMT") [[unlikely]]
+        return std::unexpected(Refusal{kImfFixdateProblem, 0});
+    const auto day = parse_digits(text.substr(kFixdateDayAt, 2), 2);
     if (!day) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(5)});
-    const auto month = parse_month(text.substr(8, 3));
+        return std::unexpected(Refusal{kDigitProblem, kFixdateDayAt});
+    const auto month = parse_month(text.substr(kFixdateMonthAt, 3));
     if (!month) [[unlikely]]
-        return std::unexpected(Refusal{kMonthProblem, static_cast<uint32_t>(8)});
-    const auto year = parse_digits(text.substr(12, 4), 4);
+        return std::unexpected(Refusal{kMonthProblem, kFixdateMonthAt});
+    const auto year = parse_digits(text.substr(kFixdateYearAt, 4), 4);
     if (!year) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(12)});
-    const auto time = parse_time_of_day(text.substr(17, 8));
+        return std::unexpected(Refusal{kDigitProblem, kFixdateYearAt});
+    const auto time = parse_time_of_day(text.substr(kFixdateTimeAt, kTimeOfDayLength));
     if (!time) [[unlikely]]
-        return std::unexpected(Refusal{kTimeOfDayProblem, static_cast<uint32_t>(17)});
+        return std::unexpected(Refusal{kTimeOfDayProblem, kFixdateTimeAt});
     const std::chrono::year_month_day date{std::chrono::year{static_cast<int>(*year)},
                                            std::chrono::month{*month}, std::chrono::day{*day}};
     if (!date.ok()) [[unlikely]]
-        return std::unexpected(Refusal{kImfFixdateProblem, static_cast<uint32_t>(5)});
+        return std::unexpected(Refusal{kImfFixdateProblem, kFixdateDayAt});
     return std::chrono::sys_days{date} + *time;
 }
+
+inline constexpr size_t kRfc850TailLength = 22;
+inline constexpr size_t kRfc850DayAt = 0;
+inline constexpr size_t kRfc850MonthAt = 3;
+inline constexpr size_t kRfc850YearAt = 7;
+inline constexpr size_t kRfc850TimeAt = 10;
+inline constexpr size_t kRfc850ZoneAt = 18;
 
 inline std::expected<std::chrono::sys_seconds, Refusal>
 parse_rfc850_date(const std::string_view text, const std::chrono::year current_year)
 {
     const size_t comma = text.find(',');
-    if (comma == std::string_view::npos || text.size() - comma != 24 ||
+    if (comma == std::string_view::npos || text.size() - comma != kRfc850TailLength + 2 ||
         text.substr(comma, 2) != ", ") [[unlikely]]
-        return std::unexpected(Refusal{kRfc850DateProblem, static_cast<uint32_t>(0)});
+        return std::unexpected(Refusal{kRfc850DateProblem, 0});
     const size_t at = comma + 2;
     const std::string_view tail = text.substr(at);
-    if (tail.at(2) != '-' || tail.at(6) != '-' || tail.at(9) != ' ' || tail.substr(18) != " GMT") [[unlikely]]
+    if (tail.at(kRfc850MonthAt - 1) != '-' || tail.at(kRfc850YearAt - 1) != '-' ||
+        tail.at(kRfc850TimeAt - 1) != ' ' || tail.substr(kRfc850ZoneAt) != " GMT") [[unlikely]]
         return std::unexpected(Refusal{kRfc850DateProblem, static_cast<uint32_t>(at)});
-    const auto day = parse_digits(tail.substr(0, 2), 2);
+    const auto day = parse_digits(tail.substr(kRfc850DayAt, 2), 2);
     if (!day) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(at)});
-    const auto month = parse_month(tail.substr(3, 3));
+        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(at + kRfc850DayAt)});
+    const auto month = parse_month(tail.substr(kRfc850MonthAt, 3));
     if (!month) [[unlikely]]
-        return std::unexpected(Refusal{kMonthProblem, static_cast<uint32_t>(at + 3)});
-    const auto short_year = parse_digits(tail.substr(7, 2), 2);
+        return std::unexpected(Refusal{kMonthProblem, static_cast<uint32_t>(at + kRfc850MonthAt)});
+    const auto short_year = parse_digits(tail.substr(kRfc850YearAt, 2), 2);
     if (!short_year) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(at + 7)});
-    const auto time = parse_time_of_day(tail.substr(10, 8));
+        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(at + kRfc850YearAt)});
+    const auto time = parse_time_of_day(tail.substr(kRfc850TimeAt, kTimeOfDayLength));
     if (!time) [[unlikely]]
-        return std::unexpected(Refusal{kTimeOfDayProblem, static_cast<uint32_t>(at + 10)});
+        return std::unexpected(
+            Refusal{kTimeOfDayProblem, static_cast<uint32_t>(at + kRfc850TimeAt)});
     int full = (static_cast<int>(current_year) / 100) * 100 + static_cast<int>(*short_year);
     if (full - static_cast<int>(current_year) > 50)
         full -= 100;
@@ -671,29 +697,36 @@ parse_rfc850_date(const std::string_view text, const std::chrono::year current_y
     return std::chrono::sys_days{date} + *time;
 }
 
+inline constexpr size_t kAsctimeLength = 24;
+inline constexpr size_t kAsctimeMonthAt = 4;
+inline constexpr size_t kAsctimeDayAt = 8;
+inline constexpr size_t kAsctimeTimeAt = 11;
+inline constexpr size_t kAsctimeYearAt = 20;
+
 inline std::expected<std::chrono::sys_seconds, Refusal>
 parse_asctime_date(const std::string_view text)
 {
-    if (text.size() != 24 || text.at(3) != ' ' || text.at(7) != ' ' || text.at(10) != ' ' ||
-        text.at(19) != ' ') [[unlikely]]
-        return std::unexpected(Refusal{kAsctimeDateProblem, static_cast<uint32_t>(0)});
-    const auto month = parse_month(text.substr(4, 3));
+    if (text.size() != kAsctimeLength || text.at(kAsctimeMonthAt - 1) != ' ' ||
+        text.at(kAsctimeDayAt - 1) != ' ' || text.at(kAsctimeTimeAt - 1) != ' ' ||
+        text.at(kAsctimeYearAt - 1) != ' ') [[unlikely]]
+        return std::unexpected(Refusal{kAsctimeDateProblem, 0});
+    const auto month = parse_month(text.substr(kAsctimeMonthAt, 3));
     if (!month) [[unlikely]]
-        return std::unexpected(Refusal{kMonthProblem, static_cast<uint32_t>(4)});
-    const std::string_view day_text = text.substr(8, 2);
+        return std::unexpected(Refusal{kMonthProblem, kAsctimeMonthAt});
+    const std::string_view day_text = text.substr(kAsctimeDayAt, 2);
     const auto day = parse_digits(day_text.starts_with(' ') ? day_text.substr(1) : day_text);
     if (!day) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(8)});
-    const auto time = parse_time_of_day(text.substr(11, 8));
+        return std::unexpected(Refusal{kDigitProblem, kAsctimeDayAt});
+    const auto time = parse_time_of_day(text.substr(kAsctimeTimeAt, kTimeOfDayLength));
     if (!time) [[unlikely]]
-        return std::unexpected(Refusal{kTimeOfDayProblem, static_cast<uint32_t>(11)});
-    const auto year = parse_digits(text.substr(20, 4), 4);
+        return std::unexpected(Refusal{kTimeOfDayProblem, kAsctimeTimeAt});
+    const auto year = parse_digits(text.substr(kAsctimeYearAt, 4), 4);
     if (!year) [[unlikely]]
-        return std::unexpected(Refusal{kDigitProblem, static_cast<uint32_t>(20)});
+        return std::unexpected(Refusal{kDigitProblem, kAsctimeYearAt});
     const std::chrono::year_month_day date{std::chrono::year{static_cast<int>(*year)},
                                            std::chrono::month{*month}, std::chrono::day{*day}};
     if (!date.ok()) [[unlikely]]
-        return std::unexpected(Refusal{kAsctimeDateProblem, static_cast<uint32_t>(8)});
+        return std::unexpected(Refusal{kAsctimeDateProblem, kAsctimeDayAt});
     return std::chrono::sys_days{date} + *time;
 }
 
@@ -710,6 +743,8 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
     return fixdate;
 }
 
+inline constexpr size_t kIpLiteralAt = 1;
+
 struct Host {
     std::string_view uri_host;
     std::optional<unsigned> port;
@@ -724,8 +759,8 @@ inline std::expected<Host, Refusal> parse_host(const std::string_view text)
     if (uri_host.starts_with('[')) {
         if (!uri_host.ends_with(']')) [[unlikely]]
             return std::unexpected(Refusal{kHostProblem, 0});
-        if (!is_ip_literal(uri_host.substr(1, uri_host.size() - 2))) [[unlikely]]
-            return std::unexpected(Refusal{kHostProblem, 1});
+        if (!is_ip_literal(uri_host.substr(kIpLiteralAt, uri_host.size() - 2))) [[unlikely]]
+            return std::unexpected(Refusal{kHostProblem, kIpLiteralAt});
     } else if (!is_reg_name(uri_host)) [[unlikely]] {
         return std::unexpected(Refusal{kHostProblem, 0});
     }
@@ -1009,6 +1044,10 @@ inline std::expected<uint64_t, Refusal> parse_content_length(const std::string_v
 
 inline constexpr unsigned kMostPreferred = 1000;
 
+inline constexpr size_t kQvaluePointAt = 1;
+inline constexpr size_t kQvalueDigitsAt = 2;
+inline constexpr size_t kQvalueLength = 5;
+
 inline std::expected<unsigned, Refusal> parse_qvalue(const std::string_view text)
 {
     if (text.empty() || (text.front() != '0' && text.front() != '1')) [[unlikely]]
@@ -1016,18 +1055,18 @@ inline std::expected<unsigned, Refusal> parse_qvalue(const std::string_view text
     const unsigned whole = text.front() == '1' ? kMostPreferred : 0;
     if (text.size() == 1)
         return whole;
-    if (text.at(1) != '.' || text.size() > 5) [[unlikely]]
-        return std::unexpected(Refusal{kQvalueProblem, 1});
+    if (text.at(kQvaluePointAt) != '.' || text.size() > kQvalueLength) [[unlikely]]
+        return std::unexpected(Refusal{kQvalueProblem, kQvaluePointAt});
     unsigned thousandths = 0;
     unsigned place = 100;
-    for (size_t at = 2; at < text.size(); ++at) {
+    for (size_t at = kQvalueDigitsAt; at < text.size(); ++at) {
         if (!is_digit(text.at(at))) [[unlikely]]
             return std::unexpected(Refusal{kQvalueProblem, static_cast<uint32_t>(at)});
         thousandths += static_cast<unsigned>(text.at(at) - '0') * place;
         place /= 10;
     }
     if (whole == kMostPreferred && thousandths != 0) [[unlikely]]
-        return std::unexpected(Refusal{kQvalueProblem, 2});
+        return std::unexpected(Refusal{kQvalueProblem, kQvalueDigitsAt});
     return whole + thousandths;
 }
 
