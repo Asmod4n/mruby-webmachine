@@ -173,6 +173,17 @@ mrb_value spec_is_token(mrb_state *mrb, mrb_value)
                        static_cast<size_t>(readable)));
 }
 
+mrb_value spec_is_lowercase_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int readable = 0;
+    mrb_get_args(mrb, "si", &text, &length, &readable);
+    return mrb_bool_value(
+        http::is_lowercase_token(std::string_view(text, static_cast<size_t>(length)),
+                                 static_cast<size_t>(readable)));
+}
+
 mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -214,6 +225,8 @@ inline void http_spec(mrb_state *mrb)
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));

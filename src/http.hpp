@@ -189,9 +189,17 @@ inline constexpr std::array<bool, 256> kIpLiteral = [] {
     return table;
 }();
 
+inline constexpr std::array<bool, 256> kLowercaseTchar = [] {
+    std::array<bool, 256> table = kTchar;
+    for (unsigned index = 'A'; index <= 'Z'; index++)
+        table.at(index) = false;
+    return table;
+}();
+
 inline constexpr auto kIpLiteralLowBits = low_nibble_bits_of(kIpLiteral);
 inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
 inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
+inline constexpr auto kLowercaseTcharLowBits = low_nibble_bits_of(kLowercaseTchar);
 
 inline bool every_byte_is_allowed(const std::string_view text,
                                   const std::array<bool, 256> &allowed)
@@ -256,6 +264,11 @@ inline bool every_byte_is_allowed(const std::string_view text, const size_t read
 inline bool is_token(const std::string_view text, const size_t readable_bytes)
 {
     return every_byte_is_allowed(text, readable_bytes, kTchar, kTcharLowBits);
+}
+
+inline bool is_lowercase_token(const std::string_view text, const size_t readable_bytes)
+{
+    return every_byte_is_allowed(text, readable_bytes, kLowercaseTchar, kLowercaseTcharLowBits);
 }
 
 inline bool is_reg_name(const std::string_view host, const size_t readable_bytes)

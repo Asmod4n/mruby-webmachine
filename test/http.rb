@@ -680,3 +680,44 @@ end
 # 5.1 "only needs an additional check that field names do not include
 # uppercase characters". So this is the token table with A to Z taken
 # out, and nothing else changes.
+UPPERCASE = %q{ABCDEFGHIJKLMNOPQRSTUVWXYZ}.bytes
+
+assert('lowercase_token? answers RFC 9113 8.2.1 for every one of the 256 bytes') do
+  256.times do |byte|
+    want = TCHAR.include?(byte) && !UPPERCASE.include?(byte)
+    assert_equal want, Webmachine::SpecHttp.lowercase_token?(byte.chr, 1), "byte #{byte}"
+  end
+end
+
+# The two tables differ in the 26 letters and in nothing else.
+assert('lowercase_token? refuses exactly what token? accepts in uppercase') do
+  %w[content-type accept x-forwarded-for a 0].each do |name|
+    assert_true Webmachine::SpecHttp.lowercase_token?(name, name.size), name
+  end
+  %w[Content-Type ACCEPT X-Forwarded-For A].each do |name|
+    assert_true Webmachine::SpecHttp.token?(name, name.size), name
+    assert_false Webmachine::SpecHttp.lowercase_token?(name, name.size), name
+  end
+end
+
+# RFC 9113 8.2.1 exempts a pseudo-header field, whose name carries the
+# one colon a field name may not otherwise hold. The colon comes off
+# before the check, so the table never has to know about it.
+assert('lowercase_token? refuses a colon, pseudo-header or not') do
+  assert_false Webmachine::SpecHttp.lowercase_token?(':path', 5)
+  assert_true Webmachine::SpecHttp.lowercase_token?('path', 4)
+end
+
+# The wide read answers what the narrow one answers, at every length a
+# 32-byte load can straddle.
+assert('lowercase_token? reads wide and narrow the same') do
+  buffer = 'a' * 64
+  (1..40).each do |length|
+    name = buffer[0, length]
+    assert_true Webmachine::SpecHttp.lowercase_token?(name, 64), length
+    bad = name.dup
+    bad[length - 1] = 'Z'
+    assert_false Webmachine::SpecHttp.lowercase_token?(bad, 64), length
+    assert_false Webmachine::SpecHttp.lowercase_token?(bad, length), length
+  end
+end
