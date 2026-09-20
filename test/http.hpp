@@ -563,6 +563,46 @@ mrb_value spec_media_type_weight(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+mrb_value spec_coding_weight(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    const char *coding = nullptr;
+    mrb_int field_length = 0;
+    mrb_int coding_length = 0;
+    mrb_get_args(mrb, "ss", &field, &field_length, &coding, &coding_length);
+    const Padded whole(field, field_length);
+    const Padded named(coding, coding_length);
+    const auto got = http::coding_weight(whole.view(), named.view());
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole.view()).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_language_weight(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    const char *tag = nullptr;
+    mrb_int field_length = 0;
+    mrb_int tag_length = 0;
+    mrb_get_args(mrb, "ss", &field, &field_length, &tag, &tag_length);
+    const std::string_view whole(field, static_cast<size_t>(field_length));
+    const auto got =
+        http::language_weight(whole, std::string_view(tag, static_cast<size_t>(tag_length)));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
 mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -818,6 +858,9 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "coding_weight", spec_coding_weight, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_weight", spec_language_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range,
                                MRB_ARGS_REQ(1));

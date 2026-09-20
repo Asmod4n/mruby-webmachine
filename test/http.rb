@@ -1445,6 +1445,43 @@ assert('media_type_weight refuses a range with a wildcard type and a named subty
   assert_equal ['media-type', 0], Webmachine::SpecHttp.media_type_weight('*/json', 'text/plain')
 end
 
+# RFC 9110 12.5.3 states three rules for a server, and these are them.
+# Rule 2 is the one that is easy to get wrong: a representation with no
+# content coding is acceptable by default "unless specifically excluded
+# by the Accept-Encoding header field stating either 'identity;q=0' or
+# '*;q=0' without a more specific entry for 'identity'".
+assert('coding_weight follows the three rules of RFC 9110 12.5.3') do
+  assert_equal 1000, Webmachine::SpecHttp.coding_weight('compress, gzip', 'gzip')
+  assert_equal 0, Webmachine::SpecHttp.coding_weight('compress, gzip', 'br')
+  assert_equal 500, Webmachine::SpecHttp.coding_weight('compress;q=0.5, gzip;q=1.0', 'compress')
+  assert_equal 1000, Webmachine::SpecHttp.coding_weight('*', 'br')
+  assert_equal 1000, Webmachine::SpecHttp.coding_weight('compress, gzip', 'identity')
+  assert_equal 1000, Webmachine::SpecHttp.coding_weight('', 'identity')
+  assert_equal 0, Webmachine::SpecHttp.coding_weight('', 'gzip')
+  assert_equal 0, Webmachine::SpecHttp.coding_weight('identity;q=0', 'identity')
+  assert_equal 0, Webmachine::SpecHttp.coding_weight('*;q=0', 'identity')
+  assert_equal 500, Webmachine::SpecHttp.coding_weight('*;q=0, identity;q=0.5', 'identity')
+  assert_equal 0, Webmachine::SpecHttp.coding_weight('gzip;q=1.0, identity; q=0.5, *;q=0', 'br')
+  assert_equal 500, Webmachine::SpecHttp.coding_weight('gzip;q=1.0, identity; q=0.5, *;q=0',
+                                                       'identity')
+end
+
+# RFC 9110 12.5.4 gives the field and points at RFC 4647 for the match.
+# The example of the section is "da, en-gb;q=0.8, en;q=0.7", read as "I
+# prefer Danish, but will accept British English and other types of
+# English". So en-gb beats en for en-GB, and en answers en-US.
+assert('language_weight takes the most specific range that matches') do
+  field = 'da, en-gb;q=0.8, en;q=0.7'
+  assert_equal 1000, Webmachine::SpecHttp.language_weight(field, 'da')
+  assert_equal 800, Webmachine::SpecHttp.language_weight(field, 'en-GB')
+  assert_equal 700, Webmachine::SpecHttp.language_weight(field, 'en-US')
+  assert_equal 700, Webmachine::SpecHttp.language_weight(field, 'en')
+  assert_equal 0, Webmachine::SpecHttp.language_weight(field, 'de')
+  assert_equal 300, Webmachine::SpecHttp.language_weight('*;q=0.3, de', 'fr')
+  assert_equal 1000, Webmachine::SpecHttp.language_weight('*;q=0.3, de', 'de-AT')
+  assert_equal 0, Webmachine::SpecHttp.language_weight('de;q=0', 'de-AT')
+end
+
 # RFC 4647 2.1: language-range = (1*8ALPHA *("-" 1*8alphanum)) / "*".
 assert('is_language_range takes a tag or the wildcard') do
   ['de', 'de-DE', 'zh-Hant-CN', '*'].each do |range|

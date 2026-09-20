@@ -1124,6 +1124,51 @@ inline std::expected<unsigned, Refusal> media_type_weight(const std::string_view
     return weight;
 }
 
+inline constexpr unsigned kAnyCodingPrecedence = 1;
+inline constexpr unsigned kNamedCodingPrecedence = 2;
+
+inline std::string_view before_parameters(const std::string_view element)
+{
+    const std::string_view named = element.substr(0, element.find(';'));
+    return named.substr(0, named.find_last_not_of(" \t") + 1);
+}
+
+inline std::string_view parameters_of(const std::string_view element)
+{
+    const size_t semicolon = element.find(';');
+    return semicolon == std::string_view::npos ? std::string_view{} : element.substr(semicolon);
+}
+
+inline std::expected<unsigned, Refusal> coding_weight(const std::string_view accept_encoding,
+                                                      const std::string_view coding)
+{
+    unsigned most_specific = 0;
+    unsigned weight = 0;
+    std::string_view rest = accept_encoding;
+    while (const auto element = parse_list_element(rest)) {
+        const size_t at =
+            static_cast<size_t>(std::distance(accept_encoding.data(), element->element.data()));
+        const std::string_view codings = before_parameters(element->element);
+        if (codings != "*" && !is_token(codings)) [[unlikely]]
+            return std::unexpected(Refusal{kTcharProblem, static_cast<uint32_t>(at)});
+        const unsigned precedence = codings == "*" ? kAnyCodingPrecedence
+                                    : equal_ignoring_case(codings, coding)
+                                        ? kNamedCodingPrecedence
+                                        : 0;
+        if (precedence > most_specific) {
+            const auto found = weight_of(parameters_of(element->element));
+            if (!found) [[unlikely]]
+                return std::unexpected(moved_forward(found.error(), at));
+            most_specific = precedence;
+            weight = *found;
+        }
+        rest = element->rest;
+    }
+    if (most_specific == 0 && equal_ignoring_case(coding, "identity"))
+        return kMostPreferred;
+    return weight;
+}
+
 inline bool is_language_range(const std::string_view text)
 {
     return text == "*" || is_language_tag(text);
@@ -1138,6 +1183,45 @@ inline bool language_range_matches(const std::string_view range, const std::stri
     if (range.size() < tag.size() && tag.at(range.size()) != '-')
         return false;
     return equal_ignoring_case(range, tag.substr(0, range.size()));
+}
+
+inline constexpr unsigned kAnyLanguagePrecedence = 1;
+
+inline unsigned language_range_precedence(const std::string_view range)
+{
+    return range == "*"
+               ? kAnyLanguagePrecedence
+               : kAnyLanguagePrecedence + 1 +
+                     static_cast<unsigned>(std::ranges::count(range, '-'));
+}
+
+inline std::expected<unsigned, Refusal> language_weight(const std::string_view accept_language,
+                                                        const std::string_view tag)
+{
+    unsigned most_specific = 0;
+    unsigned weight = 0;
+    std::string_view rest = accept_language;
+    while (const auto element = parse_list_element(rest)) {
+        const size_t at =
+            static_cast<size_t>(std::distance(accept_language.data(), element->element.data()));
+        const std::string_view range = before_parameters(element->element);
+        if (!is_language_range(range)) [[unlikely]]
+            return std::unexpected(Refusal{kTcharProblem, static_cast<uint32_t>(at)});
+        if (!language_range_matches(range, tag)) {
+            rest = element->rest;
+            continue;
+        }
+        const unsigned precedence = language_range_precedence(range);
+        if (precedence > most_specific) {
+            const auto found = weight_of(parameters_of(element->element));
+            if (!found) [[unlikely]]
+                return std::unexpected(moved_forward(found.error(), at));
+            most_specific = precedence;
+            weight = *found;
+        }
+        rest = element->rest;
+    }
+    return weight;
 }
 
 struct RangesSpecifier {
