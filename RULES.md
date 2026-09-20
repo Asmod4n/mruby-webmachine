@@ -1159,13 +1159,23 @@ the route and the key, an empty key for everything under that route, and
 both empty for everything, so the server can drop what it derived rather
 than all of it.
 
-A unix datagram socket carries it. It has a path, so the writer finds it
-with nothing handed over - an eventfd would have to be passed along a
-socket, and then the socket is there anyway. The server reads it on the
-ring like any other descriptor, so there is no second way of waking it.
-A datagram has an edge, so a message is a message. And either side runs
-without the other: `sendto` fails with `ENOENT` and the writer goes on,
-where a FIFO would block it until somebody reads.
+A signal carries it, and the reactor already reads a signalfd on the
+ring. The message needs no content: the answer to it is always the same
+renew, so the coalescing that a standard signal does is right here
+rather than lossy. `SIGRTMIN+0`, so that no application's own use of
+`SIGUSR1` collides with it, and so that `sigqueue` stays available if a
+route ever has to be named - `signalfd_siginfo.ssi_int` carries 32 bits,
+at the price of that coalescing.
+
+A signal needs a pid, and a pid is reused. So the server holds an
+exclusive `flock` on its pid file for as long as it runs, and the writer
+takes a failure to lock that file as "the server is there". Without the
+lock the file is a guess, and the guess eventually signals a stranger.
+
+Where several reactor threads each hold a transaction, only one of them
+reads the signalfd. That is no longer an IPC question: the reader raises
+an atomic counter and every thread compares it against the one its own
+snapshot was taken at.
 
 Not inotify on the data file: LMDB writes with `write` or with `msync`
 depending on `writemap`, and an event is not promised. Not a generation
