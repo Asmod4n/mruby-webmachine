@@ -268,6 +268,18 @@ inline constexpr std::array kKnownMethods =
     std::to_array({Method::kGet, Method::kHead, Method::kPost, Method::kPut, Method::kDelete,
                    Method::kTrace, Method::kConnect, Method::kOptions, Method::kQuery});
 
+// RFC 9110 8.3 leaves a missing Content-Type to the recipient: it "MAY
+// either assume a media type of application/octet-stream or examine the
+// data to determine its type". RFC 10008 2 takes that choice away for
+// QUERY, because there the content is the question being asked:
+// "Servers MUST fail the request if the Content-Type request field is
+// missing or is inconsistent with the request content." A QUERY without
+// one is malformed, which is B9 and a 400.
+constexpr bool content_type_is_required(const Method method)
+{
+    return method == Method::kQuery;
+}
+
 // What a resource permits, which is the 405 of B10. webmachine-ruby
 // defaults allowed_methods to GET and HEAD; this tree adds QUERY,
 // because RFC 10008 2.4 gives the honest answer for a resource that does

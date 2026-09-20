@@ -1418,22 +1418,26 @@ SPEC_QUERY          = 9
 # 9.2.3: "This specification defines caching semantics for GET, HEAD,
 # and POST."
 assert('the eight methods of RFC 9110 9.3 and what 9.2 says about them') do
-  #                              method       safe   idempotent cacheable
-  [['GET',     SPEC_GET,         true,  true,  true],
-   ['HEAD',    SPEC_HEAD,        true,  true,  true],
-   ['POST',    SPEC_POST,        false, false, true],
-   ['PUT',     SPEC_PUT,         false, true,  false],
-   ['DELETE',  SPEC_DELETE,      false, true,  false],
-   ['CONNECT', SPEC_CONNECT,     false, false, false],
-   ['OPTIONS', SPEC_OPTIONS,     true,  true,  false],
-   ['TRACE',   SPEC_TRACE,       true,  true,  false],
+  #                              method       safe   idem   cache  needs type
+  [['GET',     SPEC_GET,         true,  true,  true,  false],
+   ['HEAD',    SPEC_HEAD,        true,  true,  true,  false],
+   ['POST',    SPEC_POST,        false, false, true,  false],
+   ['PUT',     SPEC_PUT,         false, true,  false, false],
+   ['DELETE',  SPEC_DELETE,      false, true,  false, false],
+   ['CONNECT', SPEC_CONNECT,     false, false, false, false],
+   ['OPTIONS', SPEC_OPTIONS,     true,  true,  false, false],
+   ['TRACE',   SPEC_TRACE,       true,  true,  false, false],
    # RFC 10008 2.1 and 2.7: QUERY is safe, idempotent, and its response
    # is cacheable for later QUERY requests. It exists because a POST
    # response, per RFC 9110 9.3.3, "cannot be satisfied by a cached POST
    # response because POST is potentially unsafe".
-   ['QUERY',   SPEC_QUERY,       true,  true,  true]].each do |name, number, safe, idem, cache|
+   # RFC 10008 2: "Servers MUST fail the request if the Content-Type
+   # request field is missing", which RFC 9110 8.3 leaves open for every
+   # other method.
+   ['QUERY',   SPEC_QUERY,       true,  true,  true,  true]].each do
+    |name, number, safe, idem, cache, needs|
     got = Webmachine::SpecHttp.method_properties(name)
-    assert_equal [number, safe, idem, cache], got, name
+    assert_equal [number, safe, idem, cache, needs], got, name
   end
 end
 
@@ -1510,7 +1514,7 @@ end
 # number here, so WebDAV lands on unknown rather than on a wrong answer.
 assert('an unknown method is unknown, and nothing about it is assumed') do
   ['PATCH', 'PROPFIND', 'get', 'Get', '', 'GETT', 'REPORT', 'QUER'].each do |name|
-    assert_equal [SPEC_UNKNOWN_METHOD, false, false, false],
+    assert_equal [SPEC_UNKNOWN_METHOD, false, false, false, false],
                  Webmachine::SpecHttp.method_properties(name), name
   end
 end

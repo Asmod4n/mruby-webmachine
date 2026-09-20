@@ -764,13 +764,14 @@ mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
     mrb_get_args(mrb, "s", &text, &length);
     const http::Method method =
         http::method_of(std::string_view(text, static_cast<size_t>(length)));
-    mrb_value out[4] = {
+    mrb_value out[5] = {
         cpp_to_mrb_value(mrb, static_cast<int>(method)),
         mrb_bool_value(http::is_safe(method)),
         mrb_bool_value(http::is_idempotent(method)),
         mrb_bool_value(http::is_cacheable(method)),
+        mrb_bool_value(http::content_type_is_required(method)),
     };
-    return mrb_ary_new_from_values(mrb, 4, out);
+    return mrb_ary_new_from_values(mrb, 5, out);
 }
 
 mrb_value spec_problems_are_terminated(mrb_state *, mrb_value)
