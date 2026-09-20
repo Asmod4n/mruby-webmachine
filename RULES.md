@@ -661,10 +661,11 @@ costs:
   was read strictly or not. The same holds for content codings, language
   tags and the qvalues of the Accept fields.
 
-And laxness has a precondition this tree does not meet yet: the bytes
-that are dangerous everywhere - CR, LF, NUL, the control bytes - have to
-be refused once, over the whole header section, before any field parser
-runs lax. There is no wire layer here yet, so nothing does that today.
+The precondition for laxness is that the bytes which are dangerous
+everywhere - CR, LF, NUL, the control bytes - are refused before any
+field parser runs lax. On HTTP/1.1 picohttpparser has already refused
+them, and nothing is added in front of it. HTTP/2 and HTTP/3 have no
+such parser, which is why is_field_value exists.
 
 One shape was tried against that question. Read the field value once and
 keep the structure in a register: a 32 byte block gives two masks from
@@ -716,8 +717,8 @@ pass on the day something asks for it.
 Three things the spike does not settle, for the day it is built. It
 covers a value of 32 bytes or less and falls back above that, and a block
 loop needs the bit test to cross a block. It leans on picohttpparser
-having refused every control byte already, which is true of HTTP/1.1 and
-has to be shown again for what HPACK hands over. And it had a bug the
+having refused every control byte already, which holds on HTTP/1.1 and
+is what is_field_value answers for what HPACK and QPACK hand over. And it had a bug the
 numbers would have carried: RFC 9110 5.6.6 allows OWS around the
 semicolon, the spike read the space as part of the parameter name, and
 `text/html; charset=utf-8` - which the tree reads correctly today - was
