@@ -6,6 +6,7 @@
 #include <mruby/cpp_to_mrb_value.hpp>
 
 #include <algorithm>
+#include <variant>
 #include <vector>
 
 #include "../src/http.hpp"
@@ -538,6 +539,75 @@ mrb_value spec_weight_of(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+mrb_value spec_parse_ranges_specifier(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_ranges_specifier(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->range_unit),
+        cpp_to_mrb_value(mrb, got->range_set),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+// [first_pos, last_pos] for an int-range, [nil, suffix_length] for a
+// suffix-range, and the rule with the offset for a refusal.
+mrb_value spec_parse_byte_range_spec(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_byte_range_spec(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    if (const http::SuffixRange *const suffix = std::get_if<http::SuffixRange>(&*got)) {
+        mrb_value out[2] = {mrb_nil_value(), cpp_to_mrb_value(mrb, suffix->suffix_length)};
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    const http::IntRange &range = std::get<http::IntRange>(*got);
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, range.first_pos),
+        range.last_pos ? cpp_to_mrb_value(mrb, *range.last_pos) : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_resolved_range(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int complete_length = 0;
+    mrb_get_args(mrb, "si", &text, &length, &complete_length);
+    const auto spec = http::parse_byte_range_spec(std::string_view(text, static_cast<size_t>(length)));
+    if (!spec)
+        return mrb_nil_value();
+    const auto got = http::resolved_range(*spec, static_cast<uint64_t>(complete_length));
+    if (!got)
+        return mrb_false_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->first_pos),
+        cpp_to_mrb_value(mrb, got->last_pos),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -589,6 +659,12 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_ranges_specifier",
+                               spec_parse_ranges_specifier, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_byte_range_spec",
+                               spec_parse_byte_range_spec, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "resolved_range", spec_resolved_range,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

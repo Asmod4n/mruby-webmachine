@@ -1400,3 +1400,95 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 0, Webmachine::SpecHttp.weight_of(';q=0')
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
+
+SPEC_UNIT  = 0
+SPEC_SET   = 1
+RANGE_FROM = 0
+RANGE_TO   = 1
+
+# RFC 9110 14.1 and 14.1.1
+#   ranges-specifier = range-unit "=" range-set
+#   range-set        = 1#range-spec
+#   range-unit       = token, and it is case-insensitive
+# The unit decides which specifiers mean anything, so this only splits
+# the two apart. Whether "bytes" is a unit we serve is the caller's
+# question, and RFC 9110 14.2 says a server ignores a Range whose unit
+# it does not understand.
+assert('parse_ranges_specifier splits the unit from the set') do
+  a = Webmachine::SpecHttp.parse_ranges_specifier('bytes=0-499')
+  assert_equal 'bytes', a[SPEC_UNIT]
+  assert_equal '0-499', a[SPEC_SET]
+  b = Webmachine::SpecHttp.parse_ranges_specifier('bytes= 0-999, 4500-5499, -1000')
+  assert_equal 'bytes', b[SPEC_UNIT]
+  assert_equal ' 0-999, 4500-5499, -1000', b[SPEC_SET]
+  c = Webmachine::SpecHttp.parse_ranges_specifier('items=1-3')
+  assert_equal 'items', c[SPEC_UNIT]
+end
+
+assert('parse_ranges_specifier refuses what is not a unit and a set') do
+  ['bytes', '=0-499', 'by tes=0-1', 'bytes=', ''].each do |bad|
+    e = Webmachine::SpecHttp.parse_ranges_specifier(bad)
+    assert_equal 'range-spec', e[0], bad
+  end
+  assert_equal 6, Webmachine::SpecHttp.parse_ranges_specifier('bytes=')[1]
+end
+
+# RFC 9110 14.1.1:
+#   int-range    = first-pos "-" [ last-pos ]
+#   suffix-range = "-" suffix-length
+# "An int-range is invalid if the last-pos value is present and less
+# than the first-pos." The numbers are 1*DIGIT with no stated ceiling,
+# so they are read into 64 bits and one that does not fit is refused
+# rather than wrapped.
+assert('parse_byte_range_spec reads the two forms of RFC 9110 14.1.1') do
+  a = Webmachine::SpecHttp.parse_byte_range_spec('0-499')
+  assert_equal 0, a[RANGE_FROM]
+  assert_equal 499, a[RANGE_TO]
+  b = Webmachine::SpecHttp.parse_byte_range_spec('9500-')
+  assert_equal 9500, b[RANGE_FROM]
+  assert_nil b[RANGE_TO]
+  c = Webmachine::SpecHttp.parse_byte_range_spec('-500')
+  assert_nil c[RANGE_FROM]
+  assert_equal 500, c[RANGE_TO]
+  d = Webmachine::SpecHttp.parse_byte_range_spec('0-0')
+  assert_equal 0, d[RANGE_FROM]
+  assert_equal 0, d[RANGE_TO]
+end
+
+assert('parse_byte_range_spec refuses a range that is not one') do
+  ['', '-', 'abc', '500', '500-100', '1-2-3', '0- 1', '- 500', '+1-2', '0x10-20',
+   '99999999999999999999999999-1'].each do |bad|
+    e = Webmachine::SpecHttp.parse_byte_range_spec(bad)
+    assert_equal 'range-spec', e[0], bad
+  end
+  assert_equal 4, Webmachine::SpecHttp.parse_byte_range_spec('500-100')[1]
+end
+
+# RFC 9110 14.1.2, with the RFC's own representation of 10000 bytes.
+# "If the last-pos value is absent, or if the value is greater than or
+# equal to the current length ... the byte range is interpreted as the
+# remainder of the representation." And a suffix longer than the
+# representation takes the whole of it.
+assert('resolved_range answers the examples of RFC 9110 14.1.2') do
+  assert_equal [0, 499], Webmachine::SpecHttp.resolved_range('0-499', 10000)
+  assert_equal [500, 999], Webmachine::SpecHttp.resolved_range('500-999', 10000)
+  assert_equal [9500, 9999], Webmachine::SpecHttp.resolved_range('-500', 10000)
+  assert_equal [9500, 9999], Webmachine::SpecHttp.resolved_range('9500-', 10000)
+  assert_equal [0, 0], Webmachine::SpecHttp.resolved_range('0-0', 10000)
+  assert_equal [9999, 9999], Webmachine::SpecHttp.resolved_range('-1', 10000)
+  assert_equal [0, 9999], Webmachine::SpecHttp.resolved_range('0-99999', 10000)
+  assert_equal [0, 9999], Webmachine::SpecHttp.resolved_range('-99999', 10000)
+end
+
+# 14.1.2: "a valid bytes range-spec is satisfiable if it is either an
+# int-range with a first-pos that is less than the current length of the
+# selected representation or a suffix-range with a non-zero
+# suffix-length." False here means 416, and a representation with no
+# bytes has no inclusive range to name whatever was asked for.
+assert('resolved_range says which range no representation can answer') do
+  assert_false Webmachine::SpecHttp.resolved_range('10000-', 10000)
+  assert_false Webmachine::SpecHttp.resolved_range('10000-10500', 10000)
+  assert_false Webmachine::SpecHttp.resolved_range('-0', 10000)
+  assert_false Webmachine::SpecHttp.resolved_range('0-0', 0)
+  assert_false Webmachine::SpecHttp.resolved_range('-1', 0)
+end

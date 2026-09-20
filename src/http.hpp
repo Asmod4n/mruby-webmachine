@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include <ada.h>
 
@@ -78,6 +79,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "1*DIGIT, and the number fits in 64 bits", 400},
     {"RFC 9110 12.4.2", "qvalue", "The quality value is not valid",
      "( \"0\" [ \".\" 0*3DIGIT ] ) / ( \"1\" [ \".\" 0*3(\"0\") ] )", 400},
+    {"RFC 9110 14.1.1", "range-spec", "The Range field is not valid",
+     "range-unit \"=\" 1#( first-pos \"-\" [ last-pos ] / \"-\" suffix-length )", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -103,6 +106,7 @@ inline constexpr uint16_t kEntityTagProblem = 19;
 inline constexpr uint16_t kMediaTypeProblem = 20;
 inline constexpr uint16_t kContentLengthProblem = 21;
 inline constexpr uint16_t kQvalueProblem = 22;
+inline constexpr uint16_t kRangeProblem = 23;
 
 struct Refusal {
     uint16_t problem;
@@ -1035,6 +1039,95 @@ inline std::expected<unsigned, Refusal> weight_of(const std::string_view paramet
     if (!*found)
         return kMostPreferred;
     return parse_qvalue(unquoted_token(**found));
+}
+
+struct RangesSpecifier {
+    std::string_view range_unit;
+    std::string_view range_set;
+};
+
+inline std::expected<RangesSpecifier, Refusal> parse_ranges_specifier(const std::string_view text)
+{
+    const size_t is_same = text.find('=');
+    if (is_same == std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, static_cast<uint32_t>(text.size())});
+    const std::string_view range_unit = text.substr(0, is_same);
+    if (!is_token(range_unit)) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, 0});
+    const std::string_view range_set = text.substr(is_same + 1);
+    if (range_set.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, static_cast<uint32_t>(is_same + 1)});
+    return RangesSpecifier{range_unit, range_set};
+}
+
+struct IntRange {
+    uint64_t first_pos;
+    std::optional<uint64_t> last_pos;
+};
+
+struct SuffixRange {
+    uint64_t suffix_length;
+};
+
+using ByteRangeSpec = std::variant<IntRange, SuffixRange>;
+
+inline std::expected<uint64_t, Refusal> parse_range_number(const std::string_view text)
+{
+    uint64_t number = 0;
+    const char *const end = std::next(text.data(), text.size());
+    const auto done = std::from_chars(text.data(), end, number);
+    if (done.ec != std::errc{} || done.ptr != end) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, 0});
+    return number;
+}
+
+inline std::expected<ByteRangeSpec, Refusal> parse_byte_range_spec(const std::string_view text)
+{
+    if (text.starts_with('-')) {
+        const auto suffix_length = parse_range_number(text.substr(1));
+        if (!suffix_length) [[unlikely]]
+            return std::unexpected(moved_forward(suffix_length.error(), 1));
+        return SuffixRange{*suffix_length};
+    }
+    const size_t hyphen = text.find('-');
+    if (hyphen == std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, static_cast<uint32_t>(text.size())});
+    const auto first_pos = parse_range_number(text.substr(0, hyphen));
+    if (!first_pos) [[unlikely]]
+        return std::unexpected(first_pos.error());
+    const std::string_view behind = text.substr(hyphen + 1);
+    if (behind.empty())
+        return IntRange{*first_pos, std::nullopt};
+    const auto last_pos = parse_range_number(behind);
+    if (!last_pos) [[unlikely]]
+        return std::unexpected(moved_forward(last_pos.error(), hyphen + 1));
+    if (*last_pos < *first_pos) [[unlikely]]
+        return std::unexpected(Refusal{kRangeProblem, static_cast<uint32_t>(hyphen + 1)});
+    return IntRange{*first_pos, *last_pos};
+}
+
+struct ResolvedRange {
+    uint64_t first_pos;
+    uint64_t last_pos;
+};
+
+inline std::optional<ResolvedRange> resolved_range(const ByteRangeSpec spec,
+                                                   const uint64_t complete_length)
+{
+    if (complete_length == 0)
+        return std::nullopt;
+    if (const SuffixRange *const suffix = std::get_if<SuffixRange>(&spec)) {
+        if (suffix->suffix_length == 0)
+            return std::nullopt;
+        return ResolvedRange{complete_length - std::min(suffix->suffix_length, complete_length),
+                             complete_length - 1};
+    }
+    const IntRange &range = std::get<IntRange>(spec);
+    if (range.first_pos >= complete_length)
+        return std::nullopt;
+    return ResolvedRange{range.first_pos,
+                         std::min(range.last_pos.value_or(complete_length - 1),
+                                  complete_length - 1)};
 }
 
 struct EntityTag {
