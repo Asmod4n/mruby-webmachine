@@ -70,6 +70,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "no userinfo in an http or https URI", 400},
     {"RFC 3986 2.1", "pct-encoded", "The request target is not valid", "\"%\" HEXDIG HEXDIG",
      400},
+    {"RFC 9110 8.8.3", "entity-tag", "The entity tag is not valid",
+     "[ \"W/\" ] DQUOTE *etagc DQUOTE, etagc = %x21 / %x23-7E / obs-text", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -91,6 +93,7 @@ inline constexpr uint16_t kQueryProblem = 15;
 inline constexpr uint16_t kSchemeProblem = 16;
 inline constexpr uint16_t kUserinfoProblem = 17;
 inline constexpr uint16_t kPctEncodedProblem = 18;
+inline constexpr uint16_t kEntityTagProblem = 19;
 
 struct Refusal {
     uint16_t problem;
@@ -230,6 +233,16 @@ inline constexpr std::array<bool, 256> kRegName = [] {
     for (unsigned index = 'A'; index <= 'Z'; index++)
         table.at(index) = true;
     for (unsigned index = 'a'; index <= 'z'; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+inline constexpr std::array<bool, 256> kEtagc = [] {
+    std::array<bool, 256> table{};
+    table.at(0x21) = true;
+    for (unsigned index = 0x23; index <= 0x7E; index++)
+        table.at(index) = true;
+    for (unsigned index = 0x80; index <= 0xFF; index++)
         table.at(index) = true;
     return table;
 }();
@@ -870,6 +883,41 @@ inline std::expected<std::string, Refusal> percent_decode(const std::string_view
             return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
     }
     return ada::unicode::percent_decode(text, first);
+}
+
+struct EntityTag {
+    std::string_view opaque_tag;
+    bool weak;
+};
+
+constexpr bool is_etagc(const char letter)
+{
+    return kEtagc.at(static_cast<unsigned char>(letter));
+}
+
+inline std::expected<EntityTag, Refusal> parse_entity_tag(const std::string_view text)
+{
+    const size_t begins = text.starts_with("W/") ? 2 : 0;
+    const std::string_view quoted = text.substr(begins);
+    if (quoted.size() < 2 || !quoted.starts_with('"') || !quoted.ends_with('"')) [[unlikely]]
+        return std::unexpected(Refusal{kEntityTagProblem, static_cast<uint32_t>(begins)});
+    const std::string_view opaque_tag = quoted.substr(1, quoted.size() - 2);
+    const auto refused = std::ranges::find_if_not(opaque_tag, is_etagc);
+    if (refused != opaque_tag.end()) [[unlikely]]
+        return std::unexpected(Refusal{
+            kEntityTagProblem,
+            static_cast<uint32_t>(begins + 1 + std::distance(opaque_tag.begin(), refused))});
+    return EntityTag{opaque_tag, begins == 2};
+}
+
+constexpr bool strong_comparison(const EntityTag left, const EntityTag right)
+{
+    return !left.weak && !right.weak && left.opaque_tag == right.opaque_tag;
+}
+
+constexpr bool weak_comparison(const EntityTag left, const EntityTag right)
+{
+    return left.opaque_tag == right.opaque_tag;
 }
 
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,

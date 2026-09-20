@@ -374,6 +374,57 @@ mrb_value spec_percent_decode(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
+mrb_value spec_parse_entity_tag(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_entity_tag(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->opaque_tag),
+        mrb_bool_value(got->weak),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_strong_comparison(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    const auto one = http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto other =
+        http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
+    if (!one || !other)
+        return mrb_nil_value();
+    return mrb_bool_value(http::strong_comparison(*one, *other));
+}
+
+mrb_value spec_weak_comparison(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    const auto one = http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto other =
+        http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
+    if (!one || !other)
+        return mrb_nil_value();
+    return mrb_bool_value(http::weak_comparison(*one, *other));
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -404,6 +455,12 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "percent_decode", spec_percent_decode,
                                MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_entity_tag", spec_parse_entity_tag,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "strong_comparison", spec_strong_comparison,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "weak_comparison", spec_weak_comparison,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

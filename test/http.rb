@@ -1125,3 +1125,87 @@ assert('percent_decode refuses a triplet that is not one') do
   assert_equal 2, Webmachine::SpecHttp.percent_decode('ab%2Gd')[1]
   assert_equal 0, Webmachine::SpecHttp.percent_decode('%-1')[1]
 end
+
+TAG_OPAQUE = 0
+TAG_WEAK   = 1
+
+# RFC 9110 8.8.3 ETag
+#   entity-tag = [ weak ] opaque-tag
+#   weak       = %s"W/"
+#   opaque-tag = DQUOTE *etagc DQUOTE
+#   etagc      = %x21 / %x23-7E / obs-text
+# An entity tag is an opaque validator: quotes around any visible byte
+# except the quote itself, with an optional W/ in front of it. The %s
+# of RFC 7405 makes that prefix case-sensitive. The RFC's own examples
+# are "xyzzy", W/"xyzzy" and "", so an empty tag is one.
+assert('parse_entity_tag reads the three examples of RFC 9110 8.8.3') do
+  a = Webmachine::SpecHttp.parse_entity_tag('"xyzzy"')
+  assert_equal 'xyzzy', a[TAG_OPAQUE]
+  assert_false a[TAG_WEAK]
+  b = Webmachine::SpecHttp.parse_entity_tag('W/"xyzzy"')
+  assert_equal 'xyzzy', b[TAG_OPAQUE]
+  assert_true b[TAG_WEAK]
+  c = Webmachine::SpecHttp.parse_entity_tag('""')
+  assert_equal '', c[TAG_OPAQUE]
+  assert_false c[TAG_WEAK]
+end
+
+# RFC 9110 8.8.3 note: opaque-tag was a quoted-string in RFC 2616, "thus,
+# some recipients might perform backslash unescaping". It is not one
+# here. A backslash is %x5C and so it is etagc, and it stays a byte of
+# the tag: unescaping would make two spellings of one validator.
+assert('parse_entity_tag does not unescape a backslash') do
+  a = Webmachine::SpecHttp.parse_entity_tag('"a\\\\b"')
+  assert_equal 'a\\\\b', a[TAG_OPAQUE]
+  assert_equal 4, a[TAG_OPAQUE].size
+  b = Webmachine::SpecHttp.parse_entity_tag("\"\xc3\xa4\"")
+  assert_equal "\xc3\xa4", b[TAG_OPAQUE]
+end
+
+# The quotes are the grammar and not decoration, and W/ is case
+# sensitive: RFC 9110 writes weak = %s"W/", and RFC 7405 says %s means
+# the case is part of the rule.
+assert('parse_entity_tag refuses a tag that is not quoted') do
+  ['xyzzy', 'W/xyzzy', '"abc', 'abc"', '"', '', 'W/', 'W/"', 'w/"1"'].each do |bad|
+    e = Webmachine::SpecHttp.parse_entity_tag(bad)
+    assert_equal 'entity-tag', e[0], bad
+  end
+  assert_equal 2, Webmachine::SpecHttp.parse_entity_tag('W/xyzzy')[1]
+  assert_equal 0, Webmachine::SpecHttp.parse_entity_tag('w/"1"')[1]
+end
+
+# etagc is %x21 / %x23-7E / obs-text, so a quote inside is the end of
+# the tag and a control byte is no tag at all. The offset names the byte.
+assert('parse_entity_tag refuses a byte etagc does not allow') do
+  e = Webmachine::SpecHttp.parse_entity_tag(%Q{"a\tb"})
+  assert_equal 'entity-tag', e[0]
+  assert_equal 2, e[1]
+  e = Webmachine::SpecHttp.parse_entity_tag(%Q{W/"ab\x7f"})
+  assert_equal 'entity-tag', e[0]
+  assert_equal 5, e[1]
+  e = Webmachine::SpecHttp.parse_entity_tag('"a"b"')
+  assert_equal 'entity-tag', e[0]
+  assert_equal 2, e[1]
+end
+
+# RFC 9110 8.8.3.2 Table 3, verbatim. Strong comparison wants both tags
+# strong; weak comparison reads the opaque-tags alone. The table is why
+# both functions exist: If-Match uses the strong one and If-None-Match
+# the weak one, and a server that uses one of them twice is wrong in one
+# of the two places.
+assert('the comparisons answer Table 3 of RFC 9110 8.8.3.2') do
+  [['W/"1"', 'W/"1"', false, true],
+   ['W/"1"', 'W/"2"', false, false],
+   ['W/"1"', '"1"',   false, true],
+   ['"1"',   '"1"',   true,  true]].each do |one, other, strong, weak|
+    assert_equal strong, Webmachine::SpecHttp.strong_comparison(one, other), "#{one} #{other}"
+    assert_equal weak, Webmachine::SpecHttp.weak_comparison(one, other), "#{one} #{other}"
+  end
+end
+
+# The empty tag is a tag, so it compares like any other.
+assert('the comparisons hold for the empty entity tag') do
+  assert_true Webmachine::SpecHttp.strong_comparison('""', '""')
+  assert_false Webmachine::SpecHttp.strong_comparison('""', '"1"')
+  assert_true Webmachine::SpecHttp.weak_comparison('W/""', '""')
+end
