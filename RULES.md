@@ -329,6 +329,22 @@ response, fields, representation, URI, and the rules that read them.
 back, and add nothing of their own. The decision graph reads a request
 and makes a response, and it cannot see which version carried them.
 
+No version knows another. `Http2` never names `Http1`, and the state of
+one version never stands in the header of another. This is the rule the
+archive broke, and it is why this tree exists: there, HTTP/2's stream
+and connection state were declared in HTTP/1.1's header, and the file
+that frames HTTP/2 defined methods of the HTTP/1.1 class. Two versions
+with one name.
+
+What follows from that is the whole reason for the split. Anything a
+version answers by itself exists in that version alone: the archive
+serves its docroot from a method of the HTTP/1.1 class, so a request
+over HTTP/2 is never served from disk. Not because somebody forgot it,
+but because there was no HTTP/2 for it to live in.
+
+The check is mechanical and belongs in the suite: a grep for one
+version's name in another version's files finds nothing.
+
 An upgrade is not a state of HTTP. It is the end of it: the resource
 takes the connection and speaks something else, and the graph never
 runs. That belongs to the version, not to `Http`.
