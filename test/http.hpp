@@ -425,6 +425,90 @@ mrb_value spec_weak_comparison(mrb_state *mrb, mrb_value)
     return mrb_bool_value(http::weak_comparison(*one, *other));
 }
 
+mrb_value spec_parse_media_type(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_media_type(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[3] = {
+        cpp_to_mrb_value(mrb, got->type),
+        cpp_to_mrb_value(mrb, got->subtype),
+        cpp_to_mrb_value(mrb, got->parameters),
+    };
+    return mrb_ary_new_from_values(mrb, 3, out);
+}
+
+mrb_value spec_value_of_parameter(mrb_state *mrb, mrb_value)
+{
+    const char *parameters = nullptr;
+    const char *name = nullptr;
+    mrb_int parameters_length = 0;
+    mrb_int name_length = 0;
+    mrb_get_args(mrb, "ss", &parameters, &parameters_length, &name, &name_length);
+    const std::string_view whole(parameters, static_cast<size_t>(parameters_length));
+    const auto got =
+        http::value_of_parameter(whole, std::string_view(name, static_cast<size_t>(name_length)));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    if (!*got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, **got);
+}
+
+mrb_value spec_unquoted_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, http::unquoted_token(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_content_coding(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, static_cast<int>(
+                 http::content_coding(std::string_view(text, static_cast<size_t>(length)))));
+}
+
+mrb_value spec_is_language_tag(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::is_language_tag(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_parse_content_length(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_content_length(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -461,6 +545,18 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "weak_comparison", spec_weak_comparison,
                                MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_media_type", spec_parse_media_type,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "value_of_parameter", spec_value_of_parameter,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "unquoted_token", spec_unquoted_token,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "content_coding", spec_content_coding,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "language_tag?", spec_is_language_tag,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length",
+                               spec_parse_content_length, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

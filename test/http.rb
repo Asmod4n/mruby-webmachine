@@ -1209,3 +1209,142 @@ assert('the comparisons hold for the empty entity tag') do
   assert_false Webmachine::SpecHttp.strong_comparison('""', '"1"')
   assert_true Webmachine::SpecHttp.weak_comparison('W/""', '""')
 end
+
+MEDIA_TYPE       = 0
+MEDIA_SUBTYPE    = 1
+MEDIA_PARAMETERS = 2
+
+# RFC 9110 8.3.1 Media Type
+#   media-type = type "/" subtype parameters
+#   type       = token
+#   subtype    = token
+# The type and the subtype are case-insensitive tokens and nothing else
+# stands between them but the slash. The parameters are handed back
+# unread: a caller wants one of them, asks for it by name, and a media
+# type with none costs nothing.
+assert('parse_media_type splits a type from its subtype') do
+  a = Webmachine::SpecHttp.parse_media_type('text/html')
+  assert_equal 'text', a[MEDIA_TYPE]
+  assert_equal 'html', a[MEDIA_SUBTYPE]
+  assert_equal '', a[MEDIA_PARAMETERS]
+  b = Webmachine::SpecHttp.parse_media_type('application/vnd.api+json;charset=utf-8')
+  assert_equal 'application', b[MEDIA_TYPE]
+  assert_equal 'vnd.api+json', b[MEDIA_SUBTYPE]
+  assert_equal ';charset=utf-8', b[MEDIA_PARAMETERS]
+end
+
+# RFC 9110 8.3.1 lists these four as equivalent, and says the first is
+# preferred. All four have to read as the same type with the same
+# charset, or a resource answers two of them differently.
+assert('the four equivalent spellings of RFC 9110 8.3.1 read the same') do
+  ['text/html;charset=utf-8', 'Text/HTML;Charset="utf-8"', 'text/html; charset="utf-8"',
+   'text/html;charset=UTF-8'].each do |spelling|
+    m = Webmachine::SpecHttp.parse_media_type(spelling)
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('text', m[MEDIA_TYPE]), spelling
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('html', m[MEDIA_SUBTYPE]), spelling
+    raw = Webmachine::SpecHttp.value_of_parameter(m[MEDIA_PARAMETERS], 'charset')
+    charset = Webmachine::SpecHttp.unquoted_token(raw)
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('utf-8', charset), spelling
+  end
+end
+
+assert('parse_media_type refuses a type without a subtype') do
+  ['text', 'text/', '/html', '', 'text /html', 'text/ html', '/'].each do |bad|
+    e = Webmachine::SpecHttp.parse_media_type(bad)
+    assert_equal 'media-type', e[0], bad
+  end
+  assert_equal 5, Webmachine::SpecHttp.parse_media_type('text/')[1]
+  assert_equal 0, Webmachine::SpecHttp.parse_media_type('/html')[1]
+end
+
+# RFC 9110 5.6.6: a parameter name is case-insensitive. The value is not
+# read for meaning here, only handed over.
+assert('value_of_parameter finds a parameter whatever case it is named in') do
+  params = ';charset=utf-8;boundary=xyz'
+  assert_equal 'utf-8', Webmachine::SpecHttp.value_of_parameter(params, 'charset')
+  assert_equal 'utf-8', Webmachine::SpecHttp.value_of_parameter(params, 'CHARSET')
+  assert_equal 'xyz', Webmachine::SpecHttp.value_of_parameter(params, 'boundary')
+  assert_nil Webmachine::SpecHttp.value_of_parameter(params, 'q')
+  assert_nil Webmachine::SpecHttp.value_of_parameter('', 'charset')
+end
+
+# A refusal inside the walk counts from the first byte of the
+# parameters, not from the parameter that refused.
+assert('value_of_parameter counts an offset from the whole parameter list') do
+  e = Webmachine::SpecHttp.value_of_parameter(';a=1;b=', 'q')
+  assert_equal 'tchar', e[0]
+  assert_equal 7, e[1]
+end
+
+# RFC 9110 5.6.6: "A parameter value that matches the token production
+# can be transmitted either as a token or within a quoted-string. The
+# quoted and unquoted values are equivalent." Only then: a value that
+# holds a byte no token may hold is not the same thing without its
+# quotes, so it keeps them.
+assert('unquoted_token takes the quotes off a value that is a token') do
+  assert_equal 'utf-8', Webmachine::SpecHttp.unquoted_token('"utf-8"')
+  assert_equal 'utf-8', Webmachine::SpecHttp.unquoted_token('utf-8')
+  assert_equal '"a b"', Webmachine::SpecHttp.unquoted_token('"a b"')
+  assert_equal '""', Webmachine::SpecHttp.unquoted_token('""')
+  assert_equal '"', Webmachine::SpecHttp.unquoted_token('"')
+  assert_equal '"a\\"b"', Webmachine::SpecHttp.unquoted_token('"a\\"b"')
+end
+
+CODING_IDENTITY = 0
+CODING_GZIP     = 1
+CODING_COMPRESS = 2
+CODING_DEFLATE  = 3
+CODING_UNKNOWN  = 4
+
+# RFC 9110 8.4.1: content codings are case-insensitive, and a recipient
+# "SHOULD consider 'x-compress' to be equivalent to 'compress'" and the
+# same for x-gzip. A coding this server does not know is not an error
+# here: Accept-Encoding says what a client takes, and an unknown name
+# simply matches nothing.
+assert('content_coding reads the codings of RFC 9110 8.4.1') do
+  ['gzip', 'GZIP', 'x-gzip', 'X-Gzip'].each do |name|
+    assert_equal CODING_GZIP, Webmachine::SpecHttp.content_coding(name), name
+  end
+  ['compress', 'x-compress'].each do |name|
+    assert_equal CODING_COMPRESS, Webmachine::SpecHttp.content_coding(name), name
+  end
+  assert_equal CODING_DEFLATE, Webmachine::SpecHttp.content_coding('deflate')
+  assert_equal CODING_IDENTITY, Webmachine::SpecHttp.content_coding('identity')
+  ['br', 'zstd', '', 'gzip2', 'x-'].each do |name|
+    assert_equal CODING_UNKNOWN, Webmachine::SpecHttp.content_coding(name), name
+  end
+end
+
+# RFC 9110 8.5.1 takes language-tag from RFC 5646 2.1: subtags of
+# alphanumerics, separated by hyphens, the first of them letters only.
+# Whether a tag names a language that exists is the IANA registry's
+# question, and RFC 5646 2.1 says a processor "need not have a list of
+# valid tags or subtags ... in order to perform common searching and
+# matching operations". So this reads the shape and nothing else, which
+# is exactly what the matching of RFC 4647 needs.
+assert('is_language_tag reads the shape RFC 5646 2.1 gives') do
+  %w[de en-US zh-Hant-CN de-DE-1901 x-pig-latin i-klingon sl-IT-nedis
+     en-a-bbb-x-a-ccc az-Latn-AZ].each do |tag|
+    assert_true Webmachine::SpecHttp.language_tag?(tag), tag
+  end
+  ['', '-de', 'de-', 'de--DE', 'toolongsubtag', '1de', 'de-toolongsubtag', 'de_DE',
+   'de DE'].each do |bad|
+    assert_false Webmachine::SpecHttp.language_tag?(bad), bad
+  end
+end
+
+# RFC 9110 8.6: Content-Length = 1*DIGIT, and "a recipient MUST
+# anticipate potentially large decimal numerals and prevent parsing
+# errors due to integer conversion overflows". So the number is 64 bits
+# wide and one that does not fit is refused rather than wrapped. A sign
+# is not a digit, and neither is a space: 1*DIGIT says so.
+assert('parse_content_length reads a number and refuses what is not one') do
+  assert_equal 0, Webmachine::SpecHttp.parse_content_length('0')
+  assert_equal 3495, Webmachine::SpecHttp.parse_content_length('3495')
+  assert_equal 7, Webmachine::SpecHttp.parse_content_length('007')
+  assert_equal 18446744073709551615, Webmachine::SpecHttp.parse_content_length('18446744073709551615')
+  ['18446744073709551616', '-1', '+1', ' 1', '1 ', '', '1,1', '0x10', '1.0',
+   '99999999999999999999999999'].each do |bad|
+    assert_equal 'Content-Length', Webmachine::SpecHttp.parse_content_length(bad), bad
+  end
+end

@@ -72,6 +72,10 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      400},
     {"RFC 9110 8.8.3", "entity-tag", "The entity tag is not valid",
      "[ \"W/\" ] DQUOTE *etagc DQUOTE, etagc = %x21 / %x23-7E / obs-text", 400},
+    {"RFC 9110 8.3.1", "media-type", "The media type is not valid",
+     "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 400},
+    {"RFC 9110 8.6", "Content-Length", "The Content-Length field is not valid",
+     "1*DIGIT, and the number fits in 64 bits", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -94,6 +98,8 @@ inline constexpr uint16_t kSchemeProblem = 16;
 inline constexpr uint16_t kUserinfoProblem = 17;
 inline constexpr uint16_t kPctEncodedProblem = 18;
 inline constexpr uint16_t kEntityTagProblem = 19;
+inline constexpr uint16_t kMediaTypeProblem = 20;
+inline constexpr uint16_t kContentLengthProblem = 21;
 
 struct Refusal {
     uint16_t problem;
@@ -182,6 +188,21 @@ inline constexpr std::array<bool, 256> kTchar = [] {
         table.at(index) = true;
     return table;
 }();
+
+constexpr bool is_alpha(const char letter)
+{
+    return (static_cast<unsigned char>(letter) | 0x20u) - 'a' < 26u;
+}
+
+constexpr bool is_digit(const char letter)
+{
+    return static_cast<unsigned char>(letter) - '0' < 10u;
+}
+
+constexpr bool is_alphanum(const char letter)
+{
+    return is_alpha(letter) || is_digit(letter);
+}
 
 constexpr bool is_tchar(const char letter)
 {
@@ -883,6 +904,100 @@ inline std::expected<std::string, Refusal> percent_decode(const std::string_view
             return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
     }
     return ada::unicode::percent_decode(text, first);
+}
+
+struct MediaType {
+    std::string_view type;
+    std::string_view subtype;
+    std::string_view parameters;
+};
+
+inline std::expected<MediaType, Refusal> parse_media_type(const std::string_view text)
+{
+    const std::string_view type(text.begin(), std::ranges::find_if_not(text, is_tchar));
+    if (type.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kMediaTypeProblem, 0});
+    const std::string_view after = text.substr(type.size());
+    if (!after.starts_with('/')) [[unlikely]]
+        return std::unexpected(Refusal{kMediaTypeProblem, static_cast<uint32_t>(type.size())});
+    const std::string_view rest = after.substr(1);
+    const std::string_view subtype(rest.begin(), std::ranges::find_if_not(rest, is_tchar));
+    if (subtype.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kMediaTypeProblem, static_cast<uint32_t>(type.size() + 1)});
+    return MediaType{type, subtype, rest.substr(subtype.size())};
+}
+
+inline std::expected<std::optional<std::string_view>, Refusal>
+value_of_parameter(const std::string_view parameters, const std::string_view name)
+{
+    std::string_view rest = parameters;
+    while (true) {
+        const auto parameter = parse_field_value_parameter(rest);
+        if (!parameter) [[unlikely]]
+            return std::unexpected(
+                moved_forward(parameter.error(), parameters.size() - rest.size()));
+        if (!*parameter)
+            return std::optional<std::string_view>{};
+        if (equal_ignoring_case((*parameter)->name, name))
+            return (*parameter)->value;
+        rest = (*parameter)->rest;
+    }
+}
+
+constexpr std::string_view unquoted_token(const std::string_view value)
+{
+    if (value.size() < 2 || !value.starts_with('"') || !value.ends_with('"'))
+        return value;
+    const std::string_view inside = value.substr(1, value.size() - 2);
+    if (inside.empty() || !std::ranges::all_of(inside, is_tchar))
+        return value;
+    return inside;
+}
+
+enum class ContentCoding : uint8_t { kIdentity, kGzip, kCompress, kDeflate, kUnknown };
+
+constexpr ContentCoding content_coding(const std::string_view token)
+{
+    if (equal_ignoring_case(token, "gzip") || equal_ignoring_case(token, "x-gzip"))
+        return ContentCoding::kGzip;
+    if (equal_ignoring_case(token, "compress") || equal_ignoring_case(token, "x-compress"))
+        return ContentCoding::kCompress;
+    if (equal_ignoring_case(token, "deflate"))
+        return ContentCoding::kDeflate;
+    if (equal_ignoring_case(token, "identity"))
+        return ContentCoding::kIdentity;
+    return ContentCoding::kUnknown;
+}
+
+inline bool is_language_tag(const std::string_view text)
+{
+    std::string_view rest = text;
+    bool primary = true;
+    while (!rest.empty()) {
+        const size_t hyphen = rest.find('-');
+        const std::string_view subtag = rest.substr(0, hyphen);
+        if (subtag.empty() || subtag.size() > 8) [[unlikely]]
+            return false;
+        const bool spelled = primary ? std::ranges::all_of(subtag, is_alpha)
+                                     : std::ranges::all_of(subtag, is_alphanum);
+        if (!spelled) [[unlikely]]
+            return false;
+        if (hyphen == std::string_view::npos)
+            return true;
+        primary = false;
+        rest = rest.substr(hyphen + 1);
+    }
+    return false;
+}
+
+inline std::expected<uint64_t, Refusal> parse_content_length(const std::string_view text)
+{
+    uint64_t length = 0;
+    const char *const end = std::next(text.data(), text.size());
+    const auto done = std::from_chars(text.data(), end, length);
+    if (done.ec != std::errc{} || done.ptr != end) [[unlikely]]
+        return std::unexpected(Refusal{kContentLengthProblem, 0});
+    return length;
 }
 
 struct EntityTag {
