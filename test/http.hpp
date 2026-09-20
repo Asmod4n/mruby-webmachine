@@ -6,6 +6,7 @@
 #include <mruby/cpp_to_mrb_value.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <variant>
 #include <vector>
 
@@ -714,6 +715,22 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+// ParseError::what() must hand back a const char *, because that is what
+// std::exception promises. It returns title.data(), which is only a C
+// string as long as every row of the table is a literal. This says so
+// for every row rather than trusting it.
+mrb_value spec_problems_are_terminated(mrb_state *, mrb_value)
+{
+    for (const http::Problem &problem : http::kProblems) {
+        for (const std::string_view text :
+             {problem.section, problem.rule, problem.title, problem.allowed}) {
+            if (std::strlen(text.data()) != text.size())
+                return mrb_false_value();
+        }
+    }
+    return mrb_true_value();
+}
+
 mrb_value spec_spell_imf_fixdate(mrb_state *mrb, mrb_value)
 {
     mrb_int seconds = 0;
@@ -996,6 +1013,8 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,
+                               MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required,

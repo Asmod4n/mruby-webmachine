@@ -29,11 +29,11 @@ namespace http
 {
 
 struct Problem {
-    const char *section;
-    const char *rule;
-    const char *title;
-    const char *allowed;
-    unsigned status;
+    std::string_view section;
+    std::string_view rule;
+    std::string_view title;
+    std::string_view allowed;
+    uint16_t status;
 };
 
 inline constexpr std::array kProblems = std::to_array<Problem>({
@@ -138,13 +138,16 @@ public:
             excerpt_.at(excerpt_length_++) = letter;
     }
 
-    const char *what() const noexcept override { return kProblems.at(refusal_.problem).title; }
+    const char *what() const noexcept override
+    {
+        return kProblems.at(refusal_.problem).title.data();
+    }
     uint16_t problem() const noexcept { return refusal_.problem; }
     std::string_view section() const noexcept { return kProblems.at(refusal_.problem).section; }
     std::string_view rule() const noexcept { return kProblems.at(refusal_.problem).rule; }
     std::string_view title() const noexcept { return kProblems.at(refusal_.problem).title; }
     std::string_view allowed() const noexcept { return kProblems.at(refusal_.problem).allowed; }
-    unsigned status() const noexcept { return kProblems.at(refusal_.problem).status; }
+    uint16_t status() const noexcept { return kProblems.at(refusal_.problem).status; }
     size_t offset() const noexcept { return refusal_.offset; }
     unsigned char found_byte() const noexcept { return found_byte_; }
     std::string_view excerpt() const noexcept { return {excerpt_.data(), excerpt_length_}; }

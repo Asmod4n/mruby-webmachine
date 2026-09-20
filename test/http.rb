@@ -1401,6 +1401,17 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
 
+# ParseError::what() overrides std::exception::what(), which returns a
+# const char *, so it hands back the title's data() pointer. That is a C
+# string only while every row of kProblems is a string literal. The
+# struct held const char * until it was measured: with a runtime index
+# the compiler cannot know the pointer, so every read of a section, a
+# rule, a title or an allowed called strlen - the relocation is there in
+# the object file. Views carry the length the compiler already knew.
+assert('every problem string is still NUL terminated after the views') do
+  assert_true Webmachine::SpecHttp.problems_terminated?
+end
+
 # RFC 9110 6.6.1 gives one example, and 5.6.7 gives the other. The
 # spelling and the reading share the named positions, so a round trip
 # through both is the strongest thing the test can say.
