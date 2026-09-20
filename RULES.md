@@ -450,17 +450,54 @@ with a shared representation and no allocation, and `what()` gives the
 title out of the table of problems. Measured: the error path went 32
 percent faster.
 
-## A wide read is allowed where the caller says how far it may read
+## A wide read needs a page behind it, not a promise from the caller
 
-A function that classifies bytes reads 32 at a time and masks what
-lies behind the run it was given. That is only sound where those bytes
-exist, so the caller says: `is_token(name, readable_bytes)`, where
-`readable_bytes` counts from the start of the run. A field value in a
-request buffer has the rest of the request behind it. A value standing
-alone has nothing, passes its own size, and takes the narrow way.
+A function that classifies bytes reads 32 at a time and masks what lies
+behind the run it was given. Those bytes have to exist.
 
-There is no default. A default would let a caller take the slow way
-for ever without noticing.
+The first answer here was a `readable_bytes` parameter: the caller
+counts how far the read may go. That answer is wrong, and ASan says so.
+With a count that is 4096 too large the wide scan is a
+`heap-buffer-overflow`, `READ of size 32`, zero bytes past a 40 byte
+region. The scalar form cannot be made to do that. So the parameter
+moved a memory safety obligation onto the caller through a bare
+`size_t`, where the compiler checks nothing and a wrong answer is a
+crash under load.
+
+Three rules replace it, and which one holds depends on who mapped the
+memory.
+
+**Memory this process maps.** One spare buffer at the end of the
+mapping, never handed out. Then every byte in the pool has
+`kWidePadding` readable bytes behind it, and no wide reader asks a
+question. The ring maps `(kBufCount + 1) * kBufSize` and registers
+`kBufCount`.
+
+**Memory somebody gives us.** An mruby string, an application's buffer.
+A read past the end of an object cannot fault while it stays inside one
+page, because the page is mapped in full. So the test is the page and
+not the object:
+
+    const uintptr_t last = reinterpret_cast<uintptr_t>(bytes) + length - 1;
+    const bool room = last % page_bytes + kWidePadding < page_bytes;
+
+`page_bytes` is read once at boot and passed; it is not a static.
+Without room, the bytes are copied into a buffer that has the padding.
+
+**The debug build always copies.** A page that exists is invisible to a
+sanitizer, so the trick hides an overrun rather than showing it. Under
+`MRB_DEBUG` the padded copy is allocated at exactly `length +
+kWidePadding`, ASan learns where the wall is, and a reader that walks
+past it is caught. `rake test` is the debug build, so the suite gets
+this for nothing.
+
+`kWidePadding` is 64, which covers AVX-512, and every wide reader
+carries `static_assert(width <= kWidePadding)`.
+
+This is simdjson's answer. `SIMDJSON_PADDING = 64` in `base.h`, its
+`padded_string` allocates `length + SIMDJSON_PADDING`, and each reader
+asserts against it. The page test and the debug branch come from
+mruby-fast-json, which has to take Ruby strings it did not allocate.
 
 Both ways answer the same, and a test holds them against each other
 over all 256 bytes at every length.
