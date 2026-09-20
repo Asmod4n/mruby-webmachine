@@ -690,6 +690,41 @@ refused. A check caught it before the row was believed.
 The line between strict and lax stays written down, because it answers a
 different question - what a wrong answer costs, not what it saves.
 
+## picohttpparser owns what a field is, and we own a faster sum of it
+
+RFC 9113 8.2.1 says a field is the same thing in every version: validate
+by RFC 9110 5.1 and 5.5, "and an additional check that field names do
+not include uppercase characters". So the definition belongs in one
+place, and that place is picohttpparser, which already holds it in
+`token_char_map` and in the ranges its two scanners use.
+`phr_is_field_name`, `phr_is_lowercase_field_name` and
+`phr_is_field_value` are that definition, asked from HPACK and QPACK as
+well as from the wire.
+
+The tree keeps `is_token` and `is_lowercase_token` all the same, and the
+reason is not taste. Measured in one binary, medians of five, the
+thirteen field names of a Chrome request: 37.7 ns here against 90.8 ns
+in phr, and 37.5 against 167 for the lowercase form. `findchar_fast`
+needs sixteen bytes before it does anything, and ten of those thirteen
+names are shorter, so phr walks them one byte at a time.
+
+The wide classifier cannot move into phr, and that is a fact rather than
+a preference. Every input in phr's own suite is placed with its last
+byte against an unreadable page, which tests the promise that the parser
+never reads past what it was given. Our classifier loads 32 bytes
+whatever the length and lives on the free page behind a provided buffer.
+Put to the same wall, the two answer:
+
+    phr_is_field_name      answered 1
+    http::is_token         died with signal 11
+
+So: phr owns the definition, this tree owns a faster sum of the same
+definition, and the guard page is why the two cannot be one. What holds
+them together is a test rather than a hope - every byte value, at every
+position, at every length to 40, both pairs, 419841 comparisons, and
+they agree. That test moves into `test/` on the day mruby-phr is in the
+build.
+
 ## A gem that only the tests need is a test dependency
 
 `spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
