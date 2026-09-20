@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <strings.h>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -575,6 +577,322 @@ void charset_quoted_new_unquotes(benchmark::State &state)
     }
 }
 
+// libreactor serves a request the way this tree plans to: picohttpparser
+// fills a flat array of fields, and every field the server wants is found
+// by name afterwards. src/reactor/http.c:
+//
+//   data http_field_lookup(http_field *fields, size_t fields_count, data name)
+//   {
+//     for (i = 0; i < fields_count; i++)
+//       if (data_size(fields[i].name) == data_size(name) &&
+//           strncasecmp(data_base(fields[i].name), data_base(name),
+//                       data_size(name)) == 0)
+//         return fields[i].value;
+//     return data_null();
+//   }
+//
+// The shape is ours as well, so the arms below differ in one call:
+// strncasecmp against http::equal_ignoring_case.
+std::string_view libreactor_field_lookup(const std::vector<ChromeField> &fields,
+                                         const std::string_view name)
+{
+    for (size_t at = 0; at < fields.size(); at++)
+        if (fields[at].name.size() == name.size() &&
+            strncasecmp(fields[at].name.data(), name.data(), name.size()) == 0)
+            return fields[at].value;
+    return std::string_view{};
+}
+
+std::string_view field_lookup(const std::vector<ChromeField> &fields,
+                              const std::string_view name)
+{
+    for (size_t at = 0; at < fields.size(); at++)
+        if (http::equal_ignoring_case(fields[at].name, name))
+            return fields[at].value;
+    return std::string_view{};
+}
+
+// First, last and absent, because a linear scan costs what the position
+// of the answer costs. Host is field 1 of 13 and Accept-Language is 13.
+void libreactor_field_lookup_first(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = libreactor_field_lookup(kChromeFields, "host");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void field_lookup_first(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = field_lookup(kChromeFields, "host");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void libreactor_field_lookup_last(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = libreactor_field_lookup(kChromeFields, "accept-language");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void field_lookup_last(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = field_lookup(kChromeFields, "accept-language");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void libreactor_field_lookup_absent(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = libreactor_field_lookup(kChromeFields, "if-none-match");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void field_lookup_absent(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = field_lookup(kChromeFields, "if-none-match");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+// What one request really asks for: the four fields a negotiated GET
+// needs. Four scans of the same array, which is what the flat array
+// costs when more than one field is wanted.
+void libreactor_four_lookups(benchmark::State &state)
+{
+    for (auto _ : state) {
+        size_t seen = libreactor_field_lookup(kChromeFields, "host").size() +
+                      libreactor_field_lookup(kChromeFields, "accept").size() +
+                      libreactor_field_lookup(kChromeFields, "accept-encoding").size() +
+                      libreactor_field_lookup(kChromeFields, "accept-language").size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+void four_lookups(benchmark::State &state)
+{
+    for (auto _ : state) {
+        size_t seen = field_lookup(kChromeFields, "host").size() +
+                      field_lookup(kChromeFields, "accept").size() +
+                      field_lookup(kChromeFields, "accept-encoding").size() +
+                      field_lookup(kChromeFields, "accept-language").size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+// Whether the gap is glibc's vector code or our byte loop. Eight bytes
+// at a time, and only 'A' to 'Z' fold: 0x41 + 0x3f sets bit 7 and 0x5a +
+// 0x25 does not, so the two carries name the range without a branch. It
+// holds for tchar alone - a byte above 0x7f would carry into its
+// neighbour - and a field name is tchar.
+uint64_t ascii_lowered_word(const uint64_t word)
+{
+    const uint64_t high = 0x8080808080808080ull;
+    const uint64_t at_least_a = word + 0x3f3f3f3f3f3f3f3full;
+    const uint64_t at_most_z = word + 0x2525252525252525ull;
+    return word | ((at_least_a & ~at_most_z & high) >> 2);
+}
+
+bool equal_ignoring_case_wide(const std::string_view left, const std::string_view right)
+{
+    if (left.size() != right.size())
+        return false;
+    size_t at = 0;
+    for (; at + 8 <= left.size(); at += 8) {
+        uint64_t a = 0;
+        uint64_t b = 0;
+        std::memcpy(&a, std::next(left.data(), static_cast<ptrdiff_t>(at)), 8);
+        std::memcpy(&b, std::next(right.data(), static_cast<ptrdiff_t>(at)), 8);
+        if (ascii_lowered_word(a) != ascii_lowered_word(b))
+            return false;
+    }
+    uint64_t a = 0;
+    uint64_t b = 0;
+    std::memcpy(&a, std::next(left.data(), static_cast<ptrdiff_t>(at)), left.size() - at);
+    std::memcpy(&b, std::next(right.data(), static_cast<ptrdiff_t>(at)), left.size() - at);
+    return ascii_lowered_word(a) == ascii_lowered_word(b);
+}
+
+std::string_view wide_field_lookup(const std::vector<ChromeField> &fields,
+                                   const std::string_view name)
+{
+    for (size_t at = 0; at < fields.size(); at++)
+        if (equal_ignoring_case_wide(fields[at].name, name))
+            return fields[at].value;
+    return std::string_view{};
+}
+
+void wide_field_lookup_last(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = wide_field_lookup(kChromeFields, "accept-language");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void wide_field_lookup_absent(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = wide_field_lookup(kChromeFields, "if-none-match");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void wide_four_lookups(benchmark::State &state)
+{
+    for (auto _ : state) {
+        size_t seen = wide_field_lookup(kChromeFields, "host").size() +
+                      wide_field_lookup(kChromeFields, "accept").size() +
+                      wide_field_lookup(kChromeFields, "accept-encoding").size() +
+                      wide_field_lookup(kChromeFields, "accept-language").size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+// The third shape, and the archive's: the fields are walked once and the
+// names this server knows are recognised on the way past. A length that
+// no known name has is one test - webmachine.hpp's length_is_one_of - so
+// most fields are rejected before a byte is compared. After the pass the
+// four values are in hand and no lookup happens at all.
+constexpr uint32_t kKnownFieldLengths = (1u << 4) | (1u << 6) | (1u << 15);
+
+struct KnownFields {
+    std::string_view host;
+    std::string_view accept;
+    std::string_view accept_encoding;
+    std::string_view accept_language;
+};
+
+KnownFields classify_once(const std::vector<ChromeField> &fields)
+{
+    KnownFields known{};
+    for (const ChromeField field : fields) {
+        const size_t length = field.name.size();
+        if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
+            continue;
+        switch (length) {
+        case 4:
+            if (http::equal_ignoring_case(field.name, "host"))
+                known.host = field.value;
+            break;
+        case 6:
+            if (http::equal_ignoring_case(field.name, "accept"))
+                known.accept = field.value;
+            break;
+        case 15:
+            if (http::equal_ignoring_case(field.name, "accept-encoding"))
+                known.accept_encoding = field.value;
+            else if (http::equal_ignoring_case(field.name, "accept-language"))
+                known.accept_language = field.value;
+            break;
+        default:
+            break;
+        }
+    }
+    return known;
+}
+
+KnownFields classify_once_wide(const std::vector<ChromeField> &fields)
+{
+    KnownFields known{};
+    for (const ChromeField field : fields) {
+        const size_t length = field.name.size();
+        if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
+            continue;
+        switch (length) {
+        case 4:
+            if (equal_ignoring_case_wide(field.name, "host"))
+                known.host = field.value;
+            break;
+        case 6:
+            if (equal_ignoring_case_wide(field.name, "accept"))
+                known.accept = field.value;
+            break;
+        case 15:
+            if (equal_ignoring_case_wide(field.name, "accept-encoding"))
+                known.accept_encoding = field.value;
+            else if (equal_ignoring_case_wide(field.name, "accept-language"))
+                known.accept_language = field.value;
+            break;
+        default:
+            break;
+        }
+    }
+    return known;
+}
+
+void classify_once_wide_four(benchmark::State &state)
+{
+    for (auto _ : state) {
+        const KnownFields known = classify_once_wide(kChromeFields);
+        size_t seen = known.host.size() + known.accept.size() +
+                      known.accept_encoding.size() + known.accept_language.size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+bool equal_ignoring_case_libc(const std::string_view left, const std::string_view right)
+{
+    return left.size() == right.size() &&
+           strncasecmp(left.data(), right.data(), right.size()) == 0;
+}
+
+KnownFields classify_once_libc(const std::vector<ChromeField> &fields)
+{
+    KnownFields known{};
+    for (const ChromeField field : fields) {
+        const size_t length = field.name.size();
+        if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
+            continue;
+        switch (length) {
+        case 4:
+            if (equal_ignoring_case_libc(field.name, "host"))
+                known.host = field.value;
+            break;
+        case 6:
+            if (equal_ignoring_case_libc(field.name, "accept"))
+                known.accept = field.value;
+            break;
+        case 15:
+            if (equal_ignoring_case_libc(field.name, "accept-encoding"))
+                known.accept_encoding = field.value;
+            else if (equal_ignoring_case_libc(field.name, "accept-language"))
+                known.accept_language = field.value;
+            break;
+        default:
+            break;
+        }
+    }
+    return known;
+}
+
+void classify_once_libc_four(benchmark::State &state)
+{
+    for (auto _ : state) {
+        const KnownFields known = classify_once_libc(kChromeFields);
+        size_t seen = known.host.size() + known.accept.size() +
+                      known.accept_encoding.size() + known.accept_language.size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
+void classify_once_four(benchmark::State &state)
+{
+    for (auto _ : state) {
+        const KnownFields known = classify_once(kChromeFields);
+        size_t seen = known.host.size() + known.accept.size() +
+                      known.accept_encoding.size() + known.accept_language.size();
+        benchmark::DoNotOptimize(seen);
+    }
+}
+
 BENCHMARK(is_tchar);
 BENCHMARK(every_byte_over_field_names);
 BENCHMARK(is_token_over_field_names);
@@ -596,6 +914,20 @@ BENCHMARK(chrome_negotiated_get);
 #if defined(__AVX2__)
 BENCHMARK(chrome_one_pass);
 #endif
+BENCHMARK(libreactor_field_lookup_first);
+BENCHMARK(field_lookup_first);
+BENCHMARK(libreactor_field_lookup_last);
+BENCHMARK(field_lookup_last);
+BENCHMARK(wide_field_lookup_last);
+BENCHMARK(libreactor_field_lookup_absent);
+BENCHMARK(field_lookup_absent);
+BENCHMARK(wide_field_lookup_absent);
+BENCHMARK(libreactor_four_lookups);
+BENCHMARK(four_lookups);
+BENCHMARK(wide_four_lookups);
+BENCHMARK(classify_once_four);
+BENCHMARK(classify_once_wide_four);
+BENCHMARK(classify_once_libc_four);
 BENCHMARK(parameter_walk_archive);
 BENCHMARK(parameter_walk_new);
 BENCHMARK(charset_quoted_archive_keeps_quotes);
