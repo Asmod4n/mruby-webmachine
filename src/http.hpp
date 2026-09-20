@@ -255,12 +255,27 @@ inline bool neon_block_is_allowed(const unsigned char *at, const size_t length,
         vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
     const uint8x16_t high = vqtbl1q_u8(vld1q_u8(kHighNibbleBit.data()), vshrq_n_u8(bytes, 4));
     const uint8x16_t lanes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
-    const uint8x16_t beyond = vcgeq_u8(lanes, vdupq_n_u8(static_cast<unsigned char>(length)));
+    const uint8x16_t beyond =
+        vcgeq_u8(lanes, vdupq_n_u8(static_cast<unsigned char>(std::min(length, size_t{16}))));
     return vminvq_u8(vorrq_u8(vandq_u8(low, high), beyond)) != 0;
 }
 #endif
 
 inline constexpr size_t kWidePadding = 64;
+
+#if defined(__AVX2__)
+inline uint32_t avx2_block_refusals(const char *at, const __m256i low_table,
+                                    const __m256i high_table)
+{
+    const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(at));
+    const __m256i low =
+        _mm256_shuffle_epi8(low_table, _mm256_and_si256(bytes, _mm256_set1_epi8(0x0F)));
+    const __m256i high = _mm256_shuffle_epi8(
+        high_table, _mm256_and_si256(_mm256_srli_epi16(bytes, 4), _mm256_set1_epi8(0x0F)));
+    return static_cast<uint32_t>(_mm256_movemask_epi8(
+        _mm256_cmpeq_epi8(_mm256_and_si256(low, high), _mm256_setzero_si256())));
+}
+#endif
 
 inline bool every_byte_is_allowed(const std::string_view text,
                                   const std::array<bool, 256> &allowed,
@@ -269,29 +284,30 @@ inline bool every_byte_is_allowed(const std::string_view text,
     static_assert(32 <= kWidePadding);
     if (text.empty()) [[unlikely]]
         return false;
-    if (text.size() > 32)
-        return every_byte_is_allowed(text, allowed);
 #if defined(__AVX2__)
-    const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(text.data()));
-    const __m256i low = _mm256_shuffle_epi8(
-        _mm256_broadcastsi128_si256(
-            _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data()))),
-        _mm256_and_si256(bytes, _mm256_set1_epi8(0x0F)));
-    const __m256i high = _mm256_shuffle_epi8(
-        _mm256_broadcastsi128_si256(
-            _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data()))),
-        _mm256_and_si256(_mm256_srli_epi16(bytes, 4), _mm256_set1_epi8(0x0F)));
-    const uint32_t refused = static_cast<uint32_t>(_mm256_movemask_epi8(
-        _mm256_cmpeq_epi8(_mm256_and_si256(low, high), _mm256_setzero_si256())));
-    const uint32_t inside = text.size() == 32 ? ~0u : (1u << text.size()) - 1;
-    return (refused & inside) == 0;
-#elif defined(__ARM_NEON)
-    const unsigned char *const at = reinterpret_cast<const unsigned char *>(text.data());
-    if (!neon_block_is_allowed(at, text.size(), low_bits)) [[unlikely]]
-        return false;
-    if (text.size() <= 16)
+    const __m256i low_table = _mm256_broadcastsi128_si256(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data())));
+    const __m256i high_table = _mm256_broadcastsi128_si256(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data())));
+    if (text.size() <= 32) {
+        const uint32_t inside = text.size() == 32 ? ~0u : (1u << text.size()) - 1;
+        return (avx2_block_refusals(text.data(), low_table, high_table) & inside) == 0;
+    }
+    size_t at = 0;
+    for (; at + 32 <= text.size(); at += 32)
+        if (avx2_block_refusals(std::next(text.data(), at), low_table, high_table) != 0)
+            [[unlikely]]
+            return false;
+    if (at == text.size())
         return true;
-    return neon_block_is_allowed(std::next(at, 16), text.size() - 16, low_bits);
+    const uint32_t inside = (1u << (text.size() - at)) - 1;
+    return (avx2_block_refusals(std::next(text.data(), at), low_table, high_table) & inside) == 0;
+#elif defined(__ARM_NEON)
+    const unsigned char *const from = reinterpret_cast<const unsigned char *>(text.data());
+    for (size_t at = 0; at < text.size(); at += 16)
+        if (!neon_block_is_allowed(std::next(from, at), text.size() - at, low_bits)) [[unlikely]]
+            return false;
+    return true;
 #else
     return every_byte_is_allowed(text, allowed);
 #endif
