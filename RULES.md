@@ -1150,7 +1150,12 @@ before it reads, and that is the bug not to copy.
 
 Everything else about these transactions follows from the rates, and the
 rates here are mild: the writer commits every few hours, a send finishes
-in milliseconds. So a renew on the next use already carries the newest
+in milliseconds. The worst case is named already, by `send_timeout`,
+which is 60 seconds - one slow client holds its thread's snapshot for as
+long as it is given to take the answer. That is a statement to clients
+and not to LMDB, so it is not the knob to turn if the worst case ever
+has to shrink; copying the bytes out for a response that is still
+sending would be. So a renew on the next use already carries the newest
 snapshot within a request, and nothing has to be told anything.
 
 A held snapshot can make the writer's file grow - LMDB's own header says
