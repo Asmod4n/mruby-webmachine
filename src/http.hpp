@@ -452,31 +452,19 @@ struct Field {
     std::string_view value;
 };
 
-struct Fields {
-    std::span<const Field> entries;
-};
-
 struct Request {
     std::string_view method;
     std::string_view target;
-    Fields header_section;
+    std::span<const Field> header_section;
     std::span<const std::byte> content;
-    Fields trailer_section;
-};
-
-struct Uri {
-    std::string_view scheme;
-    std::string_view host;
-    unsigned port;
-    std::string_view path;
-    std::string_view query;
+    std::span<const Field> trailer_section;
 };
 
 struct Response {
     unsigned status;
-    Fields header_section;
+    std::span<const Field> header_section;
     std::span<const std::byte> content;
-    Fields trailer_section;
+    std::span<const Field> trailer_section;
 };
 
 struct Representation {
