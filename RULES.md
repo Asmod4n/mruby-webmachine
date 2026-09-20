@@ -1219,6 +1219,15 @@ decoded at all, it is bytes out of the map going into a send. What is
 left is the request side, and RPC arguments are small. Against that
 stands a schema, a code generator and a large C++ dependency.
 
+And `mruby-cbor` already answers the part that was left. It decodes
+lazily - "parse only what you access via CBOR::Lazy" - so a field nobody
+reads costs nothing, which is the rule this tree already follows for
+Ruby objects. Its `CBOR::Path.compile("$.users[*].name")` even shares
+the shape the cache key wants: a small path language, compiled once,
+evaluated often, naming a part and never a value. That is the third time
+the same construct appears in these gems, after `Mustache::Template`
+and this.
+
 Not gRPC. It does not use HTTP semantics, it tunnels through HTTP/2: the
 call is a POST, the message is length-prefixed inside the body, and the
 outcome of the call is a trailer, `grpc-status`, while the HTTP status
