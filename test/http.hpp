@@ -741,6 +741,17 @@ mrb_value spec_spell_accept_query(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, std::string_view(*got));
 }
 
+mrb_value spec_modification_date_is_a_validator(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_bool has_entity_tag = FALSE;
+    mrb_get_args(mrb, "sb", &text, &length, &has_entity_tag);
+    return mrb_bool_value(http::modification_date_is_a_validator(
+        http::method_of(std::string_view(text, static_cast<size_t>(length))),
+        has_entity_tag != FALSE));
+}
+
 mrb_value spec_known_methods(mrb_state *mrb, mrb_value)
 {
     mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kKnownMethods.size()));
@@ -1070,6 +1081,8 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "spell_accept_query", spec_spell_accept_query,
                                MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "date_is_a_validator?",
+                               spec_modification_date_is_a_validator, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods,
                                MRB_ARGS_NONE());

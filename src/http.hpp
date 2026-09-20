@@ -280,6 +280,27 @@ constexpr bool content_type_is_required(const Method method)
     return method == Method::kQuery;
 }
 
+// RFC 10008 2.6: "The selected representation of a QUERY request is the
+// same as for a GET request to the equivalent resource of that QUERY
+// request", and 2.2: the equivalent resource "is derived from the
+// resource implementing QUERY by incorporating the request content".
+//
+// A modification date says when the data changed. It cannot say which
+// query it belonged to, so two different queries against one resource
+// share it, and a 304 would hand a client the other query's answer. The
+// example in RFC 10008 A.5 answers 304 to exactly this and is right to,
+// because that server recognised two spellings of one query and gave
+// them one equivalent resource - knowledge a date does not carry.
+//
+// An entity tag can carry it, because RFC 9110 8.8.3 makes it "an opaque
+// validator" that the origin composes. So: a date is a validator for a
+// QUERY only where an entity tag stands beside it and settles which
+// query is meant.
+constexpr bool modification_date_is_a_validator(const Method method, const bool has_entity_tag)
+{
+    return method != Method::kQuery || has_entity_tag;
+}
+
 // What a resource permits, which is the 405 of B10. webmachine-ruby
 // defaults allowed_methods to GET and HEAD; this tree adds QUERY,
 // because RFC 10008 2.4 gives the honest answer for a resource that does

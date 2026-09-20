@@ -1484,6 +1484,21 @@ assert('a media type that is no Token is written as a String') do
   assert_equal '"3gpp/mp4"', Webmachine::SpecHttp.spell_accept_query(['3gpp/mp4'])
 end
 
+# RFC 10008 2.6 and 2.2: a conditional QUERY is about the equivalent
+# resource, which incorporates the request content. A Last-Modified date
+# says when the data changed and not which query asked, so two different
+# queries share it and a 304 would hand back the other one's answer. An
+# entity tag can settle it, because RFC 9110 8.8.3 makes it opaque and
+# the origin composes it.
+assert('a date alone is no validator for a QUERY') do
+  %w[GET HEAD POST PUT DELETE OPTIONS TRACE PATCH].each do |name|
+    assert_true Webmachine::SpecHttp.date_is_a_validator?(name, false), name
+    assert_true Webmachine::SpecHttp.date_is_a_validator?(name, true), name
+  end
+  assert_false Webmachine::SpecHttp.date_is_a_validator?('QUERY', false)
+  assert_true Webmachine::SpecHttp.date_is_a_validator?('QUERY', true)
+end
+
 # webmachine-ruby's STANDARD_HTTP_METHODS, in its order, and QUERY after
 # it. known_methods is what the server understands - outside it is the
 # 501 of B12 - and it is not allowed_methods, which webmachine defaults
