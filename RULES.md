@@ -1187,10 +1187,10 @@ conditional requests, the negotiation, the cache, the status codes - is
 bypassed by that, and a response is not judgeable until it has ended.
 Here a Refusal becomes a status and the status stands in the first line.
 
-A schema is the one thing worth wanting from Cap'n Proto or protobuf,
-and it is worth wanting for its own sake rather than for speed: one
+A schema is worth wanting for its own sake rather than for speed: one
 declaration that `provides`, the field plan and the cache key could all
-be derived from. That question is open and does not depend on gRPC.
+be derived from, instead of three places stating it by hand. That
+question is open and does not depend on gRPC.
 
 Whatever carries the content, RFC 8949 Section 10 names four things a
 decoder owes its caller, and they belong in the tests: a depth limit, a
