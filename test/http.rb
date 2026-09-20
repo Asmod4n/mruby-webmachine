@@ -1100,9 +1100,11 @@ assert('percent_decode gives a byte and not a delimiter') do
   assert_equal "\xff", Webmachine::SpecHttp.percent_decode('%ff')
 end
 
-# A triplet that is not one is refused and not kept as it stands. Kept,
-# one resource would have two names, and the two would not compare
-# equal. The offset is the "%", which is the byte an operator looks for.
+# A triplet that is not one is refused and not kept as it stands. This
+# is where the tree leaves WHATWG: ada decodes to that document and
+# keeps such a "%" as a byte, so "/a%2" would name the same resource as
+# "/a%2" decoded, and the two would not compare equal. RFC 3986 2.1
+# knows no such byte. The offset is the "%".
 assert('percent_decode refuses a triplet that is not one') do
   ['%', '%2', '%2G', '%G2', '%%20', '% 20', 'ab%'].each do |bad|
     e = Webmachine::SpecHttp.percent_decode(bad)
