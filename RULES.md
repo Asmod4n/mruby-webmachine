@@ -354,6 +354,22 @@ of webmachine, with the names webmachine-ruby uses.
 
 Work that no specification defines waits until it has one.
 
+An application author sees webmachine and nothing else. The callbacks
+carry webmachine-ruby's names one for one - content_types_provided,
+charsets_provided, encodings_provided, languages_provided,
+resource_exists?, generate_etag, last_modified, delete_resource,
+create_path, process_post, finish_request - and the graph's nodes carry
+its letters. A resource that runs under webmachine-ruby runs here.
+
+So a type this tree invents may not stand where webmachine has a shape
+of its own. Two did and are gone: a Representation that bundled a media
+type, a coding, a language and an entity tag, where webmachine picks
+four values from four separate callbacks and bundles nothing; and a
+Resource holding a function pointer, where webmachine has a Ruby class
+whose callbacks are found by name. Inside, `Http` keeps the words RFC
+9110 uses - a status is a status and not a code - because that is where
+the RFC is the specification. The line is what the author sees.
+
 ## A name claims nothing that does not happen
 
 There is no zero copy here, so nothing is named for it. A name that
