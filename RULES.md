@@ -1174,54 +1174,28 @@ for.
 
 ## A remote call is a resource, and the codec is an axis
 
-Written down early because the shape was decided before there was a
-line of code for it.
-
-webmachine is most of an RPC server already. A procedure is a resource,
-the call is a POST, and which wire format carries it is one axis of the
-content negotiation that Section 12 of RFC 9110 already defines:
-
-    provides 'application/cbor', :to_cbor
-    provides 'application/json', :to_json
-
-Framing, multiplexing over HTTP/2, conditional requests, authentication
-and the cache come with that and cost nothing extra.
-
-CBOR first. It is RFC 8949, so it is read here the way every other
-specification is; `application/cbor` is registered, so negotiation picks
-it with no special case; and `mruby-cbor` is already written. What it
-needs in return is a depth limit, a size limit, an answer for duplicate
-keys in a map and one for indefinite-length items - RFC 8949 Section 10
-names all four, and they belong in the tests.
-
-Cap'n Proto and protobuf both buy zero-copy reads, and that advantage
-lands in the wrong place here: on a cache hit the response body is never
-decoded at all, it is bytes out of the map going into a send. What is
-left is the request side, and RPC arguments are small. Against that
-stands a schema, a code generator and a large C++ dependency.
-
-And `mruby-cbor` already answers the part that was left. It decodes
-lazily - "parse only what you access via CBOR::Lazy" - so a field nobody
-reads costs nothing, which is the rule this tree already follows for
-Ruby objects. Its `CBOR::Path.compile("$.users[*].name")` even shares
-the shape the cache key wants: a small path language, compiled once,
-evaluated often, naming a part and never a value. That is the third time
-the same construct appears in these gems, after `Mustache::Template`
-and this.
+A procedure is a resource, the call is a POST or a QUERY, and which wire
+format carries it is one axis of the content negotiation that Section 12
+of RFC 9110 already defines. So an RPC server here needs no second
+protocol beside the first, and gets framing, multiplexing, conditional
+requests, authentication and the cache from the one it has.
 
 Not gRPC. It does not use HTTP semantics, it tunnels through HTTP/2: the
-call is a POST, the message is length-prefixed inside the body, and the
-outcome of the call is a trailer, `grpc-status`, while the HTTP status
-stays 200 whatever happened. Everything this tree is - the decision
-graph, the conditional requests, the negotiation, the cache, the status
-codes - is bypassed by that, and a response is not judgeable until it
-has ended. Here a Refusal becomes a status and the status stands in the
-first line.
+outcome of the call is a trailer, `grpc-status`, while the status stays
+200 whatever happened. Every part of this tree - the graph, the
+conditional requests, the negotiation, the cache, the status codes - is
+bypassed by that, and a response is not judgeable until it has ended.
+Here a Refusal becomes a status and the status stands in the first line.
 
-The one thing worth wanting from either of them is the schema and not
-the protocol: a declaration that `provides`, the field plan and the
-cache key could all be derived from, instead of three places stating it
-by hand. That question stays open, and it does not depend on gRPC.
+A schema is the one thing worth wanting from Cap'n Proto or protobuf,
+and it is worth wanting for its own sake rather than for speed: one
+declaration that `provides`, the field plan and the cache key could all
+be derived from. That question is open and does not depend on gRPC.
+
+Whatever carries the content, RFC 8949 Section 10 names four things a
+decoder owes its caller, and they belong in the tests: a depth limit, a
+size limit, an answer for duplicate keys in a map, and one for
+indefinite-length items.
 
 ## What is built while answering was built too late
 
