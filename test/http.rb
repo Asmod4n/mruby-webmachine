@@ -1401,6 +1401,45 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
 
+SPEC_UNKNOWN_METHOD = 0
+SPEC_GET            = 1
+SPEC_HEAD           = 2
+SPEC_POST           = 3
+SPEC_PUT            = 4
+SPEC_DELETE         = 5
+SPEC_CONNECT        = 6
+SPEC_OPTIONS        = 7
+SPEC_TRACE          = 8
+
+# RFC 9110 9.2.1: "Of the request methods defined by this specification,
+# the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
+# 9.2.2: "PUT, DELETE, and safe request methods are idempotent."
+# 9.2.3: "This specification defines caching semantics for GET, HEAD,
+# and POST."
+assert('the eight methods of RFC 9110 9.3 and what 9.2 says about them') do
+  #                              method       safe   idempotent cacheable
+  [['GET',     SPEC_GET,         true,  true,  true],
+   ['HEAD',    SPEC_HEAD,        true,  true,  true],
+   ['POST',    SPEC_POST,        false, false, true],
+   ['PUT',     SPEC_PUT,         false, true,  false],
+   ['DELETE',  SPEC_DELETE,      false, true,  false],
+   ['CONNECT', SPEC_CONNECT,     false, false, false],
+   ['OPTIONS', SPEC_OPTIONS,     true,  true,  false],
+   ['TRACE',   SPEC_TRACE,       true,  true,  false]].each do |name, number, safe, idem, cache|
+    got = Webmachine::SpecHttp.method_properties(name)
+    assert_equal [number, safe, idem, cache], got, name
+  end
+end
+
+# A method is a token, and one longer than eight bytes cannot even be a
+# number here, so WebDAV lands on unknown rather than on a wrong answer.
+assert('an unknown method is unknown, and nothing about it is assumed') do
+  ['PATCH', 'PROPFIND', 'get', 'Get', '', 'GETT', 'REPORT'].each do |name|
+    assert_equal [SPEC_UNKNOWN_METHOD, false, false, false],
+                 Webmachine::SpecHttp.method_properties(name), name
+  end
+end
+
 # ParseError::what() overrides std::exception::what(), which returns a
 # const char *, so it hands back the title's data() pointer. That is a C
 # string only while every row of kProblems is a string literal. The

@@ -719,6 +719,22 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
 // std::exception promises. It returns title.data(), which is only a C
 // string as long as every row of the table is a literal. This says so
 // for every row rather than trusting it.
+mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const http::Method method =
+        http::method_of(std::string_view(text, static_cast<size_t>(length)));
+    mrb_value out[4] = {
+        cpp_to_mrb_value(mrb, static_cast<int>(method)),
+        mrb_bool_value(http::is_safe(method)),
+        mrb_bool_value(http::is_idempotent(method)),
+        mrb_bool_value(http::is_cacheable(method)),
+    };
+    return mrb_ary_new_from_values(mrb, 4, out);
+}
+
 mrb_value spec_problems_are_terminated(mrb_state *, mrb_value)
 {
     for (const http::Problem &problem : http::kProblems) {
@@ -1013,6 +1029,8 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,
                                MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,

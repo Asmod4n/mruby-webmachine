@@ -175,8 +175,73 @@ constexpr uint64_t method_number(const std::string_view method)
     return number & (~uint64_t{0} >> (8 * (sizeof number - method.size())));
 }
 
-inline constexpr uint64_t kConnect = method_number("CONNECT");
-inline constexpr uint64_t kOptions = method_number("OPTIONS");
+inline constexpr uint64_t kConnectNumber = method_number("CONNECT");
+inline constexpr uint64_t kOptionsNumber = method_number("OPTIONS");
+inline constexpr uint64_t kGetNumber = method_number("GET");
+inline constexpr uint64_t kHeadNumber = method_number("HEAD");
+inline constexpr uint64_t kPostNumber = method_number("POST");
+inline constexpr uint64_t kPutNumber = method_number("PUT");
+inline constexpr uint64_t kDeleteNumber = method_number("DELETE");
+inline constexpr uint64_t kTraceNumber = method_number("TRACE");
+
+enum class Method : uint8_t {
+    kUnknown,
+    kGet,
+    kHead,
+    kPost,
+    kPut,
+    kDelete,
+    kConnect,
+    kOptions,
+    kTrace,
+};
+
+constexpr Method method_of(const std::string_view text)
+{
+    switch (method_number(text)) {
+    case kGetNumber:
+        return Method::kGet;
+    case kHeadNumber:
+        return Method::kHead;
+    case kPostNumber:
+        return Method::kPost;
+    case kPutNumber:
+        return Method::kPut;
+    case kDeleteNumber:
+        return Method::kDelete;
+    case kConnectNumber:
+        return Method::kConnect;
+    case kOptionsNumber:
+        return Method::kOptions;
+    case kTraceNumber:
+        return Method::kTrace;
+    default:
+        return Method::kUnknown;
+    }
+}
+
+// RFC 9110 9.2.1: "Of the request methods defined by this specification,
+// the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
+constexpr bool is_safe(const Method method)
+{
+    return method == Method::kGet || method == Method::kHead || method == Method::kOptions ||
+           method == Method::kTrace;
+}
+
+// RFC 9110 9.2.2: "Of the request methods defined by this specification,
+// PUT, DELETE, and safe request methods are idempotent."
+constexpr bool is_idempotent(const Method method)
+{
+    return is_safe(method) || method == Method::kPut || method == Method::kDelete;
+}
+
+// RFC 9110 9.2.3: "This specification defines caching semantics for GET,
+// HEAD, and POST, although the overwhelming majority of cache
+// implementations only support GET and HEAD."
+constexpr bool is_cacheable(const Method method)
+{
+    return method == Method::kGet || method == Method::kHead || method == Method::kPost;
+}
 
 constexpr char ascii_lowered(const char letter)
 {
@@ -897,10 +962,10 @@ inline std::expected<TargetForm, Refusal> request_target_form(const std::string_
 {
     if (text.empty()) [[unlikely]]
         return std::unexpected(Refusal{kRequestTargetProblem, 0});
-    if (method == kConnect)
+    if (method == kConnectNumber)
         return TargetForm::kAuthority;
     if (text == "*")
-        return method == kOptions
+        return method == kOptionsNumber
                    ? std::expected<TargetForm, Refusal>(TargetForm::kAsterisk)
                    : std::unexpected(Refusal{kRequestTargetProblem, 0});
     if (text.starts_with('/'))
