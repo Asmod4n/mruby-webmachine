@@ -262,6 +262,18 @@ inline constexpr std::array kKnownMethods =
     std::to_array({Method::kGet, Method::kHead, Method::kPost, Method::kPut, Method::kDelete,
                    Method::kTrace, Method::kConnect, Method::kOptions, Method::kQuery});
 
+// What a resource permits, which is the 405 of B10. webmachine-ruby
+// defaults allowed_methods to GET and HEAD; this tree adds QUERY,
+// because RFC 10008 2.4 gives the honest answer for a resource that does
+// not understand one: "If a media type is specified but is not supported
+// by the resource, a 415 (Unsupported Media Type) is appropriate. This
+// specifically includes the case where the media type is known in
+// principle, but it lacks semantics specific to a QUERY to the target
+// resource." So a default QUERY is refused at B5 by known_content_type?,
+// not answered with the whole representation at O18.
+inline constexpr std::array kAllowedMethods =
+    std::to_array({Method::kGet, Method::kHead, Method::kQuery});
+
 constexpr bool is_known_method(const Method method)
 {
     return std::ranges::find(kKnownMethods, method) != kKnownMethods.end();

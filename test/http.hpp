@@ -727,6 +727,14 @@ mrb_value spec_known_methods(mrb_state *mrb, mrb_value)
     return out;
 }
 
+mrb_value spec_allowed_methods(mrb_state *mrb, mrb_value)
+{
+    mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kAllowedMethods.size()));
+    for (const http::Method method : http::kAllowedMethods)
+        mrb_ary_push(mrb, out, cpp_to_mrb_value(mrb, http::method_name_of(method)));
+    return out;
+}
+
 mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -1038,6 +1046,8 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods,
+                               MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,

@@ -1446,6 +1446,23 @@ assert('known_methods is webmachine plus QUERY') do
                Webmachine::SpecHttp.known_methods
 end
 
+# webmachine-ruby defaults allowed_methods to GET and HEAD. QUERY joins
+# them, and a resource that does not understand one is not left answering
+# with its whole representation: RFC 10008 2.4 sends it to 415 at B5,
+# which is the same node that refuses a POST body of the wrong type.
+assert('allowed_methods is GET, HEAD and QUERY') do
+  assert_equal %w[GET HEAD QUERY], Webmachine::SpecHttp.allowed_methods
+end
+
+# Every method a resource may permit must be one the server knows, or
+# B10 would pass something B12 refused.
+assert('allowed_methods is a subset of known_methods') do
+  known = Webmachine::SpecHttp.known_methods
+  Webmachine::SpecHttp.allowed_methods.each do |name|
+    assert_true known.include?(name), name
+  end
+end
+
 # A method is a token, and one longer than eight bytes cannot even be a
 # number here, so WebDAV lands on unknown rather than on a wrong answer.
 assert('an unknown method is unknown, and nothing about it is assumed') do
