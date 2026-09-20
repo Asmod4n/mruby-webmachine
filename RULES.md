@@ -427,6 +427,50 @@ arrives here. And a `unix://` URL with no third slash makes a host and
 no path, which names no socket and is refused with the path it did not
 have.
 
+## A wildcard is not an address, so the addresses are listed
+
+`0.0.0.0` and `::` say "every address this machine has". `getsockname`
+answers with the wildcard, because that is what was bound, and no client
+can connect to it. So the server also lists the addresses that wildcard
+stands for, and `app.ready` reads them:
+
+    app.ready do
+      puts app.conf.url        # http://0.0.0.0:39241, what was bound
+      app.urls.each { |url| puts url }
+                               # http://127.0.0.1:39241
+                               # http://192.0.2.2:39241
+    end
+
+`conf.url` keeps the wildcard, because that is the answer to what was
+bound, and a second value cannot be the same thing. `app.urls` is the
+list a client can use. Where the ask named one address, the list holds
+that one address and says the same thing twice, which is what a caller
+that does not want two cases needs.
+
+`getifaddrs` makes the list. It is glibc's netlink read, it runs once at
+boot and not on the serving path, so it needs no ring operation. The
+rows are filtered: the family the listener bound, `IFF_UP` and
+`IFF_RUNNING`, and nothing else is dropped - the loopback address
+belongs in the list, because a test connects to it.
+
+Measured here, and this machine has no IPv6 at all, so the rows that
+carry one are not measured and are not claimed:
+
+    lo    ipv4 127.0.0.1  scope_id=0 up=1 running=1 loopback=1
+    eth0  ipv4 192.0.2.2  scope_id=0 up=1 running=1 loopback=0
+
+An IPv6 link-local address carries a zone, and a URL that holds one is
+RFC 6874: `http://[fe80::1%25eth0]:8080`, with the "%" written "%25".
+RFC 3986 allows no zone inside an IP-literal, which is why RFC 6874
+exists and why a browser refuses such a URL where curl takes it. The RFC
+is not in `refs/` yet; it arrives in the commit of the first function
+that reads it.
+
+The list is true when `ready` runs. An address that arrives later - DHCP,
+an interface that comes up - is not in it. Making it live is a netlink
+socket that stays open, and that is a question for the day something
+needs it, not a promise made here.
+
 ## A gem that only the tests need is a test dependency
 
 `spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
