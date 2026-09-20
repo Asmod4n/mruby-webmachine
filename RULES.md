@@ -573,6 +573,102 @@ that is the application author's to know.
 The name `network_changed` is this tree's own; no specification gives
 one.
 
+## Strict where it decides, lax where it only picks a status
+
+An open question, with what is measured about it so far, so that the day
+it is answered nobody starts from zero.
+
+The archive read a media type with no grammar at all: the base is
+everything before the first ";", trimmed. `parse_media_type` reads the
+same bytes as `token "/" token`. Measured in one binary, medians of
+five, `WM_MARCH=x86-64-v3`:
+
+| | archive | this tree |
+|---|---|---|
+| read a media type | 8.3 ns | 11.7 ns |
+| the parameter walk alone, same input | 34.4 ns | 39.3 ns |
+| Content-Type to charset, whole way | 26.6 ns | 33.1 ns |
+| the same with a quoted charset | 34.4 ns | 53.7 ns |
+
+The last row is not a speed comparison. The archive gives back `"utf-8"`
+with its quotes, and its own comparison is byte for byte, so it reads
+the two spellings RFC 9110 5.6.6 calls equal as different. The 19 ns are
+the price of not having that. The first row also flatters the archive:
+it never separates the subtype, and does that work later, once per
+comparison.
+
+Two shapes were tried against the 3.4 ns and both lost. A wide scan that
+returns the first byte that is not tchar - the nibble mask plus
+`countr_zero`, so the end of the token and the grammar check are one
+answer - read 11.1 ns. Splitting with `memchr` and then checking the run
+with one wide pass read 17.7 ns, worse than everything. A token here is
+4 to 12 bytes, and on a run that short one scalar pass beats several
+vectorized ones: the table setup costs more than the bytes it reads.
+Neither shape is in the tree.
+
+What the numbers do not settle is where a refusal belongs. A refusal is
+cheap when it runs once over the whole buffer and is not repeated per
+field: the classifier reads 120 bytes in 6.75 ns and 8000 in 267, so a
+600 byte header section is about one pass of 35 ns for every field at
+once. Against that stands 3 ns for each field read strictly.
+
+So laxness is a choice per field, and the line is what a wrong answer
+costs:
+
+- **Strict, always.** The value becomes a file name; it decides framing
+  (Content-Length, Transfer-Encoding, a chunk size); it is compared for
+  equality to decide something (an entity tag in If-Match, credentials);
+  or it is written back into a response line. There a lax read is a
+  traversal, a smuggled request, or an injected header.
+- **Lax is allowed** where the only difference is which status comes
+  back. A media type that matches nothing ends as 415 or 406 whether it
+  was read strictly or not. The same holds for content codings, language
+  tags and the qvalues of the Accept fields.
+
+And laxness has a precondition this tree does not meet yet: the bytes
+that are dangerous everywhere - CR, LF, NUL, the control bytes - have to
+be refused once, over the whole header section, before any field parser
+runs lax. There is no wire layer here yet, so nothing does that today.
+
+One shape was tried against that question and it answers it: read the
+field value once and keep the structure in a register. A 32 byte block
+gives two masks from one load - where the structural bytes of RFC 9110
+5.6 stand (`/ ; = , "`), and where a tchar stands - and then the parse
+walks the first mask with `countr_zero`, while "is this run a token" is
+a bit test on the second: `(tchar >> from)` has the run's bits set.
+
+One input of 23 bytes, four arms, one binary, medians of five:
+
+| | |
+|---|---|
+| the archive's way: lax, several passes | 34.3 ns |
+| this tree today: strict, several passes | 41.6 ns |
+| one pass, lax | 28.7 ns |
+| one pass, strict from the masks | **27.1 ns** |
+
+So strictness is not what costs. The passes are. Read once and the
+grammar is free - it is cheaper than the lax reader that walks the bytes
+four times, and it refuses what the lax one waves through.
+
+That also answers where a refusal belongs: not at the edge over the
+whole buffer, and not skipped per field, but in the one pass that reads
+the field anyway.
+
+Three things the spike does not settle. It covers a value of 32 bytes or
+less and falls back above that, and a block loop needs the bit test to
+cross a block. It leans on picohttpparser having refused every control
+byte already, which is true of HTTP/1.1 and has to be shown again for
+the field values HPACK hands over. And it had a bug that the numbers
+would have carried: RFC 9110 5.6.6 allows OWS around the semicolon, the
+spike read the space as part of the parameter name, and
+`text/html; charset=utf-8` - which the tree reads correctly today - was
+refused. A check caught it before the row was believed.
+
+The decision waits until a request becomes a response in this tree. Then
+the whole path can be measured, with the number of fields a real request
+makes us read, rather than one field alone. The spike is not in the
+tree; these numbers are its record.
+
 ## A gem that only the tests need is a test dependency
 
 `spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
