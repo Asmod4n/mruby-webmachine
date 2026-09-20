@@ -108,6 +108,19 @@ private:
     unsigned char found_byte_;
 };
 
+constexpr char ascii_lowered(const char letter)
+{
+    const unsigned byte = static_cast<unsigned char>(letter);
+    return static_cast<char>(letter + 0x20 * (byte - 'A' < 26u));
+}
+
+constexpr bool equal_ignoring_case(const std::string_view left, const std::string_view right)
+{
+    return std::ranges::equal(left, right, [](const char a, const char b) {
+        return ascii_lowered(a) == ascii_lowered(b);
+    });
+}
+
 inline constexpr std::array<bool, 256> kTchar = [] {
     std::array<bool, 256> table{};
     for (const char letter : std::string_view("!#$%&'*+-.^_`|~"))

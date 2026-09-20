@@ -17,6 +17,26 @@ mrb_value spec_is_tchar(mrb_state *mrb, mrb_value)
     return mrb_bool_value(http::is_tchar(static_cast<char>(byte)));
 }
 
+mrb_value spec_ascii_lowered(mrb_state *mrb, mrb_value)
+{
+    mrb_int byte = 0;
+    mrb_get_args(mrb, "i", &byte);
+    return cpp_to_mrb_value(
+        mrb, static_cast<unsigned char>(http::ascii_lowered(static_cast<char>(byte))));
+}
+
+mrb_value spec_equal_ignoring_case(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    return mrb_bool_value(http::equal_ignoring_case(
+        std::string_view(left, static_cast<size_t>(left_length)),
+        std::string_view(right, static_cast<size_t>(right_length))));
+}
+
 mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
 {
     mrb_int problem = 0;
@@ -224,6 +244,9 @@ inline void http_spec(mrb_state *mrb)
     struct RClass *wm = mrb_define_module(mrb, "Webmachine");
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
     mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "ascii_lowered", spec_ascii_lowered, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "equal_ignoring_case", spec_equal_ignoring_case,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
                                MRB_ARGS_REQ(2));

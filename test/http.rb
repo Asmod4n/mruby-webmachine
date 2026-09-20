@@ -721,3 +721,49 @@ assert('lowercase_token? reads wide and narrow the same') do
     assert_false Webmachine::SpecHttp.lowercase_token?(bad, length), length
   end
 end
+
+LOWERCASE = %q{abcdefghijklmnopqrstuvwxyz}.bytes
+
+# RFC 9110 5.1: a field name is case-insensitive. The same holds for a
+# media type and subtype (8.3.1), a charset (8.3.2) and a content
+# coding (8.4.1). std::tolower answers none of them, because it reads
+# the locale, so the fold is ours and it touches A to Z and nothing
+# else.
+assert('ascii_lowered folds A to Z and leaves the other 230 bytes alone') do
+  256.times do |byte|
+    want = UPPERCASE.include?(byte) ? byte + 0x20 : byte
+    assert_equal want, Webmachine::SpecHttp.ascii_lowered(byte), "byte #{byte}"
+  end
+end
+
+# The cheap fold is "set bit 5", and it is wrong here. '^' is 0x5E and
+# '~' is 0x7E, so bit 5 alone turns one into the other - and both are
+# tchar, so x-a^b and x-a~b are two field names a client may legally
+# send. The same pairing catches '@' with '`' and '[' with '{'.
+assert('equal_ignoring_case does not confuse the bytes that differ only in bit 5') do
+  [%w[^ ~], %w[@ `], %w<[ {>, %w<] }>, %W[_ \x7f], %W[\\\\ |]].each do |low, high|
+    assert_false Webmachine::SpecHttp.equal_ignoring_case(low, high), "#{low} #{high}"
+  end
+end
+
+assert('equal_ignoring_case answers RFC 9110 5.1 for a field name') do
+  assert_true Webmachine::SpecHttp.equal_ignoring_case('Content-Type', 'content-type')
+  assert_true Webmachine::SpecHttp.equal_ignoring_case('IF-NONE-MATCH', 'if-none-match')
+  assert_true Webmachine::SpecHttp.equal_ignoring_case('', '')
+  assert_false Webmachine::SpecHttp.equal_ignoring_case('content-type', 'content-types')
+  assert_false Webmachine::SpecHttp.equal_ignoring_case('content-type', 'content_type')
+  assert_false Webmachine::SpecHttp.equal_ignoring_case('accept', 'accept-encoding')
+end
+
+# Every one of the 65536 byte pairs, against the fold itself, so the
+# comparison and the fold cannot drift apart.
+assert('equal_ignoring_case agrees with ascii_lowered on every pair of bytes') do
+  wrong = 0
+  256.times do |left|
+    256.times do |right|
+      want = Webmachine::SpecHttp.ascii_lowered(left) == Webmachine::SpecHttp.ascii_lowered(right)
+      wrong += 1 if Webmachine::SpecHttp.equal_ignoring_case(left.chr, right.chr) != want
+    end
+  end
+  assert_equal 0, wrong
+end
