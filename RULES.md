@@ -374,13 +374,26 @@ rule has a reason, the reason is one that a reader can check.
 
 `conf.url = "http://0.0.0.0:0"` is what the operator wants. What the
 kernel bound is another thing, and it is the thing an application needs.
-So the server binds, reads the name back with `getsockname`, spells a
-URL out of what it read, and writes that into `conf.url`. Then
-`app.ready` runs, and the block reads a URL that is true:
+
+The order is fixed, and it is the same for every listener:
+
+1. `bind` the address the ask names.
+2. `listen`, and a failure here ends the boot.
+3. Ask the kernel: `getsockname` for the address and the port of this
+   socket, and `getifaddrs` where the address is a wildcard.
+4. Spell the URL out of those answers and write it into `conf.url`.
+5. Run `app.ready`.
+
+Nothing is reported before step 2 succeeded. A URL that names a socket
+which never began to listen is a URL a client dials into nothing.
 
     app.ready do
       puts app.conf.url        # http://0.0.0.0:39241, the kernel's port
     end
+
+Every listener is asked for itself. Two listeners have two ports, and a
+port that was written once and a port the kernel chose are read the same
+way, because the code that reads them cannot know which was which.
 
 Every part of that URL comes from the answer and not from the ask. The
 port, because port 0 is the case that makes this necessary and a test
