@@ -418,13 +418,21 @@ a debug timing library, a version bump, AVX-512 licence throttling and
 the machine's own load - before the flags settled it. Each one was
 plausible and each one was stated before it was tested.
 
-The library is built here all the same, from `deps/benchmark` pinned by
-commit, `CMAKE_BUILD_TYPE=Release`, and the same `-march` as the
-harness so one binary does not hold two instruction sets. Not because
-it distorts a number - it does not - but because Debian's carries no
-`NDEBUG`, warns about it on stderr where nobody looked, and
-`pkg-config --modversion` answered "1.8.3" and said none of it.
-`WM_MARCH=` pins the ISA and the build directory is named for it.
+The library is the machine's. It was vendored for a while, to pin a
+version and to match the harness's instruction set, and the measurement
+above took that reason away: with the alignment flags on, three builds
+of it answer the same. A dependency kept for a reason that has been
+disproved is a dependency to remove.
+
+What matters is that a row says which library made it. Debian's carries
+no `NDEBUG` and warns about that on stderr, where a harness reading only
+stdout never saw it; Google Benchmark also writes `library_build_type`
+into the context, so the row carries the warning even when nobody reads
+the terminal. `WM_MARCH=` still pins the harness's own ISA, because
+`-march=native` is not one instruction set across two containers.
+
+Nothing this tree runs sends stderr to /dev/null. That is how the
+warning stayed unread for a day.
 
 Every row records `benchmark_lib`, `ran_as`, `bench_nice` and
 `bench_threads_max`, and Google Benchmark adds `library_build_type`

@@ -32,34 +32,6 @@ BENCH_THREADS_MAX = [Etc.nprocessors - 1, 1].max
 BENCH_ALIGN = '-falign-functions=64 -falign-loops=64 -falign-jumps=64'.freeze
 BENCH_FLAGS = "-std=c++23 -O3 -march=#{BENCH_MARCH} #{BENCH_ALIGN}".freeze
 
-# Built here, never taken from the machine. Debian's libbenchmark1.8.3 sets
-# no CMAKE_BUILD_TYPE, so it carries no NDEBUG and prints "Library was built
-# as DEBUG. Timings may be affected." on every run - to stderr, where a
-# harness that reads only stdout never sees it. pkg-config answered "1.8.3"
-# and said none of it.
-#
-# What that warning is worth was measured, and it is not what it looks like:
-# three builds of the library read 66, 90 and 90 ns for one source, and with
-# BENCH_ALIGN they all read 89.0 plus or minus 0.5. The library was never the
-# variable; the link was. So this exists to pin a version by commit and to
-# match the harness's ISA, not because a debug timer distorts a number.
-BENCH_SRC = File.expand_path('deps/benchmark', __dir__)
-# Named for the ISA: the library is compiled with the same -march as the
-# harness, so one binary does not hold two of them, and a changed WM_MARCH
-# builds its own rather than reusing the last one.
-BENCH_BUILD = File.join(BENCH_SRC, "build-#{BENCH_MARCH}")
-BENCH_LIB = File.join(BENCH_BUILD, 'src', 'libbenchmark.a')
-
-file BENCH_LIB do
-  unless File.exist?(File.join(BENCH_SRC, 'CMakeLists.txt'))
-    abort 'deps/benchmark is empty - run: git submodule update --init --recursive'
-  end
-  sh "cmake -S #{BENCH_SRC} -B #{BENCH_BUILD} -DCMAKE_BUILD_TYPE=Release " \
-     "-DCMAKE_CXX_FLAGS=-march=#{BENCH_MARCH} " \
-     '-DBENCHMARK_ENABLE_TESTING=OFF -DBENCHMARK_ENABLE_INSTALL=OFF'
-  sh "cmake --build #{BENCH_BUILD} --parallel #{BENCH_THREADS_MAX}"
-end
-
 # Read off the binary, never off PATH: a run can point at another build,
 # and `g++ --version` would then name a compiler that never touched it.
 def bench_compiler(binary)
@@ -193,7 +165,7 @@ def bench_provenance(binary, nice)
     'compiler' => bench_compiler(binary),
     'libstdcxx' => bench_shared_library(binary, %r{/[^ ]*libstdc\+\+\.so[^ ]*}) || 'static',
     'libc' => bench_libc(binary),
-    'benchmark_lib' => `git -C #{BENCH_SRC} describe --always --tags --dirty`.strip,
+    'benchmark_lib' => `pkg-config --modversion benchmark 2>/dev/null`.strip,
     'kernel' => `uname -sr`.strip,
     'scheduler' => bench_scheduler,
     'bench_nice' => nice,
@@ -210,14 +182,13 @@ def bench_provenance(binary, nice)
 end
 
 desc 'build and run the benchmarks'
-task bench: BENCH_LIB do
+task :bench do
   sources = Dir[File.join(__dir__, 'bench', '*.cpp')].sort.join(' ')
   binary = File.join(__dir__, 'bench', 'run')
   results = File.join(__dir__, 'bench', 'results')
   mkdir_p results
-  sh "g++ #{BENCH_FLAGS} -I#{File.join(__dir__, 'src')} " \
-     "-I#{File.join(BENCH_SRC, 'include')} #{sources} " \
-     "#{BENCH_LIB} -lpthread -o #{binary}"
+  sh "g++ #{BENCH_FLAGS} -I#{File.join(__dir__, 'src')} #{sources} " \
+     "-lbenchmark -lpthread -o #{binary}"
   # After the build, never before: a compiler running beside the run is the
   # noise this exists to keep out, and the sweep should see the process list
   # the run will actually meet.
