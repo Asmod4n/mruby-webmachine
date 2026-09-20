@@ -612,3 +612,71 @@ assert('parse_host checks the bytes of an IP-literal and not the address') do
   assert_equal 'Host', e[0]
   assert_equal '[:::::1]', Webmachine::SpecHttp.parse_host('[:::::1]', 64)[HOST_NAME]
 end
+
+ELEMENT = 0
+REST    = 1
+
+# A helper, not a test: the walk gives one element and the rest, so a
+# list is what you get by asking until it says there is no more.
+def list_of(text)
+  found = []
+  rest = text
+  while (got = Webmachine::SpecHttp.parse_list_element(rest))
+    found << got[ELEMENT]
+    rest = got[REST]
+  end
+  found
+end
+
+# RFC 9110 5.6.1.2 prints these three as valid and these three as
+# holding no element. A list is written "a, b, c", and a sender that
+# merges two values can leave an empty slot behind - "a,,b" or a comma
+# at the end. A recipient has to step over those rather than see an
+# element that is not there.
+assert('parse_list_element walks the lists RFC 9110 5.6.1.2 prints') do
+  assert_equal %w[foo bar], list_of('foo,bar')
+  assert_equal %w[foo bar], list_of('foo ,bar,')
+  assert_equal %w[foo bar charlie], list_of('foo , ,bar,charlie')
+  assert_equal [], list_of('')
+  assert_equal [], list_of(',')
+  assert_equal [], list_of(',   ,')
+end
+
+# RFC 9110 5.6.1.1: OWS sits on both sides of the comma, so an element
+# keeps neither.
+assert('parse_list_element drops the whitespace around an element') do
+  assert_equal %w[foo bar], list_of("  foo \t , \t bar  ")
+  assert_equal ['a b'], list_of('  a b  ')
+end
+
+# RFC 9110 8.8.3: etagc is %x21 / %x23-7E / obs-text, and the comma is
+# %x2C, so a comma inside the quotes of an entity tag is part of the tag
+# and not a separator. Splitting on every comma would make three tags
+# out of these two.
+assert('parse_list_element keeps a comma that stands inside quotes') do
+  assert_equal ['"a,b"', '"c"'], list_of('"a,b", "c"')
+  assert_equal ['"33a64df5"', 'W/"67ab43"'], list_of('"33a64df5", W/"67ab43"')
+  assert_equal ['text/html;x="a,b"', 'text/plain'], list_of('text/html;x="a,b", text/plain')
+end
+
+# A quote that never closes leaves nobody able to say where the element
+# ends, so the element runs to the end of the value and whoever parses
+# it says what is wrong with it. The walk cannot: it does not know what
+# the element was meant to be.
+assert('parse_list_element hands an unterminated quote over whole') do
+  assert_equal ['"a, b'], list_of('"a, b')
+end
+
+# RFC 9113 8.2.3 lets HTTP/2 split a Cookie over several field lines,
+# and every browser does it. A cookie is delimited by ";" and not by a
+# comma, so the comma walk must not cut one up.
+assert('parse_list_element leaves a cookie in one piece') do
+  assert_equal ['session=abc123; prefs=dark'], list_of('session=abc123; prefs=dark')
+end
+
+# RFC 9113 8.1.1 names "the inclusion of uppercase field names" as one
+# of the things that make an HTTP/2 message malformed, and 8.2.1 says
+# an implementation that already checks a field name against RFC 9110
+# 5.1 "only needs an additional check that field names do not include
+# uppercase characters". So this is the token table with A to Z taken
+# out, and nothing else changes.

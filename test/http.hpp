@@ -54,6 +54,21 @@ mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 3, out);
 }
 
+mrb_value spec_parse_list_element(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const auto got = http::parse_list_element(std::string_view(text, static_cast<size_t>(length)));
+    if (!got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->element),
+        cpp_to_mrb_value(mrb, got->rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
 mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -203,6 +218,8 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_list_element", spec_parse_list_element,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_field_value_parameter",
                                spec_parse_field_value_parameter, MRB_ARGS_REQ(1));

@@ -376,6 +376,46 @@ constexpr std::string_view skip_optional_whitespace(const std::string_view text)
     return start == std::string_view::npos ? std::string_view{} : text.substr(start);
 }
 
+inline size_t find_comma_or_quote(const std::string_view text, const size_t at)
+{
+    for (size_t walked = at; walked < text.size(); ++walked)
+        if (text.at(walked) == ',' || text.at(walked) == '"')
+            return walked;
+    return std::string_view::npos;
+}
+
+struct ListElement {
+    std::string_view element;
+    std::string_view rest;
+};
+
+inline std::optional<ListElement> parse_list_element(const std::string_view text)
+{
+    std::string_view rest = skip_optional_whitespace(text);
+    while (rest.starts_with(','))
+        rest = skip_optional_whitespace(rest.substr(1));
+    if (rest.empty())
+        return std::nullopt;
+    size_t at = 0;
+    while (at < rest.size()) {
+        const size_t stop = find_comma_or_quote(rest, at);
+        if (stop == std::string_view::npos) {
+            at = rest.size();
+            break;
+        }
+        if (rest.at(stop) == ',') {
+            at = stop;
+            break;
+        }
+        const auto quoted = parse_quoted_string(rest.substr(stop));
+        if (!quoted) [[unlikely]]
+            return ListElement{rest, std::string_view{}};
+        at = stop + quoted->size();
+    }
+    const std::string_view whole = rest.substr(0, at);
+    return ListElement{whole.substr(0, whole.find_last_not_of(" \t") + 1), rest.substr(at)};
+}
+
 struct FieldValueParameter {
     std::string_view name;
     std::string_view value;
