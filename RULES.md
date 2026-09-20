@@ -1241,3 +1241,28 @@ The one thing worth wanting from either of them is the schema and not
 the protocol: a declaration that `provides`, the field plan and the
 cache key could all be derived from, instead of three places stating it
 by hand. That question stays open, and it does not depend on gRPC.
+
+## What is built while answering was built too late
+
+A body that comes into existence during a request costs that request the
+whole of its making, and no language makes that cheap. So the work moves
+earlier, and there are only four places it can stand:
+
+- **At build time.** `assets.cpp` in the archive computes the gzip of
+  every entry, its CRC, its length and its entity tag when the pack is
+  made. A request then picks one and sends it.
+- **At `route.add`.** The field plan, the provided lists copied into
+  padded storage and checked once, the compiled cache key. Everything
+  the class declares is known there, and `def self.` gives way to a DSL
+  so that it is data rather than a call.
+- **At start.** The catalogue is opened, the templates are compiled,
+  `Mustache::Template.compile` runs once and freezes its ops.
+- **At the first request that needs it**, and then never again. That is
+  the whole of what the cache is for.
+
+What is left for the request itself is choosing and sending.
+
+This is also why every answer of ours has a Content-Length. A length is
+unknown only where a body is still being made, and the one body that is
+legitimately still being made is an event stream. Everything else with
+an unknown length is a body that was built too late.
