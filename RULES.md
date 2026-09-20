@@ -630,12 +630,11 @@ that are dangerous everywhere - CR, LF, NUL, the control bytes - have to
 be refused once, over the whole header section, before any field parser
 runs lax. There is no wire layer here yet, so nothing does that today.
 
-One shape was tried against that question and it answers it: read the
-field value once and keep the structure in a register. A 32 byte block
-gives two masks from one load - where the structural bytes of RFC 9110
-5.6 stand (`/ ; = , "`), and where a tchar stands - and then the parse
-walks the first mask with `countr_zero`, while "is this run a token" is
-a bit test on the second: `(tchar >> from)` has the run's bits set.
+One shape was tried against that question. Read the field value once and
+keep the structure in a register: a 32 byte block gives two masks from
+one load - where the structural bytes of RFC 9110 5.6 stand (`/ ; = , "`)
+and where a tchar stands - and then the parse walks the first mask with
+`countr_zero`, while "is this run a token" is a bit test on the second.
 
 One input of 23 bytes, four arms, one binary, medians of five:
 
@@ -646,28 +645,50 @@ One input of 23 bytes, four arms, one binary, medians of five:
 | one pass, lax | 28.7 ns |
 | one pass, strict from the masks | **27.1 ns** |
 
-So strictness is not what costs. The passes are. Read once and the
-grammar is free - it is cheaper than the lax reader that walks the bytes
-four times, and it refuses what the lax one waves through.
+So strictness is not what costs. The passes are. Where a value is read at
+all, reading it once makes the grammar free: it is cheaper than the lax
+reader that walks the bytes four times, and it refuses what that one
+waves through.
 
-That also answers where a refusal belongs: not at the edge over the
-whole buffer, and not skipped per field, but in the one pass that reads
-the field anyway.
+Then the same idea was put to a whole request, and there it dies. A
+request from Chrome is 416 bytes of header block. One pass over all of
+it, both masks, is 33.9 ns. What the request actually costs to read is
+this:
 
-Three things the spike does not settle. It covers a value of 32 bytes or
-less and falls back above that, and a block loop needs the bit test to
-cross a block. It leans on picohttpparser having refused every control
-byte already, which is true of HTTP/1.1 and has to be shown again for
-the field values HPACK hands over. And it had a bug that the numbers
-would have carried: RFC 9110 5.6.6 allows OWS around the semicolon, the
-spike read the space as part of the parameter name, and
+| what the graph asks for | |
+|---|---|
+| a plain GET: the Host that routed it, and nothing else | 12.6 ns |
+| a conditional GET: Host, the If-None-Match list, If-Modified-Since | 49.1 ns |
+| a negotiated GET: Host and Accept with its media types and q | 80.9 ns |
+| every field of the request read | 415.9 ns |
+
+The last row is the one nobody pays. This server looks at what it needs:
+the graph walks on facts, and a fact is "is there an If-None-Match", not
+what stands inside it; a value is read where a node needs it, and a Ruby
+object is made where a resource asks for it. That is the archive's
+`ReqFacts` - a struct of bools - and its `body_io_` memo, one object per
+run, built on the first ask.
+
+So a pass over the whole block pays for the 300 bytes of User-Agent and
+sec-ch-ua that nobody reads, and for a plain GET it costs two and a half
+times the whole parse. The premise of a whole-block lexer is that the
+bytes get read anyway. They do not.
+
+What survives is the narrow form: stay lazy, and read a value in one
+pass on the day something asks for it.
+
+Three things the spike does not settle, for the day it is built. It
+covers a value of 32 bytes or less and falls back above that, and a block
+loop needs the bit test to cross a block. It leans on picohttpparser
+having refused every control byte already, which is true of HTTP/1.1 and
+has to be shown again for what HPACK hands over. And it had a bug the
+numbers would have carried: RFC 9110 5.6.6 allows OWS around the
+semicolon, the spike read the space as part of the parameter name, and
 `text/html; charset=utf-8` - which the tree reads correctly today - was
 refused. A check caught it before the row was believed.
 
-The decision waits until a request becomes a response in this tree. Then
-the whole path can be measured, with the number of fields a real request
-makes us read, rather than one field alone. The spike is not in the
-tree; these numbers are its record.
+The line between strict and lax stays written down, because it answers a
+different question - what a wrong answer costs, not what it saves.
 
 ## A gem that only the tests need is a test dependency
 

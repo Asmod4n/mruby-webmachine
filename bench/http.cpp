@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -329,6 +330,196 @@ void charset_new(benchmark::State &state)
     }
 }
 
+
+// The scale a real request has: this block is what Chrome sends, and the
+// arms below read it the way the server would. One arm is the readers
+// this tree has; the other is a single pass that writes down where the
+// structural bytes and the tchars are, which is the budget a reader
+// built on masks would have to fit into.
+struct ChromeField {
+    std::string_view name;
+    std::string_view value;
+};
+
+std::vector<ChromeField> fields_of(const std::string &request)
+{
+    std::vector<ChromeField> fields;
+    const std::string_view whole(request);
+    size_t at = whole.find("\r\n") + 2;
+    while (at + 1 < whole.size() && whole.substr(at, 2) != "\r\n") {
+        const size_t colon = whole.find(':', at);
+        const size_t line_end = whole.find("\r\n", at);
+        size_t value_from = colon + 1;
+        while (value_from < line_end && (whole[value_from] == ' ' || whole[value_from] == '\t'))
+            value_from++;
+        fields.push_back({whole.substr(at, colon - at), whole.substr(value_from, line_end - value_from)});
+        at = line_end + 2;
+    }
+    return fields;
+}
+
+const std::vector<ChromeField> kChromeFields = fields_of(kChrome);
+
+const std::string_view kChromeBlock = [] {
+    const std::string_view whole(kChrome);
+    const size_t from = whole.find("\r\n") + 2;
+    return whole.substr(from, whole.find("\r\n\r\n") + 2 - from);
+}();
+
+size_t read_chrome_with_todays_readers()
+{
+    size_t answered = 0;
+    for (const ChromeField field : kChromeFields) {
+        answered += http::is_token(field.name);
+        if (http::equal_ignoring_case(field.name, "host")) {
+            answered += http::parse_host(field.value).has_value();
+        } else if (http::equal_ignoring_case(field.name, "accept")) {
+            std::string_view rest = field.value;
+            while (const auto element = http::parse_list_element(rest)) {
+                const auto media = http::parse_media_type(element->element);
+                if (media)
+                    answered += http::value_of_parameter(media->parameters, "q").has_value();
+                rest = element->rest;
+            }
+        } else if (http::equal_ignoring_case(field.name, "accept-encoding")) {
+            std::string_view rest = field.value;
+            while (const auto element = http::parse_list_element(rest)) {
+                answered += http::content_coding(element->element) != http::ContentCoding::kUnknown;
+                rest = element->rest;
+            }
+        } else if (http::equal_ignoring_case(field.name, "accept-language")) {
+            std::string_view rest = field.value;
+            while (const auto element = http::parse_list_element(rest)) {
+                const std::string_view tag = element->element.substr(0, element->element.find(';'));
+                answered += http::is_language_tag(tag);
+                rest = element->rest;
+            }
+        } else if (http::equal_ignoring_case(field.name, "connection")) {
+            std::string_view rest = field.value;
+            while (const auto element = http::parse_list_element(rest)) {
+                answered += http::is_token(element->element);
+                rest = element->rest;
+            }
+        }
+    }
+    return answered;
+}
+
+// The upper bound nobody pays: every field of the request read. The
+// decision graph does not work that way - it walks on facts, and a fact
+// is "is there an If-None-Match", not what stands in it. A value is read
+// where a node needs it, and a Ruby object is made where a resource asks
+// for it. The three arms under this one are what a request really costs.
+void chrome_read_every_field(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = read_chrome_with_todays_readers();
+        benchmark::DoNotOptimize(got);
+    }
+    state.SetBytesProcessed(static_cast<int64_t>(state.iterations() * kChromeBlock.size()));
+}
+
+
+// A plain GET of a static file: the graph reaches O18 with every
+// conditional and conneg fact false, so the only field value anybody
+// reads is the Host that routed it.
+void chrome_plain_get(benchmark::State &state)
+{
+    const std::string_view host = kChromeFields[0].value;
+    for (auto _ : state) {
+        std::string_view text = host;
+        benchmark::DoNotOptimize(text);
+        auto got = http::parse_host(text);
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+// What a browser sends on the second visit: the same GET with the two
+// validators. Now three values are read, and not one more.
+const std::string kRevalidate =
+    std::string("If-None-Match: \"686897696a7c876b7e\", W/\"xyzzy\"\r\n"
+                "If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n") +
+    std::string(http::kWidePadding, '\0');
+
+const std::vector<ChromeField> kRevalidateFields = fields_of(
+    std::string("GET / HTTP/1.1\r\n") + kRevalidate);
+
+void chrome_conditional_get(benchmark::State &state)
+{
+    const std::string_view host = kChromeFields[0].value;
+    for (auto _ : state) {
+        std::string_view text = host;
+        benchmark::DoNotOptimize(text);
+        size_t answered = http::parse_host(text).has_value();
+        std::string_view rest = kRevalidateFields[0].value;
+        while (const auto element = http::parse_list_element(rest)) {
+            answered += http::parse_entity_tag(element->element).has_value();
+            rest = element->rest;
+        }
+        answered += http::parse_http_date(kRevalidateFields[1].value, std::chrono::year{2026})
+                        .has_value();
+        benchmark::DoNotOptimize(answered);
+    }
+}
+
+// A resource that offers more than one media type: the graph asks C4,
+// and only then is Accept read.
+void chrome_negotiated_get(benchmark::State &state)
+{
+    const std::string_view host = kChromeFields[0].value;
+    const std::string_view accept = kChromeFields[7].value;
+    for (auto _ : state) {
+        std::string_view text = host;
+        benchmark::DoNotOptimize(text);
+        size_t answered = http::parse_host(text).has_value();
+        std::string_view rest = accept;
+        benchmark::DoNotOptimize(rest);
+        while (const auto element = http::parse_list_element(rest)) {
+            const auto media = http::parse_media_type(element->element);
+            if (media)
+                answered += http::value_of_parameter(media->parameters, "q").has_value();
+            rest = element->rest;
+        }
+        benchmark::DoNotOptimize(answered);
+    }
+}
+
+#if defined(__AVX2__)
+inline constexpr std::array<bool, 256> kStructural = [] {
+    std::array<bool, 256> table{};
+    for (const char letter : std::string_view("/;=,\" :"))
+        table.at(static_cast<unsigned char>(letter)) = true;
+    return table;
+}();
+
+inline constexpr auto kStructuralLowBits = http::ascii_low_nibble_bits_of(kStructural);
+
+void chrome_one_pass(benchmark::State &state)
+{
+    const __m256i high_table = _mm256_broadcastsi128_si256(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(http::kHighNibbleBit.data())));
+    const __m256i structural_table = _mm256_broadcastsi128_si256(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(kStructuralLowBits.data())));
+    const __m256i tchar_table = _mm256_broadcastsi128_si256(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(http::kTcharLowBits.data())));
+    uint32_t structural[24];
+    uint32_t tchar[24];
+    for (auto _ : state) {
+        size_t block = 0;
+        for (size_t at = 0; at < kChromeBlock.size(); at += 32, block++) {
+            const char *const from = std::next(kChromeBlock.data(), at);
+            const size_t left = kChromeBlock.size() - at;
+            const uint32_t inside = left >= 32 ? ~0u : (1u << left) - 1;
+            structural[block] = ~http::avx2_block_refusals(from, structural_table, high_table) & inside;
+            tchar[block] = ~http::avx2_block_refusals(from, tchar_table, high_table) & inside;
+        }
+        benchmark::DoNotOptimize(structural);
+        benchmark::DoNotOptimize(tchar);
+    }
+    state.SetBytesProcessed(static_cast<int64_t>(state.iterations() * kChromeBlock.size()));
+}
+#endif
+
 // The same walk on both sides, over the parameters alone: this says how
 // much of the difference above is the grammar check and how much is the
 // walk itself.
@@ -398,6 +589,13 @@ BENCHMARK(media_type_archive);
 BENCHMARK(media_type_new);
 BENCHMARK(charset_archive);
 BENCHMARK(charset_new);
+BENCHMARK(chrome_read_every_field);
+BENCHMARK(chrome_plain_get);
+BENCHMARK(chrome_conditional_get);
+BENCHMARK(chrome_negotiated_get);
+#if defined(__AVX2__)
+BENCHMARK(chrome_one_pass);
+#endif
 BENCHMARK(parameter_walk_archive);
 BENCHMARK(parameter_walk_new);
 BENCHMARK(charset_quoted_archive_keeps_quotes);
