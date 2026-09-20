@@ -1,5 +1,4 @@
-#ifndef WEBMACHINE_TEST_HTTP_HPP
-#define WEBMACHINE_TEST_HTTP_HPP
+#pragma once
 
 #include <mruby.h>
 #include <mruby/array.h>
@@ -681,5 +680,3 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_http_date", spec_parse_http_date,
                                MRB_ARGS_REQ(2));
 }
-
-#endif

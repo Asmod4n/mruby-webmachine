@@ -1,5 +1,4 @@
-#ifndef WEBMACHINE_HTTP_HPP
-#define WEBMACHINE_HTTP_HPP
+#pragma once
 
 #include <algorithm>
 #include <array>
@@ -1220,5 +1219,3 @@ inline std::expected<RequestTarget, Refusal> parse_request_target(const std::str
 }
 
 }
-
-#endif
