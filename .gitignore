@@ -1,2 +1,7 @@
 bench/run
+fuzz/run
+fuzz/crash-*
+fuzz/leak-*
+fuzz/oom-*
+fuzz/timeout-*
 mruby/

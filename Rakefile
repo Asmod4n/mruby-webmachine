@@ -217,4 +217,40 @@ task :bench do
   puts "wrote #{out}"
 end
 
+# A test states one case; a fuzzer states an invariant and hunts for the
+# case that breaks it. fuzz/fuzz_http.cpp holds the invariants, and it
+# puts every input against a page nobody may read: the wide scanners load
+# a vector at a time and do not shorten the last load, so an input copied
+# into a std::string would hide a read that walks too far in whatever
+# slack the allocator left.
+#
+# clang, because libFuzzer is clang's. clang 18 leaves __cpp_concepts at
+# 201907 and libstdc++ wants 202002 before it declares std::expected, so
+# the macro is set by hand. The other way out, -stdlib=libc++, would
+# measure a standard library this tree never builds against.
+FUZZ_CC = ENV.fetch('FUZZ_CC', 'clang++').freeze
+FUZZ_FLAGS = "-std=c++23 -O1 -g -march=#{BENCH_MARCH} -fno-omit-frame-pointer " \
+             '-fsanitize=address,undefined,fuzzer ' \
+             '-D__cpp_concepts=202002L -Wno-builtin-macro-redefined'.freeze
+
+desc 'build and run the fuzzer; rake fuzz[300] stops after 300 seconds'
+task :fuzz, [:seconds] do |_task, args|
+  ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
+  raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
+
+  fuzz = File.join(__dir__, 'fuzz')
+  binary = File.join(fuzz, 'run')
+  includes = [File.join(__dir__, 'src'), File.join(ada, 'include')]
+  sh "#{FUZZ_CC} #{FUZZ_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
+     "#{File.join(fuzz, 'fuzz_http.cpp')} #{File.join(ada, 'src', 'ada.cpp')} -o #{binary}"
+  # The corpus grows in place, so the next run starts where this one
+  # stopped. rake fuzz[0] builds and stops.
+  seconds = args[:seconds].to_i
+  next if args[:seconds] && seconds.zero?
+
+  limit = seconds.positive? ? ["-max_total_time=#{seconds}"] : []
+  sh(binary, File.join(fuzz, 'corpus'), "-dict=#{File.join(fuzz, 'http.dict')}",
+     "-artifact_prefix=#{fuzz}/", '-max_len=512', '-print_final_stats=1', *limit)
+end
+
 task default: :test
