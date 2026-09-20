@@ -361,14 +361,21 @@ resource_exists?, generate_etag, last_modified, delete_resource,
 create_path, process_post, finish_request - and the graph's nodes carry
 its letters. A resource that runs under webmachine-ruby runs here.
 
-So a type this tree invents may not stand where webmachine has a shape
-of its own. Two did and are gone: a Representation that bundled a media
-type, a coding, a language and an entity tag, where webmachine picks
-four values from four separate callbacks and bundles nothing; and a
-Resource holding a function pointer, where webmachine has a Ruby class
-whose callbacks are found by name. Inside, `Http` keeps the words RFC
-9110 uses - a status is a status and not a code - because that is where
-the RFC is the specification. The line is what the author sees.
+A callback is a Ruby method only where an application wrote one. There
+is no application in a server that serves a docroot, and there is no
+Ruby object in a request whose every answer is a default. The graph runs
+on the answers, not on where they came from, and it cannot see the
+difference. So no type here may assume a VM, and nothing may be built
+because Ruby might ask for it later.
+
+That is also why a shape this tree invents may not stand where
+webmachine has one. Two did and are gone: a Representation that bundled
+a media type, a coding, a language and an entity tag, where webmachine
+picks four values from four separate callbacks and bundles nothing; and
+a Resource holding a function pointer, where a callback is answered by
+whoever has an answer. Inside, `Http` keeps the words RFC 9110 uses - a
+status is a status and not a code - because that is where the RFC is the
+specification. The line is what the author sees.
 
 ## A name claims nothing that does not happen
 
