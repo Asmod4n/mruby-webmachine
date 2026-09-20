@@ -1,6 +1,8 @@
 #include <benchmark/benchmark.h>
 
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "http.hpp"
@@ -165,6 +167,223 @@ void parse_http_date(benchmark::State &state)
     }
 }
 
+// The archive's media type reader, from src/resource.cpp of
+// webmachine-archive, copied so that the old way and the new way run in
+// one binary. It checks no grammar: the base is everything before the
+// first ';', trimmed, and a parameter is split at ';' and at '=' with no
+// regard for a quoted-string.
+std::string_view archive_trim_optional_space(std::string_view text)
+{
+    size_t index = 0;
+    size_t text_end = text.size();
+    while (index < text_end && (text[index] == ' ' || text[index] == '\t'))
+        index++;
+    while (text_end > index && (text[text_end - 1] == ' ' || text[text_end - 1] == '\t'))
+        text_end--;
+    return text.substr(index, text_end - index);
+}
+
+bool archive_is_same_ignoring_case(std::string_view answer, std::string_view bound)
+{
+    if (answer.size() != bound.size())
+        return false;
+    for (size_t i = 0; i < answer.size(); i++) {
+        char one = answer[i];
+        char other = bound[i];
+        if (one >= 'A' && one <= 'Z')
+            one = static_cast<char>(one + 32);
+        if (other >= 'A' && other <= 'Z')
+            other = static_cast<char>(other + 32);
+        if (one != other)
+            return false;
+    }
+    return true;
+}
+
+std::string_view archive_media_type_base(std::string_view value)
+{
+    return archive_trim_optional_space(value.substr(0, value.find(';')));
+}
+
+std::string_view archive_media_type_params(std::string_view value)
+{
+    const size_t semi = value.find(';');
+    return semi == std::string_view::npos ? std::string_view{} : value.substr(semi + 1);
+}
+
+struct ArchiveParam {
+    std::string_view name;
+    std::string_view value;
+    std::string_view rest;
+};
+
+ArchiveParam archive_param_take_next(std::string_view list)
+{
+    const size_t semi = list.find(';');
+    const std::string_view entry = list.substr(0, semi);
+    const std::string_view rest =
+        semi == std::string_view::npos ? std::string_view{} : list.substr(semi + 1);
+    const size_t is_same = entry.find('=');
+    if (is_same == std::string_view::npos)
+        return {archive_trim_optional_space(entry), {}, rest};
+    return {archive_trim_optional_space(entry.substr(0, is_same)),
+            archive_trim_optional_space(entry.substr(is_same + 1)), rest};
+}
+
+std::string_view archive_param_find_named(std::string_view value, std::string_view name)
+{
+    std::string_view list = archive_media_type_params(value);
+    while (!list.empty()) {
+        const ArchiveParam next = archive_param_take_next(list);
+        list = next.rest;
+        if (archive_is_same_ignoring_case(next.name, name))
+            return next.value;
+    }
+    return {};
+}
+
+// A wide read goes past the run it is given, so the inputs are held with
+// the padding the ring's guard buffer gives a real one.
+std::string held_with_padding(const std::string_view bytes)
+{
+    std::string held(bytes);
+    held.append(http::kWidePadding, '\0');
+    return held;
+}
+
+const std::string kHeldTypes[4] = {
+    held_with_padding("text/html"), held_with_padding("text/html;charset=utf-8"),
+    held_with_padding("application/vnd.api+json;charset=utf-8"),
+    held_with_padding("multipart/form-data; boundary=----WebKitFormBoundaryABC123")};
+
+const std::string_view kContentTypes[4] = {
+    std::string_view(kHeldTypes[0]).substr(0, kHeldTypes[0].size() - http::kWidePadding),
+    std::string_view(kHeldTypes[1]).substr(0, kHeldTypes[1].size() - http::kWidePadding),
+    std::string_view(kHeldTypes[2]).substr(0, kHeldTypes[2].size() - http::kWidePadding),
+    std::string_view(kHeldTypes[3]).substr(0, kHeldTypes[3].size() - http::kWidePadding)};
+
+const std::string kHeldQuoted = held_with_padding("text/html;charset=\"utf-8\"");
+const std::string_view kQuotedCharset =
+    std::string_view(kHeldQuoted).substr(0, kHeldQuoted.size() - http::kWidePadding);
+
+// Two arms that answer differently measure nothing, so this runs before
+// every row that claims to compare them.
+void check_the_arms_agree()
+{
+    for (const std::string_view text : kContentTypes) {
+        const std::string_view base = archive_media_type_base(text);
+        const auto media = http::parse_media_type(text);
+        if (!media || base.data() != media->type.data() ||
+            base.size() != media->type.size() + 1 + media->subtype.size())
+            std::abort();
+        const std::string_view old_charset = archive_param_find_named(text, "charset");
+        const auto found = http::value_of_parameter(media->parameters, "charset");
+        if (!found)
+            std::abort();
+        const std::string_view new_charset =
+            *found ? http::unquoted_token(**found) : std::string_view{};
+        if (old_charset != new_charset)
+            std::abort();
+    }
+}
+
+void media_type_archive(benchmark::State &state)
+{
+    check_the_arms_agree();
+    size_t at = 0;
+    for (auto _ : state) {
+        auto got = archive_media_type_base(kContentTypes[at++ & 3]);
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void media_type_new(benchmark::State &state)
+{
+    check_the_arms_agree();
+    size_t at = 0;
+    for (auto _ : state) {
+        auto got = http::parse_media_type(kContentTypes[at++ & 3]);
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void charset_archive(benchmark::State &state)
+{
+    check_the_arms_agree();
+    size_t at = 0;
+    for (auto _ : state) {
+        auto got = archive_param_find_named(kContentTypes[at++ & 3], "charset");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void charset_new(benchmark::State &state)
+{
+    check_the_arms_agree();
+    size_t at = 0;
+    for (auto _ : state) {
+        const std::string_view text = kContentTypes[at++ & 3];
+        const auto media = http::parse_media_type(text);
+        auto got = http::value_of_parameter(media->parameters, "charset");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+// The same walk on both sides, over the parameters alone: this says how
+// much of the difference above is the grammar check and how much is the
+// walk itself.
+const std::string_view kParameterLists[4] = {
+    ";charset=utf-8", ";q=0.8;charset=utf-8", ";boundary=----WebKitFormBoundaryABC123",
+    ";level=1;charset=utf-8;q=0.9"};
+
+void parameter_walk_archive(benchmark::State &state)
+{
+    size_t at = 0;
+    for (auto _ : state) {
+        std::string_view list = kParameterLists[at++ & 3].substr(1);
+        std::string_view found;
+        while (!list.empty()) {
+            const ArchiveParam next = archive_param_take_next(list);
+            list = next.rest;
+            if (archive_is_same_ignoring_case(next.name, "charset")) {
+                found = next.value;
+                break;
+            }
+        }
+        benchmark::DoNotOptimize(found);
+    }
+}
+
+void parameter_walk_new(benchmark::State &state)
+{
+    size_t at = 0;
+    for (auto _ : state) {
+        auto got = http::value_of_parameter(kParameterLists[at++ & 3], "charset");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+// The quoted spelling is where the two stop answering the same thing:
+// the archive hands back the quotes and RFC 9110 5.6.6 says the quoted
+// and the unquoted value are the same. The rows are named for that.
+void charset_quoted_archive_keeps_quotes(benchmark::State &state)
+{
+    for (auto _ : state) {
+        auto got = archive_param_find_named(kQuotedCharset, "charset");
+        benchmark::DoNotOptimize(got);
+    }
+}
+
+void charset_quoted_new_unquotes(benchmark::State &state)
+{
+    for (auto _ : state) {
+        const auto media = http::parse_media_type(kQuotedCharset);
+        const auto found = http::value_of_parameter(media->parameters, "charset");
+        auto got = http::unquoted_token(**found);
+        benchmark::DoNotOptimize(got);
+    }
+}
+
 BENCHMARK(is_tchar);
 BENCHMARK(every_byte_over_field_names);
 BENCHMARK(is_token_over_field_names);
@@ -175,6 +394,14 @@ BENCHMARK(parse_quoted_string);
 BENCHMARK(parse_field_value_parameter);
 BENCHMARK(parse_imf_fixdate);
 BENCHMARK(parse_http_date);
+BENCHMARK(media_type_archive);
+BENCHMARK(media_type_new);
+BENCHMARK(charset_archive);
+BENCHMARK(charset_new);
+BENCHMARK(parameter_walk_archive);
+BENCHMARK(parameter_walk_new);
+BENCHMARK(charset_quoted_archive_keeps_quotes);
+BENCHMARK(charset_quoted_new_unquotes);
 
 } // namespace
 

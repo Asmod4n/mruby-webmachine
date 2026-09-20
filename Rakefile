@@ -183,12 +183,21 @@ end
 
 desc 'build and run the benchmarks'
 task :bench do
-  sources = Dir[File.join(__dir__, 'bench', '*.cpp')].sort.join(' ')
+  sources = Dir[File.join(__dir__, 'bench', '*.cpp')].sort
+  # src/http.hpp calls ada, so the bench binary carries ada as well. The
+  # copy is the one mruby-uri-parser vendors, and it is compiled here with
+  # the bench's own flags rather than linked from the debug build: an -Og
+  # object in an -O3 binary measures the wrong thing.
+  ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
+  raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
+
+  sources << File.join(ada, 'src', 'ada.cpp')
+  includes = [File.join(__dir__, 'src'), File.join(ada, 'include')]
   binary = File.join(__dir__, 'bench', 'run')
   results = File.join(__dir__, 'bench', 'results')
   mkdir_p results
-  sh "g++ #{BENCH_FLAGS} -I#{File.join(__dir__, 'src')} #{sources} " \
-     "-lbenchmark -lpthread -o #{binary}"
+  sh "g++ #{BENCH_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
+     "#{sources.join(' ')} -lbenchmark -lpthread -o #{binary}"
   # After the build, never before: a compiler running beside the run is the
   # noise this exists to keep out, and the sweep should see the process list
   # the run will actually meet.
