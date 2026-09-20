@@ -567,10 +567,19 @@ mapping, never handed out. Then every byte in the pool has
 question. The ring maps `(kBufCount + 1) * kBufSize` and registers
 `kBufCount`.
 
-**Nothing else is parsed.** The bytes a parser reads come from the pool
-and from nowhere else. An mruby string is a response body on its way to
-liburing, never something this tree reads a grammar out of, so there is
-no second case to write a rule for.
+**Nothing else is parsed today.** The bytes a parser reads come from the
+pool and from nowhere else. An mruby string is a response body on its
+way to liburing, not something a grammar is read out of.
+
+**What crosses a thread is allocated with the padding.** A compute
+worker and a watcher each need their own copy, and that copy is an mruby
+string. We allocate it, so it is `mrb_str_new_capa(mrb, length +
+kWidePadding)` with the length set to `length` - the padding is real
+because we asked for it, and nothing has to test for it afterwards.
+
+That also settles the short string. mruby keeps one of those inside the
+`RString` object, where there is no room behind it; asking for the
+padding forces the allocation instead.
 
 **A test copies.** A test hands over an mruby string, which has no page
 behind it. The binding copies it into a buffer of `length +
