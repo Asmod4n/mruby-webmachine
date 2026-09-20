@@ -1144,58 +1144,44 @@ One read transaction per thread, and a count on it. A response that
 sends bytes out of the map holds the transaction, because a value from
 `mdb_get` lives until the end of its transaction and the send reads it
 long after the handler returned. When the count falls to zero the
-transaction resets, and the next use renews it. So every response in
-flight shares one snapshot, one reader slot is held per thread, and the
-snapshot moves on in the first quiet moment.
+transaction resets, and the next use renews it. That is correctness, and
+it holds whatever the rates are: `passwd.cpp` in the archive resets
+before it reads, and that is the bug not to copy.
 
-It has to move on, because a held snapshot is a file that grows. LMDB
-says so in its own header - "Read transactions prevent reuse of pages
-freed by newer write transactions, thus the database can grow quickly" -
-and measured against the liblmdb of this tree it is not a small effect.
-200 rounds, each overwriting the same 64 keys with 4 KiB, so the content
-stays 256 KiB throughout:
+Everything else about these transactions follows from the rates, and the
+rates here are mild: the writer commits every few hours, a send finishes
+in milliseconds. So a renew on the next use already carries the newest
+snapshot within a request, and nothing has to be told anything.
 
-    no reader                536 576 -> 1 605 632 bytes
-    one open read transaction 536 576 -> 108 244 992 bytes
+A held snapshot can make the writer's file grow - LMDB's own header says
+"Read transactions prevent reuse of pages freed by newer write
+transactions, thus the database can grow quickly", and measured against
+the liblmdb of this tree, 200 rounds overwriting the same 64 keys of
+4 KiB take the file to 1.6 MB with nobody reading and to 108 MB with one
+read transaction left open. That is the mechanism, not this workload: it
+needs writes and a reader at the same time, over and over, and here
+there is one write every few hours against readers that live for
+milliseconds.
 
-A hundred times over, for the same writes. At 2000 rounds the arm with
-the reader ran a 1 GiB map out of space and the arm without it stood at
-one and a half megabytes. The reader writes nothing; it holds down what
-the writer would otherwise take back.
+The case that does reach us is a reader that dies. Its slot stays in the
+lock file and no later write can ever take those pages back, so even one
+commit every few hours accumulates for as long as the file lives. The
+header names it - "stale reader transactions left behind by an aborted
+program cause further writes to grow the database quickly" - and
+`mdb_reader_check` clears it. It belongs in the writer.
 
-A reader that dies holds it down forever: its slot stays in the lock
-file, and the header names that case too - "stale reader transactions
-left behind by an aborted program cause further writes to grow the
-database quickly". `mdb_reader_check` clears it, and it belongs in the
-writer.
+If the server ever does hold state of its own that a commit invalidates,
+it has to be told, and then the answer is a signal: the reactor already
+reads a signalfd on the ring, the message needs no content because the
+reaction is always the same renew, and the coalescing a standard signal
+does is right rather than lossy. `SIGRTMIN+0`, so no application's use
+of `SIGUSR1` collides and `sigqueue` stays open for naming a route.
+Its price is a pid, and a pid is reused, so the server would hold an
+exclusive `flock` on its pid file and a writer that can take that lock
+would know the server is gone.
 
-The writer therefore tells the server when it has committed. Not for
-correctness - a renew reads the newest snapshot by itself - but for
-promptness, because under steady load the count is rarely zero and the
-server would sit on an old snapshot without knowing. The message carries
-the route and the key, an empty key for everything under that route, and
-both empty for everything, so the server can drop what it derived rather
-than all of it.
-
-A signal carries it, and the reactor already reads a signalfd on the
-ring. The message needs no content: the answer to it is always the same
-renew, so the coalescing that a standard signal does is right here
-rather than lossy. `SIGRTMIN+0`, so that no application's own use of
-`SIGUSR1` collides with it, and so that `sigqueue` stays available if a
-route ever has to be named - `signalfd_siginfo.ssi_int` carries 32 bits,
-at the price of that coalescing.
-
-A signal needs a pid, and a pid is reused. So the server holds an
-exclusive `flock` on its pid file for as long as it runs, and the writer
-takes a failure to lock that file as "the server is there". Without the
-lock the file is a guess, and the guess eventually signals a stranger.
-
-Where several reactor threads each hold a transaction, only one of them
-reads the signalfd. That is no longer an IPC question: the reader raises
-an atomic counter and every thread compares it against the one its own
-snapshot was taken at.
-
-Not inotify on the data file: LMDB writes with `write` or with `msync`
-depending on `writemap`, and an event is not promised. Not a generation
-number inside the database either - reading it needs the renew it is
-supposed to ask for.
+Two ways that were looked at and are worse: inotify on the data file,
+because LMDB writes with `write` or with `msync` depending on
+`writemap` and an event is not promised; and a generation number inside
+the database, because reading it needs the renew it is supposed to ask
+for.
