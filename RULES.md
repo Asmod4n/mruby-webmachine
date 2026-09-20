@@ -526,6 +526,29 @@ return, 28.5 ns with helpers on `std::optional` and a `Refusal` above
 them. The same full record on `parse_field_value_parameter`, which runs
 once per parameter, cost 16.3 ns to 31.6 ns.
 
+That number says what an error carries, and it says nothing about the
+wrapper. The wrapper was measured after it: `parse_host` in three
+shapes, in one binary, `WM_MARCH=x86-64-v3`.
+
+| shape | a name | a name and a port | a refused name |
+|---|---|---|---|
+| `std::expected<Host, Refusal>` | 10.1 ns | 15.5 ns | 8.04 ns |
+| `std::optional<Host>` | 10.0 ns | 15.5 ns | 8.05 ns |
+| a `Refusal` inside the returned value | 6.96 ns | 15.5 ns | 8.08 ns |
+
+Medians of five repetitions, all three arms in one binary.
+`std::expected` costs nothing over `std::optional`: both are 32 bytes
+here and both come back in registers. The third shape wins 3 ns on the
+short name alone, where the work is small enough for one branch to
+show, and it loses the thing the other two have: the compiler makes
+nobody look. So `std::expected` stays the shape of a function that can
+refuse, and "it is slow" was never measured about it.
+
+One call of it is banned inside the tree: `.value()`. It throws
+`std::bad_expected_access<Refusal>`, and no catch here names that type,
+so it ends the process. Ask with `if (!got)` and read with `*got`.
+simdjson has the same pair and calls them the same way.
+
 ## The optimal case is optimized, and the cold path stays usable
 
 The straight line through a function is the one that succeeds, and it
