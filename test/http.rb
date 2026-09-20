@@ -524,6 +524,13 @@ assert('is_reg_name takes the names a Host field carries') do
   end
 end
 
+# The wide classifier reads a byte as two nibbles and answers from a
+# 16 byte table, and that form reaches ASCII alone: its high nibble
+# carries eight bits for sixteen nibbles. So a set that holds obs-text
+# (%x80-FF) - qdtext, and the bytes inside an IP-literal - has no wide
+# form at all and walks byte by byte. ascii_low_nibble_bits_of is named
+# for that limit, and a set that needs obs-text may not be given to it.
+#
 # A token and a reg-name are different sets, and the two must not drift
 # into each other.
 assert('a reg-name and a token allow different bytes') do
@@ -853,9 +860,13 @@ assert('parse_request_target splits an origin-form at the first question mark') 
   assert_equal '', c[TARGET_QUERY]
 end
 
-# RFC 3986 3.3: pchar carries "%" for a pct-encoded triplet and the
-# sub-delims, so a path holds far more than letters. percent_decode
-# reads the two HEXDIG behind the "%"; this step only sees the bytes.
+# RFC 3986 3.3 Path
+# A segment holds pchar, and pchar is more than letters: the unreserved
+# marks - . _ ~, a "%" that starts a pct-encoded triplet, the eighteen
+# sub-delims ! $ & ' ( ) * + , ; = and then ":" and "@". The "/" between
+# the segments is allowed here as well, because this reads the whole
+# path at once. The two HEXDIG behind a "%" are percent_decode's to
+# check; this step sees bytes and not triplets.
 assert('parse_request_target takes every byte RFC 3986 3.3 allows in a path') do
   a = Webmachine::SpecHttp.parse_request_target("/a%20b/c:d@e/f!$&'()*+,;=~-._/", 'GET')
   assert_equal "/a%20b/c:d@e/f!$&'()*+,;=~-._/", a[TARGET_PATH]

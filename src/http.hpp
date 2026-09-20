@@ -210,7 +210,8 @@ inline constexpr std::array<unsigned char, 16> kHighNibbleBit = [] {
     return table;
 }();
 
-constexpr std::array<unsigned char, 16> low_nibble_bits_of(const std::array<bool, 256> &allowed)
+constexpr std::array<unsigned char, 16>
+ascii_low_nibble_bits_of(const std::array<bool, 256> &allowed)
 {
     std::array<unsigned char, 16> table{};
     for (unsigned byte = 0; byte < 128; byte++)
@@ -233,7 +234,7 @@ inline constexpr std::array<bool, 256> kRegName = [] {
     return table;
 }();
 
-inline constexpr auto kRegNameLowBits = low_nibble_bits_of(kRegName);
+inline constexpr auto kRegNameLowBits = ascii_low_nibble_bits_of(kRegName);
 
 inline constexpr std::array<bool, 256> kIpLiteral = [] {
     std::array<bool, 256> table{};
@@ -255,9 +256,6 @@ inline constexpr std::array<bool, 256> kLowercaseTchar = [] {
     return table;
 }();
 
-// RFC 3986 3.3: segment = *pchar, and pchar = unreserved / pct-encoded /
-// sub-delims / ":" / "@". The "%" of a pct-encoded triplet is a byte of
-// the set; the two HEXDIG behind it are percent_decode's to check.
 inline constexpr std::array<bool, 256> kPathByte = [] {
     std::array<bool, 256> table{};
     for (const char letter : std::string_view("-._~%!$&'()*+,;=:@/"))
@@ -271,19 +269,16 @@ inline constexpr std::array<bool, 256> kPathByte = [] {
     return table;
 }();
 
-// RFC 3986 3.4: query = *( pchar / "/" / "?" ).
 inline constexpr std::array<bool, 256> kQueryByte = [] {
     std::array<bool, 256> table = kPathByte;
     table.at('?') = true;
     return table;
 }();
 
-inline constexpr auto kIpLiteralLowBits = low_nibble_bits_of(kIpLiteral);
-inline constexpr auto kPathByteLowBits = low_nibble_bits_of(kPathByte);
-inline constexpr auto kQueryByteLowBits = low_nibble_bits_of(kQueryByte);
-inline constexpr auto kTcharLowBits = low_nibble_bits_of(kTchar);
-inline constexpr auto kQdtextLowBits = low_nibble_bits_of(kQdtext);
-inline constexpr auto kLowercaseTcharLowBits = low_nibble_bits_of(kLowercaseTchar);
+inline constexpr auto kPathByteLowBits = ascii_low_nibble_bits_of(kPathByte);
+inline constexpr auto kQueryByteLowBits = ascii_low_nibble_bits_of(kQueryByte);
+inline constexpr auto kTcharLowBits = ascii_low_nibble_bits_of(kTchar);
+inline constexpr auto kLowercaseTcharLowBits = ascii_low_nibble_bits_of(kLowercaseTchar);
 
 inline bool every_byte_is_allowed(const std::string_view text,
                                   const std::array<bool, 256> &allowed)
@@ -452,7 +447,6 @@ struct Resource {
     std::string_view target;
     Representation (*select_representation)(const Request);
 };
-
 
 inline std::optional<unsigned> parse_digits(const std::string_view text)
 {
@@ -743,7 +737,6 @@ struct OriginForm {
     std::string_view query;
 };
 
-// RFC 9112 3.2.1: origin-form = absolute-path [ "?" query ].
 inline std::expected<OriginForm, Refusal> parse_origin_form(const std::string_view text)
 {
     if (!text.starts_with('/')) [[unlikely]]
@@ -760,7 +753,6 @@ inline std::expected<OriginForm, Refusal> parse_origin_form(const std::string_vi
     return OriginForm{path, *query};
 }
 
-// RFC 9112 3.2.3: authority-form = uri-host ":" port. Both are there.
 inline std::expected<Host, Refusal> parse_authority_form(const std::string_view text)
 {
     const auto host = parse_host(text);
@@ -771,11 +763,6 @@ inline std::expected<Host, Refusal> parse_authority_form(const std::string_view 
     return *host;
 }
 
-// RFC 9112 3.2.2: absolute-form = absolute-URI, which for this server is
-// the http-URI and the https-URI of RFC 9110 4.2.1 and 4.2.2:
-// "http://" authority path-abempty [ "?" query ]. RFC 9110 4.2.4 says a
-// recipient treats a userinfo as an error, because it hides the
-// authority from a reader.
 inline std::expected<RequestTarget, Refusal> parse_absolute_form(const std::string_view text)
 {
     const size_t mark = text.find("://");
@@ -812,10 +799,6 @@ struct PathWalk {
     std::string_view rest;
 };
 
-// RFC 3986 3.3: a path is segments behind slashes, and the walk gives
-// them one at a time. "/a/" holds two segments, "a" and the empty one
-// the trailing slash makes, so the caller stops on an empty rest and
-// not on an empty segment.
 inline PathWalk next_segment(const std::string_view path)
 {
     const std::string_view after = path.substr(path.starts_with('/') ? 1 : 0);
@@ -842,11 +825,6 @@ inline bool path_has_dot_segment(const std::string_view path)
     return false;
 }
 
-// RFC 3986 5.2.4, the five cases of its loop in its order. RFC 3986
-// 6.2.2.3 asks a recipient to run it over a path that is already
-// absolute, because a "." or a ".." names the same resource as the path
-// without it. A path that carries none comes back unchanged, which
-// path_has_dot_segment answers without building anything.
 inline std::string remove_dot_segments(const std::string_view path)
 {
     std::string output;
@@ -879,22 +857,6 @@ inline std::string remove_dot_segments(const std::string_view path)
     return output;
 }
 
-// RFC 3986 2.1: pct-encoded = "%" HEXDIG HEXDIG, in either case.
-// std::from_chars with base 16 says whether both digits are digits.
-//
-// ada decodes and this checks, because the two follow different
-// documents. ada::unicode::percent_decode is the WHATWG rule, which
-// keeps a "%" that starts no triplet as a byte of its own. Then one
-// resource has two names - "/a%2" and "/a%2" decoded - and the two do
-// not compare equal. RFC 3986 2.1 knows no such byte, so a target that
-// carries one is refused here, in front of the decoder, the way the
-// grammar check stands in front of picohttpparser.
-//
-// RFC 3986 2.4 says when this runs: the components are separated first
-// and the octets inside one of them are decoded after, "as otherwise
-// the data may be mistaken for component delimiters". So this takes one
-// segment, one parameter or one field value, and never a whole path.
-// "%2F" is a byte of that name here and never a separator.
 inline std::expected<std::string, Refusal> percent_decode(const std::string_view text)
 {
     const size_t first = text.find('%');
