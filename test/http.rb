@@ -1437,6 +1437,49 @@ assert('the eight methods of RFC 9110 9.3 and what 9.2 says about them') do
   end
 end
 
+# RFC 10008 3: Accept-Query "contains a list of media ranges using
+# Structured Fields syntax ... containing the media range value without
+# parameters", and "media type parameters, if any, are mapped to
+# Structured Field Parameters".
+#
+# The RFC spells application/jsonpath as a String in one example and
+# application/sql as a Token in the same line. That choice carries no
+# meaning - "recipients MAY convert Tokens to Strings, but MUST NOT
+# process them differently based on the received type" - so this writes
+# a Token wherever RFC 9651's sf-token allows one, and a String
+# otherwise, which is one rule instead of a table of habits.
+assert('spell_accept_query writes RFC 9651 Structured Fields') do
+  assert_equal 'application/sql',
+               Webmachine::SpecHttp.spell_accept_query(['application/sql'])
+  assert_equal 'application/x-www-form-urlencoded, application/sql',
+               Webmachine::SpecHttp.spell_accept_query(['application/x-www-form-urlencoded',
+                                                        'application/sql'])
+  assert_equal 'application/jsonpath, application/xslt+xml',
+               Webmachine::SpecHttp.spell_accept_query(['application/jsonpath',
+                                                        'application/xslt+xml'])
+  # A media type parameter becomes a Structured Field parameter. Its key
+  # is lowercased because RFC 9651 spells key as lcalpha alone; its value
+  # is not, because no rule asks for that. RFC 9110 8.3.2 makes a charset
+  # case insensitive to compare, which is a question about meaning and
+  # not about how the bytes are written.
+  assert_equal 'application/sql;charset=UTF-8',
+               Webmachine::SpecHttp.spell_accept_query(['application/sql;charset=UTF-8'])
+  assert_equal 'application/sql;charset=UTF-8',
+               Webmachine::SpecHttp.spell_accept_query(['application/sql;CharSet="UTF-8"'])
+  # RFC 10008 3: "The only supported uses of wildcards are */*, which
+  # matches any type, or xxxx/*".
+  assert_equal '*/*', Webmachine::SpecHttp.spell_accept_query(['*/*'])
+  assert_equal 'text/*', Webmachine::SpecHttp.spell_accept_query(['text/*'])
+  assert_equal '', Webmachine::SpecHttp.spell_accept_query([])
+end
+
+# RFC 10008 3: "Media types do not exactly map to Tokens; for instance,
+# they allow a leading digit. In cases like these, the String format
+# needs to be used."
+assert('a media type that is no Token is written as a String') do
+  assert_equal '"3gpp/mp4"', Webmachine::SpecHttp.spell_accept_query(['3gpp/mp4'])
+end
+
 # webmachine-ruby's STANDARD_HTTP_METHODS, in its order, and QUERY after
 # it. known_methods is what the server understands - outside it is the
 # 501 of B12 - and it is not allowed_methods, which webmachine defaults

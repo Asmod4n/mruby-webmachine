@@ -32,6 +32,8 @@ is a bug in this directory, not a local decision.
 | 8259 | JSON, for the escaping a problem document needs |
 | 5789 | the PATCH method |
 | 2046 | media types |
+| 9651 | Structured Field Values, which Accept-Query is written in |
+| 10008 | the QUERY method |
 
 A specification this tree starts to implement is downloaded here in the
 same commit as the first function that reads it.

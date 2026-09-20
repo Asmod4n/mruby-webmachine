@@ -82,6 +82,11 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "range-unit \"=\" OWS 1#( first-pos \"-\" [ last-pos ] / \"-\" suffix-length )", 400},
     {"RFC 9110 8.3.1", "media-type", "A media type this resource provides is not valid",
      "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 500},
+    {"RFC 9651 4.1", "sf-item",
+     "A media type this resource provides cannot be spelled as a Structured Field",
+     "sf-token = ( ALPHA / \"*\" ) *( tchar / \":\" / \"/\" ); a string holds %x20-7E; "
+     "a parameter key holds ( lcalpha / \"*\" ) *( lcalpha / DIGIT / \"_\" / \"-\" / \".\" / \"*\" )",
+     500},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -109,6 +114,7 @@ inline constexpr uint16_t kContentLengthProblem = 21;
 inline constexpr uint16_t kQvalueProblem = 22;
 inline constexpr uint16_t kRangeProblem = 23;
 inline constexpr uint16_t kProvidedMediaTypeProblem = 24;
+inline constexpr uint16_t kStructuredItemProblem = 25;
 
 struct Refusal {
     uint16_t problem;
@@ -311,6 +317,13 @@ constexpr char ascii_lowered(const char letter)
 {
     const unsigned byte = static_cast<unsigned char>(letter);
     return static_cast<char>(letter + 0x20 * (byte - 'A' < 26u));
+}
+
+inline std::string ascii_lowered_copy(const std::string_view text)
+{
+    std::string lowered(text);
+    std::ranges::transform(lowered, lowered.begin(), ascii_lowered);
+    return lowered;
 }
 
 constexpr bool equal_ignoring_case(const std::string_view left, const std::string_view right)
@@ -1511,6 +1524,107 @@ inline std::expected<uint16_t, Refusal> language_weight(const std::string_view a
         rest = element->rest;
     }
     return weight;
+}
+
+// RFC 9651 4.1.3.1: sf-token = ( ALPHA / "*" ) *( tchar / ":" / "/" ).
+constexpr bool is_structured_token(const std::string_view text)
+{
+    if (text.empty() || !(is_alpha(text.front()) || text.front() == '*'))
+        return false;
+    return std::ranges::all_of(text, [](const char letter) {
+        return is_tchar(letter) || letter == ':' || letter == '/';
+    });
+}
+
+// RFC 9651: key = ( lcalpha / "*" ) *( lcalpha / DIGIT / "_" / "-" / "."
+// / "*" ). A media type parameter name is a tchar run and case
+// insensitive, so most of them lower into a key and a few - the ones
+// holding ! # $ % & ' + ^ ` | ~ - cannot.
+constexpr bool is_structured_key(const std::string_view text)
+{
+    const auto is_lowercase_alpha = [](const char letter) {
+        return letter >= 'a' && letter <= 'z';
+    };
+    if (text.empty() || !(is_lowercase_alpha(text.front()) || text.front() == '*'))
+        return false;
+    return std::ranges::all_of(text, [&is_lowercase_alpha](const char letter) {
+        return is_lowercase_alpha(letter) || is_digit(letter) || letter == '_' ||
+               letter == '-' || letter == '.' || letter == '*';
+    });
+}
+
+// RFC 9651: sf-string = DQUOTE *( unescaped / "%" / bs-escaped ) DQUOTE,
+// unescaped = %x20-21 / %x23-24 / %x26-5B / %x5D-7E, and
+// bs-escaped = "\" ( DQUOTE / "\" ). So only those two bytes are
+// escaped, and nothing outside %x20-7E can be carried at all.
+inline std::expected<std::string, Refusal> spell_structured_string(const std::string_view text)
+{
+    std::string spelled(1, '"');
+    for (size_t at = 0; at < text.size(); at++) {
+        const unsigned char byte = static_cast<unsigned char>(text.at(at));
+        if (byte < 0x20 || byte > 0x7e) [[unlikely]]
+            return std::unexpected(
+                Refusal{kStructuredItemProblem, static_cast<uint32_t>(at)});
+        if (byte == '"' || byte == '\\')
+            spelled.push_back('\\');
+        spelled.push_back(text.at(at));
+    }
+    spelled.push_back('"');
+    return spelled;
+}
+
+// A token where the bytes allow one, a string otherwise. RFC 10008 3 says
+// the choice carries no meaning: recipients "MAY convert Tokens to
+// Strings, but MUST NOT process them differently based on the received
+// type", so one rule, applied everywhere, is enough.
+inline std::expected<std::string, Refusal> spell_structured_item(const std::string_view text)
+{
+    if (is_structured_token(text))
+        return std::string(text);
+    return spell_structured_string(text);
+}
+
+// RFC 10008 3: the Accept-Query response field "contains a list of media
+// ranges ... using Structured Fields syntax", each "without parameters",
+// and "media type parameters, if any, are mapped to Structured Field
+// Parameters". It is built once, from what the resource declared, and
+// sent as bytes from then on.
+inline std::expected<std::string, Refusal>
+spell_accept_query(const std::span<const MediaType> provided)
+{
+    std::string spelled;
+    for (const MediaType &media : provided) {
+        if (!spelled.empty())
+            spelled.append(", ");
+        std::string range(media.type);
+        range.push_back('/');
+        range.append(media.subtype);
+        const auto item = spell_structured_item(range);
+        if (!item) [[unlikely]]
+            return std::unexpected(item.error());
+        spelled.append(*item);
+        std::string_view rest = media.parameters;
+        while (true) {
+            const auto parameter = parse_field_value_parameter(rest);
+            if (!parameter) [[unlikely]]
+                return std::unexpected(Refusal{kProvidedMediaTypeProblem,
+                                               parameter.error().offset});
+            if (!*parameter)
+                break;
+            const std::string key = ascii_lowered_copy((*parameter)->name);
+            if (!is_structured_key(key)) [[unlikely]]
+                return std::unexpected(Refusal{kStructuredItemProblem, 0});
+            const auto value = spell_structured_item(unquoted_token((*parameter)->value));
+            if (!value) [[unlikely]]
+                return std::unexpected(value.error());
+            spelled.push_back(';');
+            spelled.append(key);
+            spelled.push_back('=');
+            spelled.append(*value);
+            rest = (*parameter)->rest;
+        }
+    }
+    return spelled;
 }
 
 struct Chosen {

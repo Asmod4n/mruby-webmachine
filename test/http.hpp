@@ -719,6 +719,28 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
 // std::exception promises. It returns title.data(), which is only a C
 // string as long as every row of the table is a literal. This says so
 // for every row rather than trusting it.
+mrb_value spec_spell_accept_query(mrb_state *mrb, mrb_value)
+{
+    mrb_value list;
+    mrb_get_args(mrb, "A", &list);
+    std::vector<Padded> held;
+    std::vector<http::MediaType> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held) {
+        const auto media = http::parse_media_type(one.view());
+        if (!media)
+            return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
+        provided.push_back(*media);
+    }
+    const auto got = http::spell_accept_query(provided);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
+    return cpp_to_mrb_value(mrb, std::string_view(*got));
+}
+
 mrb_value spec_known_methods(mrb_state *mrb, mrb_value)
 {
     mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kKnownMethods.size()));
@@ -1045,6 +1067,8 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "field_value?", spec_is_field_value, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_accept_query", spec_spell_accept_query,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods,
                                MRB_ARGS_NONE());
