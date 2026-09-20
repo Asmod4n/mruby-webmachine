@@ -1401,6 +1401,73 @@ assert('weight_of answers 1 where no q parameter stands') do
   assert_equal 'qvalue', Webmachine::SpecHttp.weight_of(';q=2')
 end
 
+# RFC 9110 12.5.1, Table 5. The table in the RFC has one wrong row:
+# errata 7138, verified 2022-11-09, says the last one must read 0.3 and
+# not 0.7. The 0.7 is left over from RFC 7231, where the Accept field of
+# the example still held "text/html;q=0.7".
+assert('media_type_weight answers Table 5 of RFC 9110 12.5.1') do
+  accept = 'text/*;q=0.3, text/plain;q=0.7, text/plain;format=flowed, ' \
+           'text/plain;format=fixed;q=0.4, */*;q=0.5'
+  assert_equal 1000, Webmachine::SpecHttp.media_type_weight(accept, 'text/plain;format=flowed')
+  assert_equal 700, Webmachine::SpecHttp.media_type_weight(accept, 'text/plain')
+  assert_equal 300, Webmachine::SpecHttp.media_type_weight(accept, 'text/html')
+  assert_equal 500, Webmachine::SpecHttp.media_type_weight(accept, 'image/jpeg')
+  assert_equal 400, Webmachine::SpecHttp.media_type_weight(accept, 'text/plain;format=fixed')
+  assert_equal 300, Webmachine::SpecHttp.media_type_weight(accept, 'text/html;level=3')
+end
+
+# RFC 9110 12.5.1: "Media ranges can be overridden by more specific media
+# ranges or specific media types. If more than one media range applies to
+# a given type, the most specific reference has precedence."
+assert('media_type_weight takes the most specific range that matches') do
+  assert_equal 1000, Webmachine::SpecHttp.media_type_weight('text/*, text/plain', 'text/plain')
+  assert_equal 200, Webmachine::SpecHttp.media_type_weight('*/*;q=0.2, text/*', 'image/png')
+  assert_equal 1000, Webmachine::SpecHttp.media_type_weight('*/*;q=0.2, text/*', 'text/plain')
+  assert_equal 0, Webmachine::SpecHttp.media_type_weight('text/html', 'application/json')
+  assert_equal 0, Webmachine::SpecHttp.media_type_weight('*/*;q=0', 'text/plain')
+end
+
+# RFC 9110 12.5.1: "Recipients SHOULD process any parameter named 'q' as
+# weight, regardless of parameter ordering." So q is not counted as a
+# media type parameter wherever it stands.
+assert('media_type_weight reads q as the weight and not as a parameter') do
+  assert_equal 800,
+               Webmachine::SpecHttp.media_type_weight('text/plain;q=0.8;format=flowed',
+                                                      'text/plain;format=flowed')
+  assert_equal 0,
+               Webmachine::SpecHttp.media_type_weight('text/plain;q=0.8;format=flowed',
+                                                      'text/plain')
+end
+
+# RFC 9110 12.5.1: a media-range is "*/*" or "type/*" or "type/subtype".
+# "*/json" is none of the three.
+assert('media_type_weight refuses a range with a wildcard type and a named subtype') do
+  assert_equal ['media-type', 0], Webmachine::SpecHttp.media_type_weight('*/json', 'text/plain')
+end
+
+# RFC 4647 2.1: language-range = (1*8ALPHA *("-" 1*8alphanum)) / "*".
+assert('is_language_range takes a tag or the wildcard') do
+  ['de', 'de-DE', 'zh-Hant-CN', '*'].each do |range|
+    assert_true Webmachine::SpecHttp.language_range?(range), range
+  end
+  ['', '*-DE', 'de-', 'deutschland', '1de'].each do |bad|
+    assert_false Webmachine::SpecHttp.language_range?(bad), bad
+  end
+end
+
+# RFC 4647 3.3.1 Basic Filtering, with the three examples the section
+# itself gives: "de-de" matches "de-DE-1996" and matches neither
+# "de-Deva" nor "de-Latn-DE".
+assert('language_range_matches is the basic filtering of RFC 4647 3.3.1') do
+  assert_true Webmachine::SpecHttp.language_range_matches?('de-de', 'de-DE-1996')
+  assert_false Webmachine::SpecHttp.language_range_matches?('de-de', 'de-Deva')
+  assert_false Webmachine::SpecHttp.language_range_matches?('de-de', 'de-Latn-DE')
+  assert_true Webmachine::SpecHttp.language_range_matches?('de', 'de-DE-1996')
+  assert_true Webmachine::SpecHttp.language_range_matches?('DE', 'de')
+  assert_false Webmachine::SpecHttp.language_range_matches?('de-DE', 'de')
+  assert_true Webmachine::SpecHttp.language_range_matches?('*', 'zh-Hant-CN')
+end
+
 SPEC_UNIT  = 0
 SPEC_SET   = 1
 RANGE_FROM = 0

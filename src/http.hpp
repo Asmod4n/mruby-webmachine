@@ -79,7 +79,9 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
     {"RFC 9110 12.4.2", "qvalue", "The quality value is not valid",
      "( \"0\" [ \".\" 0*3DIGIT ] ) / ( \"1\" [ \".\" 0*3(\"0\") ] )", 400},
     {"RFC 9110 14.1.1", "range-spec", "The Range field is not valid",
-     "range-unit \"=\" 1#( first-pos \"-\" [ last-pos ] / \"-\" suffix-length )", 400},
+     "range-unit \"=\" OWS 1#( first-pos \"-\" [ last-pos ] / \"-\" suffix-length )", 400},
+    {"RFC 9110 8.3.1", "media-type", "A media type this resource provides is not valid",
+     "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 500},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -106,6 +108,7 @@ inline constexpr uint16_t kMediaTypeProblem = 20;
 inline constexpr uint16_t kContentLengthProblem = 21;
 inline constexpr uint16_t kQvalueProblem = 22;
 inline constexpr uint16_t kRangeProblem = 23;
+inline constexpr uint16_t kProvidedMediaTypeProblem = 24;
 
 struct Refusal {
     uint16_t problem;
@@ -333,18 +336,18 @@ inline bool every_byte_is_allowed(const std::string_view text,
 }
 
 #if defined(__ARM_NEON)
-inline bool neon_block_is_allowed(const unsigned char *at, const size_t length,
-                                  const std::array<unsigned char, 16> &low_bits)
+inline uint64_t neon_block_refusals(const unsigned char *at,
+                                    const std::array<unsigned char, 16> &low_bits)
 {
     const uint8x16_t bytes = vld1q_u8(at);
     const uint8x16_t low =
         vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
     const uint8x16_t high = vqtbl1q_u8(vld1q_u8(kHighNibbleBit.data()), vshrq_n_u8(bytes, 4));
-    const uint8x16_t lanes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
-    const uint8x16_t beyond =
-        vcgeq_u8(lanes, vdupq_n_u8(static_cast<unsigned char>(std::min(length, size_t{16}))));
-    return vminvq_u8(vorrq_u8(vandq_u8(low, high), beyond)) != 0;
+    const uint8x16_t refused = vceqq_u8(vandq_u8(low, high), vdupq_n_u8(0));
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(refused), 4)), 0);
 }
+
+inline constexpr size_t kNeonNibblesPerByte = 4;
 #endif
 
 inline constexpr size_t kWidePadding = 64;
@@ -363,55 +366,55 @@ inline uint32_t avx2_block_refusals(const char *at, const __m256i low_table,
 }
 #endif
 
-inline bool every_byte_is_allowed(const std::string_view text,
-                                  const std::array<bool, 256> &allowed,
-                                  [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
+inline size_t allowed_run_length(const std::string_view padded,
+                                 [[maybe_unused]] const std::array<bool, 256> &allowed,
+                                 [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
 {
     static_assert(32 <= kWidePadding);
-    if (text.empty()) [[unlikely]]
-        return false;
 #if defined(__AVX2__)
     const __m256i low_table = _mm256_broadcastsi128_si256(
         _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data())));
     const __m256i high_table = _mm256_broadcastsi128_si256(
         _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data())));
-    if (text.size() <= 32) {
-        const uint32_t inside = text.size() == 32 ? ~0u : (1u << text.size()) - 1;
-        return (avx2_block_refusals(text.data(), low_table, high_table) & inside) == 0;
+    for (size_t at = 0; at < padded.size(); at += 32) {
+        const uint32_t refused =
+            avx2_block_refusals(std::next(padded.data(), at), low_table, high_table);
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
     }
-    size_t at = 0;
-    for (; at + 32 <= text.size(); at += 32)
-        if (avx2_block_refusals(std::next(text.data(), at), low_table, high_table) != 0)
-            [[unlikely]]
-            return false;
-    if (at == text.size())
-        return true;
-    const uint32_t inside = (1u << (text.size() - at)) - 1;
-    return (avx2_block_refusals(std::next(text.data(), at), low_table, high_table) & inside) == 0;
+    return padded.size();
 #elif defined(__ARM_NEON)
-    const unsigned char *const from = reinterpret_cast<const unsigned char *>(text.data());
-    for (size_t at = 0; at < text.size(); at += 16)
-        if (!neon_block_is_allowed(std::next(from, at), text.size() - at, low_bits)) [[unlikely]]
-            return false;
-    return true;
+    const unsigned char *const from = reinterpret_cast<const unsigned char *>(padded.data());
+    for (size_t at = 0; at < padded.size(); at += 16) {
+        const uint64_t refused = neon_block_refusals(std::next(from, at), low_bits);
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)) /
+                                     kNeonNibblesPerByte,
+                            padded.size());
+    }
+    return padded.size();
 #else
-    return every_byte_is_allowed(text, allowed);
+    const auto found = std::ranges::find_if_not(padded, [&allowed](const char letter) {
+        return allowed.at(static_cast<unsigned char>(letter));
+    });
+    return static_cast<size_t>(std::distance(padded.begin(), found));
 #endif
 }
 
 inline bool is_token(const std::string_view text)
 {
-    return every_byte_is_allowed(text, kTchar, kTcharLowBits);
+    return !text.empty() && allowed_run_length(text, kTchar, kTcharLowBits) == text.size();
 }
 
 inline bool is_lowercase_token(const std::string_view text)
 {
-    return every_byte_is_allowed(text, kLowercaseTchar, kLowercaseTcharLowBits);
+    return !text.empty() &&
+           allowed_run_length(text, kLowercaseTchar, kLowercaseTcharLowBits) == text.size();
 }
 
 inline bool is_reg_name(const std::string_view host)
 {
-    return every_byte_is_allowed(host, kRegName, kRegNameLowBits);
+    return !host.empty() && allowed_run_length(host, kRegName, kRegNameLowBits) == host.size();
 }
 
 inline bool is_ip_literal(const std::string_view inside)
@@ -777,7 +780,7 @@ struct RequestTarget {
 
 inline std::expected<std::string_view, Refusal> parse_query(const std::string_view text)
 {
-    if (!text.empty() && !every_byte_is_allowed(text, kQueryByte, kQueryByteLowBits)) [[unlikely]]
+    if (allowed_run_length(text, kQueryByte, kQueryByteLowBits) != text.size()) [[unlikely]]
         return std::unexpected(Refusal{kQueryProblem, 0});
     return text;
 }
@@ -793,7 +796,7 @@ inline std::expected<OriginForm, Refusal> parse_origin_form(const std::string_vi
         return std::unexpected(Refusal{kAbsolutePathProblem, 0});
     const size_t question = text.find('?');
     const std::string_view path = text.substr(0, question);
-    if (!every_byte_is_allowed(path, kPathByte, kPathByteLowBits)) [[unlikely]]
+    if (allowed_run_length(path, kPathByte, kPathByteLowBits) != path.size()) [[unlikely]]
         return std::unexpected(Refusal{kAbsolutePathProblem, 0});
     if (question == std::string_view::npos)
         return OriginForm{path, {}};
@@ -1052,6 +1055,89 @@ inline std::expected<unsigned, Refusal> weight_of(const std::string_view paramet
     if (!*found)
         return kMostPreferred;
     return parse_qvalue(unquoted_token(**found));
+}
+
+inline constexpr unsigned kAnyMediaTypePrecedence = 1;
+inline constexpr unsigned kAnySubtypePrecedence = 2;
+inline constexpr unsigned kNamedMediaTypePrecedence = 3;
+
+inline std::expected<std::optional<unsigned>, Refusal>
+media_range_precedence(const MediaType range, const MediaType media_type)
+{
+    if (range.type == "*" && range.subtype != "*") [[unlikely]]
+        return std::unexpected(Refusal{kMediaTypeProblem, 0});
+    if (range.type != "*" && !equal_ignoring_case(range.type, media_type.type))
+        return std::optional<unsigned>{};
+    if (range.subtype != "*" && !equal_ignoring_case(range.subtype, media_type.subtype))
+        return std::optional<unsigned>{};
+    unsigned precedence = range.type == "*"      ? kAnyMediaTypePrecedence
+                          : range.subtype == "*" ? kAnySubtypePrecedence
+                                                 : kNamedMediaTypePrecedence;
+    std::string_view rest = range.parameters;
+    while (true) {
+        const auto parameter = parse_field_value_parameter(rest);
+        if (!parameter) [[unlikely]]
+            return std::unexpected(
+                moved_forward(parameter.error(), range.parameters.size() - rest.size()));
+        if (!*parameter)
+            return precedence;
+        if (!equal_ignoring_case((*parameter)->name, "q")) {
+            const auto provided = value_of_parameter(media_type.parameters, (*parameter)->name);
+            if (!provided) [[unlikely]]
+                return std::unexpected(
+                    Refusal{kProvidedMediaTypeProblem, provided.error().offset});
+            if (!*provided || !equal_ignoring_case(unquoted_token(**provided),
+                                                   unquoted_token((*parameter)->value)))
+                return std::optional<unsigned>{};
+            ++precedence;
+        }
+        rest = (*parameter)->rest;
+    }
+}
+
+inline std::expected<unsigned, Refusal> media_type_weight(const std::string_view accept,
+                                                          const MediaType media_type)
+{
+    unsigned most_specific = 0;
+    unsigned weight = 0;
+    std::string_view rest = accept;
+    while (const auto element = parse_list_element(rest)) {
+        const size_t at =
+            static_cast<size_t>(std::distance(accept.data(), element->element.data()));
+        const auto range = parse_media_type(element->element);
+        if (!range) [[unlikely]]
+            return std::unexpected(moved_forward(range.error(), at));
+        const auto precedence = media_range_precedence(*range, media_type);
+        if (!precedence) [[unlikely]]
+            return std::unexpected(precedence.error().problem == kProvidedMediaTypeProblem
+                                       ? precedence.error()
+                                       : moved_forward(precedence.error(), at));
+        if (*precedence && **precedence > most_specific) {
+            const auto found = weight_of(range->parameters);
+            if (!found) [[unlikely]]
+                return std::unexpected(moved_forward(found.error(), at));
+            most_specific = **precedence;
+            weight = *found;
+        }
+        rest = element->rest;
+    }
+    return weight;
+}
+
+inline bool is_language_range(const std::string_view text)
+{
+    return text == "*" || is_language_tag(text);
+}
+
+inline bool language_range_matches(const std::string_view range, const std::string_view tag)
+{
+    if (range == "*")
+        return true;
+    if (range.size() > tag.size())
+        return false;
+    if (range.size() < tag.size() && tag.at(range.size()) != '-')
+        return false;
+    return equal_ignoring_case(range, tag.substr(0, range.size()));
 }
 
 struct RangesSpecifier {

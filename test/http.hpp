@@ -540,6 +540,50 @@ mrb_value spec_weight_of(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
+mrb_value spec_media_type_weight(mrb_state *mrb, mrb_value)
+{
+    const char *accept = nullptr;
+    const char *provided = nullptr;
+    mrb_int accept_length = 0;
+    mrb_int provided_length = 0;
+    mrb_get_args(mrb, "ss", &accept, &accept_length, &provided, &provided_length);
+    const std::string_view field(accept, static_cast<size_t>(accept_length));
+    const auto media =
+        http::parse_media_type(std::string_view(provided, static_cast<size_t>(provided_length)));
+    if (!media)
+        return cpp_to_mrb_value(mrb, std::string_view("the provided type does not parse"));
+    const auto got = http::media_type_weight(field, *media);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), field).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::is_language_range(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_language_range_matches(mrb_state *mrb, mrb_value)
+{
+    const char *range = nullptr;
+    const char *tag = nullptr;
+    mrb_int range_length = 0;
+    mrb_int tag_length = 0;
+    mrb_get_args(mrb, "ss", &range, &range_length, &tag, &tag_length);
+    return mrb_bool_value(
+        http::language_range_matches(std::string_view(range, static_cast<size_t>(range_length)),
+                                     std::string_view(tag, static_cast<size_t>(tag_length))));
+}
+
 mrb_value spec_parse_ranges_specifier(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -773,6 +817,12 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "language_range_matches?", spec_language_range_matches,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_ranges_specifier",
                                spec_parse_ranges_specifier, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_byte_range_spec",
