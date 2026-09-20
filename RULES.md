@@ -361,12 +361,17 @@ resource_exists?, generate_etag, last_modified, delete_resource,
 create_path, process_post, finish_request - and the graph's nodes carry
 its letters. A resource that runs under webmachine-ruby runs here.
 
-A callback is a Ruby method only where an application wrote one. There
-is no application in a server that serves a docroot, and there is no
-Ruby object in a request whose every answer is a default. The graph runs
-on the answers, not on where they came from, and it cannot see the
-difference. So no type here may assume a VM, and nothing may be built
-because Ruby might ask for it later.
+Every server has an application. A docroot is one, written in C++; the
+directory listing is one, written in Ruby and compiled into the binary;
+what an operator points at with --app is one, read from a file. They
+answer the same callbacks, and the graph runs on the answers without
+seeing which language gave them.
+
+So the callbacks are a C++ interface that a Ruby binding implements, and
+not an mruby shape that C++ has to imitate. A request answered by the
+C++ application makes no Ruby object at all, and the archive answers
+those from its konst tier without entering a VM. No type here may assume
+a VM, and nothing is built because Ruby might ask for it later.
 
 That is also why a shape this tree invents may not stand where
 webmachine has one. Two did and are gone: a Representation that bundled
