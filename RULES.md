@@ -538,10 +538,40 @@ machine does not have - `bind 192.0.2.77: [Errno 99] Cannot assign
 requested address` - and that refusal stands. An operator who named one
 address asked for one address.
 
-What is not decided is whether an application hears about a change. A
-new address belongs in `app.urls`; a second hook beside `ready` is a
-question for the day something needs it. `ready` runs once and keeps
-that meaning.
+An application hears about a change through a second hook, and the hook
+says which of three things happened:
+
+    app.network_changed do |change|
+      change.what        # :added, :changed or :removed
+      change.interface   # "eth1"
+      change.urls        # what this interface carries now, empty on :removed
+      app.urls           # the whole list, already refreshed
+    end
+
+`ready` keeps its meaning: it runs once, when the server is up. This one
+runs every time the machine's network changes, and it runs after
+`app.urls` holds the new list, so the two can never disagree inside the
+block.
+
+The three are about the interface, and the addresses ride in the
+payload. An interface that appears is `:added`. An interface that gains
+or loses an address is `:changed`. An interface that goes away is
+`:removed`. An interface that is still there and is down is `:changed`
+with no URLs, because it is present and carries nothing - saying
+`:removed` for it would make two different states read the same.
+
+One change is one call. Netlink delivers a burst when an interface comes
+up - the link, then every address on it - and an application that hears
+four calls for one event has to decide which of them was real. So the
+reactor reads everything the socket has, recomputes the list once, and
+calls the hook once for each interface that differs. Decide, then do.
+
+The block runs in the reactor's VM, between requests, the way every
+other Ruby callback here does. A block that blocks stops the server, and
+that is the application author's to know.
+
+The name `network_changed` is this tree's own; no specification gives
+one.
 
 ## A gem that only the tests need is a test dependency
 
