@@ -453,6 +453,17 @@ it - so an https listener read back an http URL, and nothing in the
 suite asked. A value that is right in one of two cases is worse than one
 that is always computed: the reader cannot tell which case they are in.
 
+Three things come from ada, and one does not. `ada::parse` reads
+`conf.url`, the one URL an operator writes to say what the server
+listens on. `url_search_params` reads the settings out of that URL's
+query. `unicode::percent_decode` decodes one component of a request
+target, and the socket path of a `unix://` URL, which ada hands back in
+the URL's own spelling.
+
+What does not come from ada is the parsing of a request target. ada is
+WHATWG and a request target is RFC 3986 and RFC 9112, and the two differ
+on what they refuse. That parser is `src/http.hpp`'s.
+
 `getsockname` comes through the ring
 (`io_uring_prep_cmd_getsockname`). A kernel that cannot do it is a
 kernel this server does not run on, and the refusal says so at boot.
