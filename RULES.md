@@ -415,8 +415,13 @@ No hand written loop with a clock around it. Google Benchmark decides
 how many iterations a case needs, repeats it, and reports the median
 and the deviation, so a number arrives with the spread that made it.
 
-A measurement compares before against after, on this machine, in this
-session, with both arms built the same way.
+A measurement compares before against after in **one binary**, with both
+arms built the same way and run alternately. There is no other valid
+comparison here.
+
+So the old implementation stays, as an arm of the benchmark, until the
+change it is being judged against is decided. Deleting it first and
+reading the next run against the last one measures the link.
 
 This rule exists because a hand written harness gave 29, 45, 63 and 74
 nanoseconds for one unchanged function, and 43 against 64 in two runs
@@ -439,6 +444,11 @@ binary, and an absolute nanosecond figure is never carried from one
 build to the next. Below roughly a third, the clock cannot answer a
 question across binaries at all, and `bench/instructions.sh` is what
 can - it counts what the binary executed, and that count does not move.
+
+Measured the same day, and the reason the rule is written this hard:
+one change read 31.3 ns before and 42.1 after, which looks like a
+regression of a third. The two implementations in one binary read 3.08
+and 2.32, which is an improvement. The 42.1 was a different link.
 
 This was learned the long way. A relink changed a median by 30 percent,
 it was called code layout, then an instruction count disagreed and the
