@@ -66,6 +66,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
     {"RFC 9110 4.2.1", "scheme", "The request target is not valid", "\"http\" / \"https\"", 400},
     {"RFC 9110 4.2.4", "userinfo", "The request target is not valid",
      "no userinfo in an http or https URI", 400},
+    {"RFC 3986 2.1", "pct-encoded", "The request target is not valid", "\"%\" HEXDIG HEXDIG",
+     400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -86,6 +88,7 @@ inline constexpr uint16_t kAbsolutePathProblem = 14;
 inline constexpr uint16_t kQueryProblem = 15;
 inline constexpr uint16_t kSchemeProblem = 16;
 inline constexpr uint16_t kUserinfoProblem = 17;
+inline constexpr uint16_t kPctEncodedProblem = 18;
 
 struct Refusal {
     uint16_t problem;
@@ -872,6 +875,38 @@ inline std::string remove_dot_segments(const std::string_view path)
         }
     }
     return output;
+}
+
+// RFC 3986 2.1: pct-encoded = "%" HEXDIG HEXDIG, and the two digits are
+// read whatever case they carry. RFC 3986 2.4 says when this runs: the
+// components are separated first, and then the octets inside one of
+// them are decoded, "as otherwise the data may be mistaken for
+// component delimiters". So this takes one segment, one parameter or
+// one field, and never a whole path: "%2F" is a byte of a name here,
+// and it does not become a separator.
+//
+// A caller that has no "%" in hand calls nothing. This builds a string,
+// and a path without a triplet already is its own answer.
+inline std::expected<std::string, Refusal> percent_decode(const std::string_view text)
+{
+    std::string decoded;
+    decoded.reserve(text.size());
+    for (size_t at = 0; at < text.size(); ++at) {
+        if (text.at(at) != '%') {
+            decoded.push_back(text.at(at));
+            continue;
+        }
+        if (text.size() - at < 3) [[unlikely]]
+            return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
+        const char *const digits = std::next(text.data(), at + 1);
+        unsigned char octet = 0;
+        const auto done = std::from_chars(digits, std::next(digits, 2), octet, 16);
+        if (done.ec != std::errc{} || done.ptr != std::next(digits, 2)) [[unlikely]]
+            return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
+        decoded.push_back(static_cast<char>(octet));
+        at += 2;
+    }
+    return decoded;
 }
 
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,

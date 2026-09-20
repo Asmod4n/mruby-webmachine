@@ -1075,3 +1075,40 @@ assert('path_has_dot_segment is true for the paths remove_dot_segments changes')
     assert_equal changed, Webmachine::SpecHttp.path_has_dot_segment?(path), path
   end
 end
+
+# RFC 3986 2.1: pct-encoded = "%" HEXDIG HEXDIG, and "the uppercase
+# hexadecimal digits 'A' through 'F' are equivalent to the lowercase
+# digits".
+assert('percent_decode reads a triplet in either case') do
+  assert_equal 'a b', Webmachine::SpecHttp.percent_decode('a%20b')
+  assert_equal 'AB', Webmachine::SpecHttp.percent_decode('%41%42')
+  assert_equal '~', Webmachine::SpecHttp.percent_decode('%7e')
+  assert_equal '~', Webmachine::SpecHttp.percent_decode('%7E')
+  assert_equal 'plain', Webmachine::SpecHttp.percent_decode('plain')
+  assert_equal '', Webmachine::SpecHttp.percent_decode('')
+  assert_equal '%', Webmachine::SpecHttp.percent_decode('%25')
+end
+
+# RFC 3986 2.4: the components are separated before the octets inside
+# them are decoded, "as otherwise the data may be mistaken for component
+# delimiters". So a decoded "/" is a byte of this segment's name, and
+# every path traversal that ever worked started where that was forgotten.
+assert('percent_decode gives a byte and not a delimiter') do
+  assert_equal '/', Webmachine::SpecHttp.percent_decode('%2F')
+  assert_equal '..', Webmachine::SpecHttp.percent_decode('%2e%2e')
+  assert_equal 3, Webmachine::SpecHttp.percent_decode('a%00b').size
+  assert_equal "\xff", Webmachine::SpecHttp.percent_decode('%ff')
+end
+
+# A triplet that is not one is refused and not kept as it stands. Kept,
+# one resource would have two names, and the two would not compare
+# equal. The offset is the "%", which is the byte an operator looks for.
+assert('percent_decode refuses a triplet that is not one') do
+  ['%', '%2', '%2G', '%G2', '%%20', '% 20', 'ab%'].each do |bad|
+    e = Webmachine::SpecHttp.percent_decode(bad)
+    assert_kind_of Array, e, bad
+    assert_equal 'pct-encoded', e[0], bad
+  end
+  assert_equal 2, Webmachine::SpecHttp.percent_decode('ab%2Gd')[1]
+  assert_equal 0, Webmachine::SpecHttp.percent_decode('%-1')[1]
+end
