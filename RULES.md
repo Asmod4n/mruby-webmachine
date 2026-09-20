@@ -376,6 +376,17 @@ rule has a reason, the reason is one that a reader can check.
 configuration. A gem in the configuration is in every build and in the
 library that ships.
 
+## A grammar is read, not remembered
+
+`refs/` holds the specifications this tree implements, verbatim from the
+RFC Editor. A claim about a rule is checked there before it is written,
+and a session with no network can still check it.
+
+    grep -n "absolute-path = " refs/rfc9110.txt
+
+A specification this tree starts to implement is downloaded in the same
+commit as the first function that reads it.
+
 ## mruby has the methods CRuby has
 
 Every Array, Hash, String, Enumerable, Numeric, Symbol and Kernel method
