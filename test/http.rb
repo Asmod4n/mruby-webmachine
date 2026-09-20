@@ -1658,3 +1658,33 @@ assert('if_range_passes tells a tag from a date as RFC 9110 13.1.5 says') do
   assert_false Webmachine::SpecHttp.if_range_passes('Sun, 06 Nov 1994 08:49:37 GMT', nil, nil)
   assert_equal 'IMF-fixdate', Webmachine::SpecHttp.if_range_passes('not a date', nil, moment)
 end
+
+# RFC 9110 13.2.2 step 5 is the one webmachine never drew: "When the
+# method is GET and both Range and If-Range are present, evaluate the
+# If-Range precondition: if true and the Range is applicable, respond
+# 206; otherwise, ignore the Range header field and respond 200." RFC
+# 9110 14.2 adds the rest of it - GET is the only method with range
+# handling defined, an unknown range unit is ignored, and a range that
+# cannot be met is 416.
+#
+# The three nodes stand after O18, because O18 is where the body is
+# rendered and a range is cut from a representation that exists.
+assert('the graph answers a range request') do
+  assert_equal 'O18c', flow_targets('O18')[0][0]
+  assert_equal 'O18c', flow_targets('O18')[1][0]
+  assert_equal 'O18d', flow_targets('O18c')[0][0]
+  assert_equal 'O18b', flow_targets('O18c')[1][0]
+  assert_equal 'O18e', flow_targets('O18d')[0][0]
+  assert_equal 'O18b', flow_targets('O18d')[1][0]
+  assert_equal 206, flow_targets('O18e')[0][1]
+  assert_equal 416, flow_targets('O18e')[1][1]
+end
+
+# A request with no Range, and one whose If-Range does not match, both
+# leave the range nodes by the same door and are answered 200 or 300 by
+# the node webmachine already had.
+assert('a request without a usable range keeps webmachine answer') do
+  assert_equal 200, flow_targets('O18b')[1][1]
+  assert_equal 300, flow_targets('O18b')[0][1]
+  assert_equal 'O18', flow_targets('O16')[1][0]
+end
