@@ -370,6 +370,36 @@ A rule does not say how often it is broken, who breaks it, or what
 most people do. Those are claims, and a rule carries none. Where a
 rule has a reason, the reason is one that a reader can check.
 
+## conf.url is an ask, and it reads back as an answer
+
+`conf.url = "http://0.0.0.0:0"` is what the operator wants. What the
+kernel bound is another thing, and it is the thing an application needs.
+So the server binds, reads the name back with `getsockname`, spells a
+URL out of what it read, and writes that into `conf.url`. Then
+`app.ready` runs, and the block reads a URL that is true:
+
+    app.ready do
+      puts app.conf.url        # http://0.0.0.0:39241, the kernel's port
+    end
+
+Every part of that URL comes from the answer and not from the ask. The
+port, because port 0 is the case that makes this necessary and a test
+that wants to connect needs the number. The host, because `0.0.0.0` and
+`::` are addresses an operator did not type. The scheme, because a
+listener with TLS is `https` whatever the configuration said. A unix
+listener reads back `unix://` and its path.
+
+The archive had half of this and the half was wrong. It read the port
+back from the kernel only where the ask was port 0, and it built the
+string from what the operator had typed, with `"http://"` in front of
+it - so an https listener read back an http URL, and nothing in the
+suite asked. A value that is right in one of two cases is worse than one
+that is always computed: the reader cannot tell which case they are in.
+
+`getsockname` comes through the ring
+(`io_uring_prep_cmd_getsockname`). A kernel that cannot do it is a
+kernel this server does not run on, and the refusal says so at boot.
+
 ## A gem that only the tests need is a test dependency
 
 `spec.add_test_dependency` in `mrbgem.rake`, not `conf.gem` in a build
