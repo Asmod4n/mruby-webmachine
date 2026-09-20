@@ -460,11 +460,23 @@ list a client can use. Where the ask named one address, the list holds
 that one address and says the same thing twice, which is what a caller
 that does not want two cases needs.
 
-`getifaddrs` makes the list. It is glibc's netlink read, it runs once at
-boot and not on the serving path, so it needs no ring operation. The
-rows are filtered: the family the listener bound, `IFF_UP` and
-`IFF_RUNNING`, and nothing else is dropped - the loopback address
-belongs in the list, because a test connects to it.
+`getifaddrs` makes the list. It runs once at boot and not on the serving
+path, so it needs no ring operation. The rows are filtered: the family
+the listener bound, `IFF_UP` and `IFF_RUNNING`, and nothing else is
+dropped - the loopback address belongs in the list, because a test
+connects to it.
+
+This tree writes `getifaddrs` and slipstreamIO carries it to the
+platforms that have none. That is what slipstreamIO is: it gives every
+platform the Linux shape of a thing, and the shape is the whole point -
+`slipstream_inotify` is inotify's three calls, its mask bits and its
+record; `slipstream_signal` is signalfd's descriptor; `slipstream_tmpfile`
+is `O_TMPFILE` where it exists and `mkstemp` plus `unlink` where it does
+not. Addresses go the same way, and the underside on Windows is
+`GetAdaptersAddresses`. At 53ee540 the gem carries no such header yet -
+`grep -i ifaddr` over it finds nothing - so the call is written against
+`getifaddrs` and the seam moves under it, the way the twelve `__sys_*`
+wrappers already move under liburing.
 
 Measured here, and this machine has no IPv6 at all, so the rows that
 carry one are not measured and are not claimed:
