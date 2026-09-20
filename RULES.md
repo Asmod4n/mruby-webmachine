@@ -567,31 +567,30 @@ mapping, never handed out. Then every byte in the pool has
 question. The ring maps `(kBufCount + 1) * kBufSize` and registers
 `kBufCount`.
 
-**Memory somebody gives us.** An mruby string, an application's buffer.
-A read past the end of an object cannot fault while it stays inside one
-page, because the page is mapped in full. So the test is the page and
-not the object:
+**Nothing else is parsed.** The bytes a parser reads come from the pool
+and from nowhere else. An mruby string is a response body on its way to
+liburing, never something this tree reads a grammar out of, so there is
+no second case to write a rule for.
 
-    const uintptr_t last = reinterpret_cast<uintptr_t>(bytes) + length - 1;
-    const bool room = last % page_bytes + kWidePadding < page_bytes;
-
-`page_bytes` is read once at boot and passed; it is not a static.
-Without room, the bytes are copied into a buffer that has the padding.
-
-**The debug build always copies.** A page that exists is invisible to a
-sanitizer, so the trick hides an overrun rather than showing it. Under
-`MRB_DEBUG` the padded copy is allocated at exactly `length +
-kWidePadding`, ASan learns where the wall is, and a reader that walks
-past it is caught. `rake test` is the debug build, so the suite gets
-this for nothing.
+**A test copies.** A test hands over an mruby string, which has no page
+behind it. The binding copies it into a buffer of `length +
+kWidePadding`, so the padding is real and ASan can see the wall - a page
+that merely exists is invisible to a sanitizer and would hide an
+overrun rather than show it. `rake test` is the debug build, so the
+suite gets that for nothing.
 
 `kWidePadding` is 64, which covers AVX-512, and every wide reader
 carries `static_assert(width <= kWidePadding)`.
 
 This is simdjson's answer. `SIMDJSON_PADDING = 64` in `base.h`, its
 `padded_string` allocates `length + SIMDJSON_PADDING`, and each reader
-asserts against it. The page test and the debug branch come from
-mruby-fast-json, which has to take Ruby strings it did not allocate.
+asserts against it.
+
+mruby-fast-json answers the case this tree does not have. It takes Ruby
+strings it did not allocate, so it asks whether the read stays inside one
+mapped page - `last % page_bytes + SIMDJSON_PADDING < page_bytes` - and
+copies when it does not. Worth knowing and not worth carrying: a rule
+with no caller here is a rule that goes stale unread.
 
 Both ways answer the same, and a test holds them against each other
 over all 256 bytes at every length.

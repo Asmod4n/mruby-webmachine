@@ -444,8 +444,8 @@ end
 assert('is_token agrees with is_tchar for every byte, wide and narrow') do
   256.times do |byte|
     text = byte.chr
-    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token?(text, 64), "wide #{byte}"
-    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token?(text, 1), "narrow #{byte}"
+    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token?(text), "wide #{byte}"
+    assert_equal TCHAR.include?(byte), Webmachine::SpecHttp.token_narrow?(text), "narrow #{byte}"
   end
 end
 
@@ -453,8 +453,8 @@ assert('is_token agrees with itself at every length up to 40') do
   (1..40).each do |length|
     [0, 9, 32, 44, 58, 65, 97, 126, 127, 128, 255].each do |byte|
       text = ('a' * (length - 1)) + byte.chr
-      wide = Webmachine::SpecHttp.token?(text, 64)
-      narrow = Webmachine::SpecHttp.token?(text, text.size)
+      wide = Webmachine::SpecHttp.token?(text)
+      narrow = Webmachine::SpecHttp.token_narrow?(text)
       assert_equal narrow, wide, "length #{length} byte #{byte}"
       assert_equal TCHAR.include?(byte), wide, "length #{length} byte #{byte}"
     end
@@ -465,18 +465,18 @@ end
 # around them are not.
 assert('is_token takes the field names of a request and refuses the rest') do
   %w[Host User-Agent Accept-Encoding Sec-Fetch-Mode X-Forwarded-For].each do |name|
-    assert_true Webmachine::SpecHttp.token?(name, 64), name
+    assert_true Webmachine::SpecHttp.token?(name), name
   end
   ['Host:', 'User Agent', 'a(b)', 'a,b', "a\rb", ''].each do |bad|
-    assert_false Webmachine::SpecHttp.token?(bad, 64), bad
+    assert_false Webmachine::SpecHttp.token?(bad), bad
   end
 end
 
 # A name longer than one wide load falls back, and must answer the same.
 assert('is_token answers the same past 32 bytes') do
   long = 'x' * 40
-  assert_true Webmachine::SpecHttp.token?(long, 64)
-  assert_false Webmachine::SpecHttp.token?(long + ' ', 64)
+  assert_true Webmachine::SpecHttp.token?(long)
+  assert_false Webmachine::SpecHttp.token?(long + ' ')
 end
 
 # RFC 3986 3.2.2, which RFC 9110 7.2 uses for the Host field
@@ -495,8 +495,8 @@ REG_NAME = %q{abcdefghijklmnopqrstuvwxyz}.bytes +
 assert('is_reg_name answers RFC 3986 3.2.2 for every byte, wide and narrow') do
   256.times do |byte|
     text = byte.chr
-    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name?(text, 64), "wide #{byte}"
-    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name?(text, 1), "narrow #{byte}"
+    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name?(text), "wide #{byte}"
+    assert_equal REG_NAME.include?(byte), Webmachine::SpecHttp.reg_name_narrow?(text), "narrow #{byte}"
   end
 end
 
@@ -504,8 +504,8 @@ assert('is_reg_name agrees with itself at every length up to 40') do
   (1..40).each do |length|
     [0, 9, 32, 37, 45, 58, 91, 93, 97, 126, 127, 128, 255].each do |byte|
       text = ('a' * (length - 1)) + byte.chr
-      wide = Webmachine::SpecHttp.reg_name?(text, 64)
-      narrow = Webmachine::SpecHttp.reg_name?(text, text.size)
+      wide = Webmachine::SpecHttp.reg_name?(text)
+      narrow = Webmachine::SpecHttp.reg_name_narrow?(text)
       assert_equal narrow, wide, "length #{length} byte #{byte}"
       assert_equal REG_NAME.include?(byte), wide, "length #{length} byte #{byte}"
     end
@@ -517,20 +517,20 @@ end
 assert('is_reg_name takes the names a Host field carries') do
   %w[example.com www.example.com localhost sub.domain.test 10.0.0.1
      xn--bcher-kva.de a-b-c.example].each do |name|
-    assert_true Webmachine::SpecHttp.reg_name?(name, 64), name
+    assert_true Webmachine::SpecHttp.reg_name?(name), name
   end
   ['example.com:8080', '[::1]', 'exam ple.com', "example\rcom", 'a/b', ''].each do |bad|
-    assert_false Webmachine::SpecHttp.reg_name?(bad, 64), bad
+    assert_false Webmachine::SpecHttp.reg_name?(bad), bad
   end
 end
 
 # A token and a reg-name are different sets, and the two must not drift
 # into each other.
 assert('a reg-name and a token allow different bytes') do
-  assert_true Webmachine::SpecHttp.reg_name?('(', 64)
-  assert_false Webmachine::SpecHttp.token?('(', 64)
-  assert_true Webmachine::SpecHttp.token?('^', 64)
-  assert_false Webmachine::SpecHttp.reg_name?('^', 64)
+  assert_true Webmachine::SpecHttp.reg_name?('(')
+  assert_false Webmachine::SpecHttp.token?('(')
+  assert_true Webmachine::SpecHttp.token?('^')
+  assert_false Webmachine::SpecHttp.reg_name?('^')
 end
 
 HOST_NAME = 0
@@ -543,10 +543,10 @@ HOST_PORT = 1
 # http://127.0.0.1:8111/ puts "127.0.0.1:8111".
 
 assert('parse_host reads a name with and without a port') do
-  a = Webmachine::SpecHttp.parse_host('www.example.com', 64)
+  a = Webmachine::SpecHttp.parse_host('www.example.com')
   assert_equal 'www.example.com', a[HOST_NAME]
   assert_nil a[HOST_PORT]
-  b = Webmachine::SpecHttp.parse_host('www.example.com:8080', 64)
+  b = Webmachine::SpecHttp.parse_host('www.example.com:8080')
   assert_equal 'www.example.com', b[HOST_NAME]
   assert_equal 8080, b[HOST_PORT]
 end
@@ -554,7 +554,7 @@ end
 # An address is a reg-name as far as the grammar goes, so it needs no
 # separate path. Whether it routes anywhere is another question.
 assert('parse_host reads an IPv4 address like any other name') do
-  a = Webmachine::SpecHttp.parse_host('10.0.0.1:80', 64)
+  a = Webmachine::SpecHttp.parse_host('10.0.0.1:80')
   assert_equal '10.0.0.1', a[HOST_NAME]
   assert_equal 80, a[HOST_PORT]
 end
@@ -562,10 +562,10 @@ end
 # The brackets stay in the name: that is what the ABNF says, and it is
 # what a configured address is compared against.
 assert('parse_host keeps the brackets of an IP-literal') do
-  a = Webmachine::SpecHttp.parse_host('[::1]', 64)
+  a = Webmachine::SpecHttp.parse_host('[::1]')
   assert_equal '[::1]', a[HOST_NAME]
   assert_nil a[HOST_PORT]
-  b = Webmachine::SpecHttp.parse_host('[2001:db8::8a2e:370:7334]:443', 64)
+  b = Webmachine::SpecHttp.parse_host('[2001:db8::8a2e:370:7334]:443')
   assert_equal '[2001:db8::8a2e:370:7334]', b[HOST_NAME]
   assert_equal 443, b[HOST_PORT]
 end
@@ -573,22 +573,22 @@ end
 # RFC 3986 3.2.3 writes port = *DIGIT, so an empty port is syntax and
 # means the scheme decides.
 assert('parse_host takes a colon with no digits behind it') do
-  a = Webmachine::SpecHttp.parse_host('example.com:', 64)
+  a = Webmachine::SpecHttp.parse_host('example.com:')
   assert_equal 'example.com', a[HOST_NAME]
   assert_nil a[HOST_PORT]
 end
 
 assert('parse_host refuses a port no socket can take') do
-  e = Webmachine::SpecHttp.parse_host('example.com:65536', 64)
+  e = Webmachine::SpecHttp.parse_host('example.com:65536')
   assert_equal 'port', e[0]
   assert_equal 12, e[1]
-  e = Webmachine::SpecHttp.parse_host('example.com:80a', 64)
+  e = Webmachine::SpecHttp.parse_host('example.com:80a')
   assert_equal 'port', e[0]
 end
 
 assert('parse_host refuses a name that is not a name') do
   ['exam ple.com', "example\rcom", 'a/b', ''].each do |bad|
-    e = Webmachine::SpecHttp.parse_host(bad, 64)
+    e = Webmachine::SpecHttp.parse_host(bad)
     assert_equal 'Host', e[0], bad
   end
 end
@@ -596,7 +596,7 @@ end
 # A reg-name holds no colon, so the first one starts the port and
 # everything behind it has to be digits.
 assert('parse_host splits at the first colon') do
-  e = Webmachine::SpecHttp.parse_host('exa:mple.com:80', 64)
+  e = Webmachine::SpecHttp.parse_host('exa:mple.com:80')
   assert_equal 'port', e[0]
   assert_equal 4, e[1]
 end
@@ -605,12 +605,12 @@ end
 # nginx and h2o do the same: a literal that means nothing matches no
 # route, so it ends as a 404 rather than a 400.
 assert('parse_host checks the bytes of an IP-literal and not the address') do
-  e = Webmachine::SpecHttp.parse_host('[zz]', 64)
+  e = Webmachine::SpecHttp.parse_host('[zz]')
   assert_equal 'Host', e[0]
   assert_equal 1, e[1]
-  e = Webmachine::SpecHttp.parse_host('[::1', 64)
+  e = Webmachine::SpecHttp.parse_host('[::1')
   assert_equal 'Host', e[0]
-  assert_equal '[:::::1]', Webmachine::SpecHttp.parse_host('[:::::1]', 64)[HOST_NAME]
+  assert_equal '[:::::1]', Webmachine::SpecHttp.parse_host('[:::::1]')[HOST_NAME]
 end
 
 ELEMENT = 0
@@ -685,18 +685,18 @@ UPPERCASE = ('A'..'Z').to_a.map { |c| c.bytes.first }
 assert('lowercase_token? answers RFC 9113 8.2.1 for every one of the 256 bytes') do
   256.times do |byte|
     want = TCHAR.include?(byte) && !UPPERCASE.include?(byte)
-    assert_equal want, Webmachine::SpecHttp.lowercase_token?(byte.chr, 1), "byte #{byte}"
+    assert_equal want, Webmachine::SpecHttp.lowercase_token?(byte.chr), "byte #{byte}"
   end
 end
 
 # The two tables differ in the 26 letters and in nothing else.
 assert('lowercase_token? refuses exactly what token? accepts in uppercase') do
   %w[content-type accept x-forwarded-for a 0].each do |name|
-    assert_true Webmachine::SpecHttp.lowercase_token?(name, name.size), name
+    assert_true Webmachine::SpecHttp.lowercase_token?(name), name
   end
   %w[Content-Type ACCEPT X-Forwarded-For A].each do |name|
-    assert_true Webmachine::SpecHttp.token?(name, name.size), name
-    assert_false Webmachine::SpecHttp.lowercase_token?(name, name.size), name
+    assert_true Webmachine::SpecHttp.token?(name), name
+    assert_false Webmachine::SpecHttp.lowercase_token?(name), name
   end
 end
 
@@ -704,21 +704,20 @@ end
 # one colon a field name may not otherwise hold. The colon comes off
 # before the check, so the table never has to know about it.
 assert('lowercase_token? refuses a colon, pseudo-header or not') do
-  assert_false Webmachine::SpecHttp.lowercase_token?(':path', 5)
-  assert_true Webmachine::SpecHttp.lowercase_token?('path', 4)
+  assert_false Webmachine::SpecHttp.lowercase_token?(':path')
+  assert_true Webmachine::SpecHttp.lowercase_token?('path')
 end
 
-# The wide read answers what the narrow one answers, at every length a
-# 32-byte load can straddle.
-assert('lowercase_token? reads wide and narrow the same') do
+# Every length a 32-byte load can straddle, so the mask that keeps the
+# bytes behind the name out of the answer is exercised at each one.
+assert('lowercase_token? masks the bytes behind the name at every length') do
   buffer = 'a' * 64
   (1..40).each do |length|
     name = buffer[0, length]
-    assert_true Webmachine::SpecHttp.lowercase_token?(name, 64), length
+    assert_true Webmachine::SpecHttp.lowercase_token?(name), length
     bad = name.dup
     bad[length - 1] = 'Z'
-    assert_false Webmachine::SpecHttp.lowercase_token?(bad, 64), length
-    assert_false Webmachine::SpecHttp.lowercase_token?(bad, length), length
+    assert_false Webmachine::SpecHttp.lowercase_token?(bad), length
   end
 end
 

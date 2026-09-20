@@ -260,16 +260,16 @@ inline bool neon_block_is_allowed(const unsigned char *at, const size_t length,
 }
 #endif
 
-// The caller says how many bytes may be read from text.data(). A field
-// value inside a request buffer has the rest of the request behind it,
-// so the wide load reads past the value and masks what it read.
-inline bool every_byte_is_allowed(const std::string_view text, const size_t readable_bytes,
+inline constexpr size_t kWidePadding = 64;
+
+inline bool every_byte_is_allowed(const std::string_view text,
                                   const std::array<bool, 256> &allowed,
                                   [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
 {
+    static_assert(32 <= kWidePadding);
     if (text.empty()) [[unlikely]]
         return false;
-    if (text.size() > 32 || readable_bytes < 32)
+    if (text.size() > 32)
         return every_byte_is_allowed(text, allowed);
 #if defined(__AVX2__)
     const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(text.data()));
@@ -297,19 +297,19 @@ inline bool every_byte_is_allowed(const std::string_view text, const size_t read
 #endif
 }
 
-inline bool is_token(const std::string_view text, const size_t readable_bytes)
+inline bool is_token(const std::string_view text)
 {
-    return every_byte_is_allowed(text, readable_bytes, kTchar, kTcharLowBits);
+    return every_byte_is_allowed(text, kTchar, kTcharLowBits);
 }
 
-inline bool is_lowercase_token(const std::string_view text, const size_t readable_bytes)
+inline bool is_lowercase_token(const std::string_view text)
 {
-    return every_byte_is_allowed(text, readable_bytes, kLowercaseTchar, kLowercaseTcharLowBits);
+    return every_byte_is_allowed(text, kLowercaseTchar, kLowercaseTcharLowBits);
 }
 
-inline bool is_reg_name(const std::string_view host, const size_t readable_bytes)
+inline bool is_reg_name(const std::string_view host)
 {
-    return every_byte_is_allowed(host, readable_bytes, kRegName, kRegNameLowBits);
+    return every_byte_is_allowed(host, kRegName, kRegNameLowBits);
 }
 
 inline bool is_ip_literal(const std::string_view inside)
@@ -616,8 +616,7 @@ struct Host {
     std::optional<unsigned> port;
 };
 
-inline std::expected<Host, Refusal> parse_host(const std::string_view text,
-                                               const size_t readable_bytes)
+inline std::expected<Host, Refusal> parse_host(const std::string_view text)
 {
     if (text.empty()) [[unlikely]]
         return std::unexpected(Refusal{kHostProblem, 0});
@@ -628,7 +627,7 @@ inline std::expected<Host, Refusal> parse_host(const std::string_view text,
             return std::unexpected(Refusal{kHostProblem, 0});
         if (!is_ip_literal(uri_host.substr(1, uri_host.size() - 2))) [[unlikely]]
             return std::unexpected(Refusal{kHostProblem, 1});
-    } else if (!is_reg_name(uri_host, readable_bytes)) [[unlikely]] {
+    } else if (!is_reg_name(uri_host)) [[unlikely]] {
         return std::unexpected(Refusal{kHostProblem, 0});
     }
     if (colon == std::string_view::npos)

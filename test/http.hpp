@@ -5,10 +5,35 @@
 #include <mruby/array.h>
 #include <mruby/cpp_to_mrb_value.hpp>
 
+#include <algorithm>
+#include <vector>
+
 #include "../src/http.hpp"
 
 namespace
 {
+
+// A wide read goes up to kWidePadding bytes past the run it was given.
+// In the server that is the ring's guard buffer, and the server parses
+// nothing else. A test hands over an mruby string, which has nothing
+// behind it, so the bytes are copied where the padding is real and the
+// sanitizer can see the wall.
+class Padded
+{
+public:
+    Padded(const char *from, const mrb_int size)
+        : bytes_(static_cast<size_t>(size) + http::kWidePadding, '\0'),
+          length_(static_cast<size_t>(size))
+    {
+        std::copy_n(from, length_, bytes_.begin());
+    }
+
+    std::string_view view() const { return {bytes_.data(), length_}; }
+
+private:
+    std::vector<char> bytes_;
+    size_t length_;
+};
 
 mrb_value spec_is_tchar(mrb_state *mrb, mrb_value)
 {
@@ -186,33 +211,44 @@ mrb_value spec_is_token(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
     mrb_int length = 0;
-    mrb_int readable = 0;
-    mrb_get_args(mrb, "si", &text, &length, &readable);
-    return mrb_bool_value(
-        http::is_token(std::string_view(text, static_cast<size_t>(length)),
-                       static_cast<size_t>(readable)));
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_token(Padded(text, length).view()));
 }
 
 mrb_value spec_is_lowercase_token(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
     mrb_int length = 0;
-    mrb_int readable = 0;
-    mrb_get_args(mrb, "si", &text, &length, &readable);
-    return mrb_bool_value(
-        http::is_lowercase_token(std::string_view(text, static_cast<size_t>(length)),
-                                 static_cast<size_t>(readable)));
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_lowercase_token(Padded(text, length).view()));
+}
+
+// The scalar overload, so a test can hold the two ways against each
+// other. The server never calls it where a wide read is possible.
+mrb_value spec_is_token_narrow(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::every_byte_is_allowed(
+        std::string_view(text, static_cast<size_t>(length)), http::kTchar));
+}
+
+mrb_value spec_is_reg_name_narrow(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::every_byte_is_allowed(
+        std::string_view(text, static_cast<size_t>(length)), http::kRegName));
 }
 
 mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
     mrb_int length = 0;
-    mrb_int readable = 0;
-    mrb_get_args(mrb, "si", &text, &length, &readable);
-    return mrb_bool_value(
-        http::is_reg_name(std::string_view(text, static_cast<size_t>(length)),
-                          static_cast<size_t>(readable)));
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_reg_name(Padded(text, length).view()));
 }
 
 mrb_value spec_method_number(mrb_state *mrb, mrb_value)
@@ -243,10 +279,10 @@ mrb_value spec_parse_host(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
     mrb_int length = 0;
-    mrb_int readable = 0;
-    mrb_get_args(mrb, "si", &text, &length, &readable);
-    const std::string_view whole(text, static_cast<size_t>(length));
-    const auto got = http::parse_host(whole, static_cast<size_t>(readable));
+    mrb_get_args(mrb, "s", &text, &length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_host(whole);
     if (!got) {
         mrb_value out[2] = {
             cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
@@ -271,14 +307,20 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "ascii_lowered", spec_ascii_lowered, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "equal_ignoring_case", spec_equal_ignoring_case,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
-                               MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(2));
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "method_number", spec_method_number, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "request_target_form", spec_request_target_form,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));
