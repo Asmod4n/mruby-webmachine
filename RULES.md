@@ -624,22 +624,14 @@ it is answered nobody starts from zero.
 
 The archive read a media type with no grammar at all: the base is
 everything before the first ";", trimmed. `parse_media_type` reads the
-same bytes as `token "/" token`. Measured in one binary, medians of
-five, `WM_MARCH=x86-64-v3`:
+same bytes as `token "/" token`, and measured in one binary that costs
+about 3.4 ns more on a type of this length.
 
-| | archive | this tree |
-|---|---|---|
-| read a media type | 8.3 ns | 11.7 ns |
-| the parameter walk alone, same input | 34.4 ns | 39.3 ns |
-| Content-Type to charset, whole way | 26.6 ns | 33.1 ns |
-| the same with a quoted charset | 34.4 ns | 53.7 ns |
-
-The last row is not a speed comparison. The archive gives back `"utf-8"`
-with its quotes, and its own comparison is byte for byte, so it reads
-the two spellings RFC 9110 5.6.6 calls equal as different. The 19 ns are
-the price of not having that. The first row also flatters the archive:
-it never separates the subtype, and does that work later, once per
-comparison.
+Those 3.4 ns are not a trade anyone has to weigh, because the archive's
+reader is not a candidate. It hands back `"utf-8"` with its quotes and
+compares byte for byte, so it reads as different the two spellings RFC
+9110 5.6.6 calls equal. What the 3.4 ns buy is a grammar and one
+spelling of a value.
 
 Two shapes were tried against the 3.4 ns and both lost. A wide scan that
 returns the first byte that is not tchar - the nibble mask plus
