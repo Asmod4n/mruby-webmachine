@@ -767,3 +767,65 @@ assert('equal_ignoring_case agrees with ascii_lowered on every pair of bytes') d
   end
   assert_equal 0, wrong
 end
+
+ORIGIN    = 0
+ABSOLUTE  = 1
+AUTHORITY = 2
+ASTERISK  = 3
+
+# A short string that is only ever compared is carried as a number, not
+# as bytes. Every method RFC 9110 9.1 defines fits in eight bytes -
+# CONNECT and OPTIONS are the longest at seven - so the whole method is
+# one integer, and a comparison is one instruction instead of a memcmp.
+# The bytes go in little-endian order, so the number is the bytes.
+assert('method_number packs the bytes of a method') do
+  assert_equal 0, Webmachine::SpecHttp.method_number('')
+  assert_equal 'GET'.bytes.each_with_index.map { |b, i| b << (i * 8) }.inject(0) { |a, n| a + n },
+               Webmachine::SpecHttp.method_number('GET')
+  assert_equal 'CONNECT'.bytes.each_with_index.map { |b, i| b << (i * 8) }.inject(0) { |a, n| a + n },
+               Webmachine::SpecHttp.method_number('CONNECT')
+end
+
+# RFC 9110 9.1: the method is case-sensitive, so this must not fold.
+# Carrying the bytes as a number gives that for nothing.
+assert('method_number keeps the case of a method') do
+  assert_not_equal Webmachine::SpecHttp.method_number('GET'),
+                   Webmachine::SpecHttp.method_number('get')
+end
+
+# We do not serve WebDAV, so a method of more than eight bytes is not one
+# of ours. It answers 0, which is what an absent method answers, and the
+# graph turns that into 501 at B12.
+assert('method_number refuses a method that does not fit') do
+  assert_equal 0, Webmachine::SpecHttp.method_number('PROPPATCH')
+  assert_equal 0, Webmachine::SpecHttp.method_number('VERSION-CONTROL')
+  assert_true Webmachine::SpecHttp.method_number('OPTIONS') > 0
+end
+
+# RFC 9112 3.2 gives four forms, and the first sentence of that section
+# says the form depends on the method as well as on the bytes. It has to:
+# "example.com:80" satisfies both scheme ":" hier-part and uri-host ":"
+# port, because a scheme allows dots. Only CONNECT separates them.
+assert('request_target_form answers the four forms of RFC 9112 3.2') do
+  assert_equal ORIGIN, Webmachine::SpecHttp.request_target_form('/index.html', 'GET')
+  assert_equal ORIGIN, Webmachine::SpecHttp.request_target_form('/', 'GET')
+  assert_equal ORIGIN, Webmachine::SpecHttp.request_target_form('/a?q=1', 'GET')
+  assert_equal ABSOLUTE,
+               Webmachine::SpecHttp.request_target_form('http://example.com/a', 'GET')
+  assert_equal AUTHORITY, Webmachine::SpecHttp.request_target_form('example.com:80', 'CONNECT')
+  assert_equal ASTERISK, Webmachine::SpecHttp.request_target_form('*', 'OPTIONS')
+end
+
+# RFC 9112 3.2.4: the asterisk-form is only used for a server-wide
+# OPTIONS. RFC 9112 3.2.3: the authority-form is only used for CONNECT.
+assert('request_target_form binds the asterisk to OPTIONS alone') do
+  assert_nil Webmachine::SpecHttp.request_target_form('*', 'GET')
+  assert_nil Webmachine::SpecHttp.request_target_form('', 'GET')
+  assert_equal AUTHORITY, Webmachine::SpecHttp.request_target_form('*', 'CONNECT')
+end
+
+# A lowercase method is not the method, so it is not CONNECT and its
+# target is read as absolute-form rather than as an authority.
+assert('request_target_form does not fold the method') do
+  assert_equal ABSOLUTE, Webmachine::SpecHttp.request_target_form('example.com:80', 'connect')
+end

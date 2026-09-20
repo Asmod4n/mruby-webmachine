@@ -215,6 +215,30 @@ mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
                           static_cast<size_t>(readable)));
 }
 
+mrb_value spec_method_number(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, http::method_number(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_request_target_form(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_int method_length = 0;
+    mrb_get_args(mrb, "ss", &text, &length, &method, &method_length);
+    const auto got = http::request_target_form(
+        std::string_view(text, static_cast<size_t>(length)),
+        http::method_number(std::string_view(method, static_cast<size_t>(method_length))));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, static_cast<int>(*got));
+}
+
 mrb_value spec_parse_host(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -251,6 +275,9 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "method_number", spec_method_number, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "request_target_form", spec_request_target_form,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,

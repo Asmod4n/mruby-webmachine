@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <expected>
 #include <cstdint>
 #include <optional>
@@ -54,6 +55,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "day-name SP month SP ( 2DIGIT / ( SP 1DIGIT ) ) SP time-of-day SP 4DIGIT", 400},
     {"RFC 9110 7.2", "Host", "The Host field is not valid", "uri-host [ \":\" port ]", 400},
     {"RFC 3986 3.2.3", "port", "The Host field is not valid", "*DIGIT, at most 65535", 400},
+    {"RFC 9112 3.2", "request-target", "The request target is not valid",
+     "origin-form / absolute-form / authority-form / asterisk-form", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -69,6 +72,7 @@ inline constexpr uint16_t kRfc850DateProblem = 9;
 inline constexpr uint16_t kAsctimeDateProblem = 10;
 inline constexpr uint16_t kHostProblem = 11;
 inline constexpr uint16_t kPortProblem = 12;
+inline constexpr uint16_t kRequestTargetProblem = 13;
 
 struct Refusal {
     uint16_t problem;
@@ -107,6 +111,25 @@ private:
     uint8_t excerpt_length_ = 0;
     unsigned char found_byte_;
 };
+
+constexpr uint64_t method_number(const std::string_view method)
+{
+    if (method.empty() || method.size() > sizeof(uint64_t))
+        return 0;
+    if consteval {
+        uint64_t number = 0;
+        for (size_t at = 0; at < method.size(); ++at)
+            number |= static_cast<uint64_t>(static_cast<unsigned char>(method.at(at)))
+                      << (at * 8);
+        return number;
+    }
+    uint64_t number = 0;
+    std::memcpy(&number, method.data(), sizeof number);
+    return number & (~uint64_t{0} >> (8 * (sizeof number - method.size())));
+}
+
+inline constexpr uint64_t kConnect = method_number("CONNECT");
+inline constexpr uint64_t kOptions = method_number("OPTIONS");
 
 constexpr char ascii_lowered(const char letter)
 {
@@ -617,6 +640,24 @@ inline std::expected<Host, Refusal> parse_host(const std::string_view text,
     if (!port || *port > 65535) [[unlikely]]
         return std::unexpected(Refusal{kPortProblem, static_cast<uint32_t>(colon + 1)});
     return Host{uri_host, *port};
+}
+
+enum class TargetForm : uint8_t { kOrigin, kAbsolute, kAuthority, kAsterisk };
+
+inline std::expected<TargetForm, Refusal> request_target_form(const std::string_view text,
+                                                              const uint64_t method)
+{
+    if (text.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kRequestTargetProblem, 0});
+    if (method == kConnect)
+        return TargetForm::kAuthority;
+    if (text == "*")
+        return method == kOptions
+                   ? std::expected<TargetForm, Refusal>(TargetForm::kAsterisk)
+                   : std::unexpected(Refusal{kRequestTargetProblem, 0});
+    if (text.starts_with('/'))
+        return TargetForm::kOrigin;
+    return TargetForm::kAbsolute;
 }
 
 }
