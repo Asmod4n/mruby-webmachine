@@ -284,6 +284,8 @@ void run_host(const std::string_view text)
         return refusal_holds(host.error(), text);
     inside(host->uri_host, text);
     demand(!host->port || *host->port <= 65535, "the port is above 65535");
+    demand(host->uri_host.starts_with('[') || http::percent_decode(host->uri_host).has_value(),
+           "the host was taken but cannot be decoded");
 }
 
 // RFC 9112 3.2.2: an absolute-form target that carries no path names the
@@ -314,6 +316,14 @@ void run_origin_form(const std::string_view text)
     inside(origin->query, text);
     const auto query = http::parse_query(origin->query);
     demand(query.has_value(), "a query the origin-form accepted is refused on its own");
+    // RFC 3986 2.1: a target this tree took has whole pct-encoded triplets
+    // in it, so what took it and what decodes it agree. The byte tables
+    // cannot say this - they see one byte at a time and "%" is one of the
+    // bytes a path may carry - and that is how a bare "%" got through.
+    demand(http::percent_decode(origin->path).has_value(),
+           "the path was taken but cannot be decoded");
+    demand(http::percent_decode(origin->query).has_value(),
+           "the query was taken but cannot be decoded");
 }
 
 void run_absolute_form(const std::string_view text)

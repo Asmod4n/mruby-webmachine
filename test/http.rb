@@ -609,8 +609,12 @@ assert('parse_host splits at the first colon') do
 end
 
 # The bytes inside the brackets are checked and the address is not.
-# nginx and h2o do the same: a literal that means nothing matches no
-# route, so it ends as a 404 rather than a 400.
+# libc holds the IPv6address grammar in inet_pton and would answer it,
+# but nothing here reads a host: routing is on the path, the origin a
+# URL is built from is a constant made at boot, and the cache key names
+# the route, the method and the Vary axes. A literal that means nothing
+# therefore reaches nothing. The day this server serves several hosts,
+# the grammar goes in with that feature.
 assert('parse_host checks the bytes of an IP-literal and not the address') do
   e = Webmachine::SpecHttp.parse_host('[zz]')
   assert_equal 'Host', e[0]
@@ -2255,3 +2259,28 @@ assert('parse_credentials takes a scheme that only spaces follow') do
   assert_equal ['Basic', ''], Webmachine::SpecHttp.parse_credentials('Basic    ')
   assert_equal ['Basic', ''], Webmachine::SpecHttp.parse_credentials('Basic ')
 end
+
+# RFC 3986 2.1: "pct-encoded = "%" HEXDIG HEXDIG". A path, a query and a
+# reg-name all carry pct-encoded, so all three tables let a "%" through,
+# and nothing checked what followed it. /a%zz and a trailing /a% were
+# taken for hours. The one place that answers it is now read by all four.
+assert('a broken pct-encoded triplet is refused wherever one may stand') do
+  %w[/a%zz /a% /a%2 /%gg /a%2Fb%].each do |target|
+    assert_equal 'pct-encoded', Webmachine::SpecHttp.parse_request_target(target, 'GET')[0],
+                 target
+  end
+  %w[/a?q=%zz /a?q=% /?%].each do |target|
+    assert_equal 'pct-encoded', Webmachine::SpecHttp.parse_request_target(target, 'GET')[0],
+                 target
+  end
+  assert_equal 'pct-encoded', Webmachine::SpecHttp.parse_host('ex%zz.com')[0]
+end
+
+# The same bytes, whole, are a target like any other.
+assert('a whole pct-encoded triplet is still taken') do
+  %w[/a%2Fb /a%20b /%41 /a?q=%2F].each do |target|
+    assert_not_equal 'pct-encoded',
+                     Webmachine::SpecHttp.parse_request_target(target, 'GET')[0], target
+  end
+end
+

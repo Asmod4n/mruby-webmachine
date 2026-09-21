@@ -1009,6 +1009,27 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
     return fixdate;
 }
 
+// RFC 3986 2.1: "pct-encoded = "%" HEXDIG HEXDIG". The byte tables above
+// let a "%" through because a path, a query and a reg-name all carry
+// pct-encoded, and a table of single bytes cannot say what two bytes
+// follow. This says it. A "%" inside a whole triplet cannot start another,
+// so a valid one is stepped over three bytes at a time.
+constexpr bool is_hexdig(const char letter)
+{
+    return is_digit(letter) || (letter >= 'A' && letter <= 'F') ||
+           (letter >= 'a' && letter <= 'f');
+}
+
+inline size_t first_broken_pct_encoded(const std::string_view text)
+{
+    for (size_t at = text.find('%'); at != std::string_view::npos;
+         at = text.find('%', at + 3))
+        if (text.size() - at < 3 || !is_hexdig(text.at(at + 1)) ||
+            !is_hexdig(text.at(at + 2))) [[unlikely]]
+            return at;
+    return std::string_view::npos;
+}
+
 inline constexpr size_t kIpLiteralAt = 1;
 
 struct Host {
@@ -1029,6 +1050,10 @@ inline std::expected<Host, Refusal> parse_host(const std::string_view text)
             return std::unexpected(Refusal{kHostProblem, kIpLiteralAt});
     } else if (!is_reg_name(uri_host)) [[unlikely]] {
         return std::unexpected(Refusal{kHostProblem, 0});
+    } else {
+        const size_t broken = first_broken_pct_encoded(uri_host);
+        if (broken != std::string_view::npos) [[unlikely]]
+            return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(broken)});
     }
     if (colon == std::string_view::npos)
         return Host{uri_host, std::nullopt};
@@ -1071,6 +1096,9 @@ inline std::expected<std::string_view, Refusal> parse_query(const std::string_vi
 {
     if (allowed_run_length(text, kQueryByte, kQueryByteLowBits) != text.size()) [[unlikely]]
         return std::unexpected(Refusal{kQueryProblem, 0});
+    const size_t broken = first_broken_pct_encoded(text);
+    if (broken != std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(broken)});
     return text;
 }
 
@@ -1087,6 +1115,9 @@ inline std::expected<OriginForm, Refusal> parse_origin_form(const std::string_vi
     const std::string_view path = text.substr(0, question);
     if (allowed_run_length(path, kPathByte, kPathByteLowBits) != path.size()) [[unlikely]]
         return std::unexpected(Refusal{kAbsolutePathProblem, 0});
+    const size_t broken = first_broken_pct_encoded(path);
+    if (broken != std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(broken)});
     if (question == std::string_view::npos)
         return OriginForm{path, {}};
     const auto query = parse_query(text.substr(question + 1));
@@ -1201,17 +1232,10 @@ inline std::string remove_dot_segments(const std::string_view path)
 
 inline std::expected<std::string, Refusal> percent_decode(const std::string_view text)
 {
-    const size_t first = text.find('%');
-    for (size_t at = first; at != std::string_view::npos; at = text.find('%', at + 3)) {
-        if (text.size() - at < 3) [[unlikely]]
-            return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
-        const char *const digits = std::next(text.data(), at + 1);
-        unsigned char octet = 0;
-        const auto done = std::from_chars(digits, std::next(digits, 2), octet, 16);
-        if (done.ec != std::errc{} || done.ptr != std::next(digits, 2)) [[unlikely]]
-            return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(at)});
-    }
-    return ada::unicode::percent_decode(text, first);
+    const size_t broken = first_broken_pct_encoded(text);
+    if (broken != std::string_view::npos) [[unlikely]]
+        return std::unexpected(Refusal{kPctEncodedProblem, static_cast<uint32_t>(broken)});
+    return ada::unicode::percent_decode(text, text.find('%'));
 }
 
 struct MediaType {
