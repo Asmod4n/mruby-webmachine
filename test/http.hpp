@@ -1,0 +1,1352 @@
+#pragma once
+
+#include <mruby.h>
+#include <mruby/array.h>
+#include <mruby/string.h>
+#include <mruby/cpp_to_mrb_value.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <variant>
+#include <vector>
+
+#include "../src/http.hpp"
+
+namespace
+{
+
+// A wide read goes up to kWidePadding bytes past the run it was given.
+// In the server that is the ring's guard buffer, and the server parses
+// nothing else. A test hands over an mruby string, which has nothing
+// behind it, so the bytes are copied where the padding is real and the
+// sanitizer can see the wall.
+class Padded
+{
+  public:
+    Padded(const char *from, const mrb_int size)
+        : bytes_(static_cast<size_t>(size) + http::kWidePadding, '\0'),
+          length_(static_cast<size_t>(size))
+    {
+        std::copy_n(from, length_, bytes_.begin());
+    }
+
+    std::string_view view() const
+    {
+        return {bytes_.data(), length_};
+    }
+
+  private:
+    std::vector<char> bytes_;
+    size_t length_;
+};
+
+mrb_value spec_is_tchar(mrb_state *mrb, mrb_value)
+{
+    mrb_int byte = 0;
+    mrb_get_args(mrb, "i", &byte);
+    return mrb_bool_value(http::is_tchar(static_cast<char>(byte)));
+}
+
+mrb_value spec_ascii_lowered(mrb_state *mrb, mrb_value)
+{
+    mrb_int byte = 0;
+    mrb_get_args(mrb, "i", &byte);
+    return cpp_to_mrb_value(
+        mrb, static_cast<unsigned char>(http::ascii_lowered(static_cast<char>(byte))));
+}
+
+// The word fold has to answer what the byte fold answers for every byte,
+// and not only for tchar. equal_ignoring_case runs before anything says
+// the bytes are tchar - the scheme of an absolute-form target reaches it
+// unchecked - and a carry out of 0xc1 + 0x3f would land in the byte above.
+// The pairs are what catch a carry, the lanes are what catch a constant
+// that is one byte short.
+constexpr bool word_fold_answers_what_the_byte_fold_answers()
+{
+    const auto byte_fold = [](const uint64_t word) {
+        uint64_t folded = 0;
+        for (size_t lane = 0; lane < sizeof(uint64_t); lane++) {
+            const auto byte = static_cast<unsigned char>((word >> (lane * 8)) & 0xffu);
+            folded |= static_cast<uint64_t>(
+                          static_cast<unsigned char>(http::ascii_lowered(static_cast<char>(byte))))
+                      << (lane * 8);
+        }
+        return folded;
+    };
+    for (unsigned low = 0; low < 256; low++)
+        for (unsigned above = 0; above < 256; above++) {
+            const uint64_t word = (static_cast<uint64_t>(above) << 8) | low;
+            if (http::ascii_lowered_word(word) != byte_fold(word))
+                return false;
+        }
+    for (unsigned value = 0; value < 256; value++)
+        for (size_t lane = 0; lane < sizeof(uint64_t); lane++) {
+            const uint64_t word = static_cast<uint64_t>(value) << (lane * 8);
+            if (http::ascii_lowered_word(word) != byte_fold(word))
+                return false;
+        }
+    return true;
+}
+
+mrb_value spec_word_fold_answers_what_the_byte_fold_answers(mrb_state *, mrb_value)
+{
+    constexpr bool answered = word_fold_answers_what_the_byte_fold_answers();
+    return mrb_bool_value(answered);
+}
+
+mrb_value spec_wide_block_fits_the_padding(mrb_state *, mrb_value)
+{
+    return mrb_bool_value(http::kWideBlockBytes <= http::kWidePadding);
+}
+
+mrb_value spec_equal_ignoring_case(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    return mrb_bool_value(
+        http::equal_ignoring_case(std::string_view(left, static_cast<size_t>(left_length)),
+                                  std::string_view(right, static_cast<size_t>(right_length))));
+}
+
+mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
+{
+    mrb_int problem = 0;
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int offset = 0;
+    mrb_get_args(mrb, "isi", &problem, &text, &length, &offset);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const http::ParseError error(
+        http::Refusal{static_cast<uint16_t>(problem), static_cast<uint32_t>(offset)}, whole);
+    mrb_value out[8] = {
+        cpp_to_mrb_value(mrb, error.section()),    cpp_to_mrb_value(mrb, error.rule()),
+        cpp_to_mrb_value(mrb, error.title()),      cpp_to_mrb_value(mrb, error.allowed()),
+        cpp_to_mrb_value(mrb, error.status()),     cpp_to_mrb_value(mrb, error.offset()),
+        cpp_to_mrb_value(mrb, error.found_byte()), cpp_to_mrb_value(mrb, error.excerpt()),
+    };
+    return mrb_ary_new_from_values(mrb, 8, out);
+}
+
+mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_quoted_string(whole);
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, *got);
+    mrb_value out[3] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).found_byte()),
+    };
+    return mrb_ary_new_from_values(mrb, 3, out);
+}
+
+mrb_value spec_parse_list_element(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const auto got = http::parse_list_element(std::string_view(text, static_cast<size_t>(length)));
+    if (!got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->element),
+        cpp_to_mrb_value(mrb, got->rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_field_value_parameter(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[3] = {
+        cpp_to_mrb_value(mrb, (*got)->name),
+        cpp_to_mrb_value(mrb, (*got)->value),
+        cpp_to_mrb_value(mrb, (*got)->rest),
+    };
+    return mrb_ary_new_from_values(mrb, 3, out);
+}
+
+mrb_value spec_parse_imf_fixdate(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_imf_fixdate(whole);
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_rfc850_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int current_year = 0;
+    mrb_get_args(mrb, "si", &text, &length, &current_year);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got =
+        http::parse_rfc850_date(whole, std::chrono::year{static_cast<int>(current_year)});
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_asctime_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_asctime_date(whole);
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_http_date(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int current_year = 0;
+    mrb_get_args(mrb, "si", &text, &length, &current_year);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got =
+        http::parse_http_date(whole, std::chrono::year{static_cast<int>(current_year)});
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_is_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_token(Padded(text, length).view()));
+}
+
+mrb_value spec_is_lowercase_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_lowercase_token(Padded(text, length).view()));
+}
+
+// The scalar overload, so a test can hold the two ways against each
+// other. The server never calls it where a wide read is possible.
+mrb_value spec_is_token_narrow(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::every_byte_is_allowed(
+        std::string_view(text, static_cast<size_t>(length)), http::kTchar));
+}
+
+mrb_value spec_is_reg_name_narrow(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::every_byte_is_allowed(
+        std::string_view(text, static_cast<size_t>(length)), http::kRegName));
+}
+
+mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_reg_name(Padded(text, length).view()));
+}
+
+mrb_value spec_method_of(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::method_of(
+                                     std::string_view(text, static_cast<size_t>(length)))));
+}
+
+mrb_value spec_request_target_form(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_int method_length = 0;
+    mrb_get_args(mrb, "ss", &text, &length, &method, &method_length);
+    const auto got = http::request_target_form(
+        std::string_view(text, static_cast<size_t>(length)),
+        http::method_of(std::string_view(method, static_cast<size_t>(method_length))));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, static_cast<int>(*got));
+}
+
+mrb_value spec_parse_host(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_host(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->uri_host),
+        got->port ? cpp_to_mrb_value(mrb, *got->port) : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_request_target(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_int method_length = 0;
+    mrb_get_args(mrb, "ss", &text, &length, &method, &method_length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_request_target(
+        whole, http::method_of(std::string_view(method, static_cast<size_t>(method_length))));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[6] = {
+        cpp_to_mrb_value(mrb, static_cast<int>(got->form)),
+        cpp_to_mrb_value(mrb, got->scheme),
+        cpp_to_mrb_value(mrb, got->authority.uri_host),
+        got->authority.port ? cpp_to_mrb_value(mrb, *got->authority.port) : mrb_nil_value(),
+        cpp_to_mrb_value(mrb, got->path),
+        cpp_to_mrb_value(mrb, got->query),
+    };
+    return mrb_ary_new_from_values(mrb, 6, out);
+}
+
+mrb_value spec_next_path_segment(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const http::PathWalk walk =
+        http::next_path_segment(std::string_view(text, static_cast<size_t>(length)));
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, walk.path_segment),
+        cpp_to_mrb_value(mrb, walk.rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_path_has_dot_segment(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::path_has_dot_segment(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_remove_dot_segments(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, http::remove_dot_segments(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_percent_decode(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::percent_decode(whole);
+    if (got.has_value())
+        return cpp_to_mrb_value(mrb, *got);
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+        cpp_to_mrb_value(mrb, got.error().offset),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_parse_entity_tag(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_entity_tag(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->opaque_tag),
+        mrb_bool_value(got->weak),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_strong_comparison(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    const auto one =
+        http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto other =
+        http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
+    if (!one || !other)
+        return mrb_nil_value();
+    return mrb_bool_value(http::strong_comparison(*one, *other));
+}
+
+mrb_value spec_weak_comparison(mrb_state *mrb, mrb_value)
+{
+    const char *left = nullptr;
+    const char *right = nullptr;
+    mrb_int left_length = 0;
+    mrb_int right_length = 0;
+    mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
+    const auto one =
+        http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto other =
+        http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
+    if (!one || !other)
+        return mrb_nil_value();
+    return mrb_bool_value(http::weak_comparison(*one, *other));
+}
+
+mrb_value spec_parse_media_type(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_media_type(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[3] = {
+        cpp_to_mrb_value(mrb, got->type),
+        cpp_to_mrb_value(mrb, got->subtype),
+        cpp_to_mrb_value(mrb, got->parameters),
+    };
+    return mrb_ary_new_from_values(mrb, 3, out);
+}
+
+mrb_value spec_value_of_parameter(mrb_state *mrb, mrb_value)
+{
+    const char *parameters = nullptr;
+    const char *name = nullptr;
+    mrb_int parameters_length = 0;
+    mrb_int name_length = 0;
+    mrb_get_args(mrb, "ss", &parameters, &parameters_length, &name, &name_length);
+    const std::string_view whole(parameters, static_cast<size_t>(parameters_length));
+    const auto got =
+        http::value_of_parameter(whole, std::string_view(name, static_cast<size_t>(name_length)));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    if (!*got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, **got);
+}
+
+mrb_value spec_unquoted_token(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(
+        mrb, http::unquoted_token(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_content_coding(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::content_coding(
+                                     std::string_view(text, static_cast<size_t>(length)))));
+}
+
+mrb_value spec_is_language_tag(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::is_language_tag(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_parse_content_length(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_content_length(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_parse_qvalue(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_qvalue(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_weight_of(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::weight_of(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_media_type_weight(mrb_state *mrb, mrb_value)
+{
+    const char *accept = nullptr;
+    const char *provided = nullptr;
+    mrb_int accept_length = 0;
+    mrb_int provided_length = 0;
+    mrb_get_args(mrb, "ss", &accept, &accept_length, &provided, &provided_length);
+    const std::string_view field(accept, static_cast<size_t>(accept_length));
+    const auto media =
+        http::parse_media_type(std::string_view(provided, static_cast<size_t>(provided_length)));
+    if (!media)
+        return cpp_to_mrb_value(mrb, std::string_view("the provided type does not parse"));
+    const auto got = http::media_type_weight(field, *media);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), field).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_coding_weight(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    const char *coding = nullptr;
+    mrb_int field_length = 0;
+    mrb_int coding_length = 0;
+    mrb_get_args(mrb, "ss", &field, &field_length, &coding, &coding_length);
+    const Padded whole(field, field_length);
+    const Padded named(coding, coding_length);
+    const auto got = http::coding_weight(whole.view(), named.view());
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole.view()).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_language_weight(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    const char *tag = nullptr;
+    mrb_int field_length = 0;
+    mrb_int tag_length = 0;
+    mrb_get_args(mrb, "ss", &field, &field_length, &tag, &tag_length);
+    const std::string_view whole(field, static_cast<size_t>(field_length));
+    const auto got =
+        http::language_weight(whole, std::string_view(tag, static_cast<size_t>(tag_length)));
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+// The provided lists arrive from Ruby, which has no padding behind its
+// strings, and choose_coding asks is_token, which reads wide. So every
+// one of them is copied where the wall is real.
+mrb_value spec_choose_media_type(mrb_state *mrb, mrb_value)
+{
+    const char *accept = nullptr;
+    mrb_int accept_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &accept, &accept_length, &list);
+    std::vector<Padded> held;
+    std::vector<http::MediaType> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held) {
+        const auto media = http::parse_media_type(one.view());
+        if (!media)
+            return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
+        provided.push_back(*media);
+    }
+    const auto got = http::choose_media_type(
+        provided, std::string_view(accept, static_cast<size_t>(accept_length)));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_choose_coding(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int field_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &field, &field_length, &list);
+    const Padded whole(field, field_length);
+    std::vector<Padded> held;
+    std::vector<std::string_view> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held)
+        provided.push_back(one.view());
+    const auto got = http::choose_coding(provided, whole.view());
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole.view()).rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_choose_language(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int field_length = 0;
+    mrb_value list;
+    mrb_get_args(mrb, "sA", &field, &field_length, &list);
+    const std::string_view whole(field, static_cast<size_t>(field_length));
+    std::vector<Padded> held;
+    std::vector<std::string_view> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held)
+        provided.push_back(one.view());
+    const auto got = http::choose_language(provided, whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    if (!*got)
+        return mrb_nil_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, (*got)->at),
+        cpp_to_mrb_value(mrb, (*got)->weight),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_field_combining(mrb_state *mrb, mrb_value)
+{
+    const char *name = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &name, &length);
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::field_combining(
+                                     std::string_view(name, static_cast<size_t>(length)))));
+}
+
+mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_content_length_list(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+// ParseError::what() must hand back a const char *, because that is what
+// std::exception promises. It returns title.data(), which is only a C
+// string as long as every row of the table is a literal. This says so
+// for every row rather than trusting it.
+mrb_value spec_spell_accept_query(mrb_state *mrb, mrb_value)
+{
+    mrb_value list;
+    mrb_get_args(mrb, "A", &list);
+    std::vector<Padded> held;
+    std::vector<http::MediaType> provided;
+    for (mrb_int at = 0; at < RARRAY_LEN(list); at++) {
+        const mrb_value one = mrb_ary_ref(mrb, list, at);
+        held.emplace_back(RSTRING_PTR(one), RSTRING_LEN(one));
+    }
+    for (const Padded &one : held) {
+        const auto media = http::parse_media_type(one.view());
+        if (!media)
+            return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
+        provided.push_back(*media);
+    }
+    const auto got = http::spell_accept_query(provided);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
+    return cpp_to_mrb_value(mrb, std::string_view(*got));
+}
+
+mrb_value spec_modification_date_is_a_validator(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_bool has_entity_tag = FALSE;
+    mrb_get_args(mrb, "sb", &text, &length, &has_entity_tag);
+    return mrb_bool_value(http::modification_date_is_a_validator(
+        http::method_of(std::string_view(text, static_cast<size_t>(length))),
+        has_entity_tag != FALSE));
+}
+
+mrb_value spec_known_methods(mrb_state *mrb, mrb_value)
+{
+    mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kKnownMethods.size()));
+    for (const http::Method method : http::kKnownMethods)
+        mrb_ary_push(mrb, out, cpp_to_mrb_value(mrb, http::method_name_of(method)));
+    return out;
+}
+
+mrb_value spec_allowed_methods(mrb_state *mrb, mrb_value)
+{
+    mrb_value out = mrb_ary_new_capa(mrb, static_cast<mrb_int>(http::kAllowedMethods.size()));
+    for (const http::Method method : http::kAllowedMethods)
+        mrb_ary_push(mrb, out, cpp_to_mrb_value(mrb, http::method_name_of(method)));
+    return out;
+}
+
+mrb_value spec_every_expectation_is_understood(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::every_expectation_is_understood(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_spell_allow(mrb_state *mrb, mrb_value)
+{
+    mrb_value names = mrb_nil_value();
+    mrb_get_args(mrb, "A", &names);
+    std::vector<http::Method> allowed;
+    for (mrb_int at = 0; at < RARRAY_LEN(names); at++) {
+        const mrb_value name = mrb_ary_entry(names, at);
+        allowed.push_back(http::method_of(
+            std::string_view(RSTRING_PTR(name), static_cast<size_t>(RSTRING_LEN(name)))));
+    }
+    return cpp_to_mrb_value(mrb, http::spell_allow(allowed));
+}
+
+mrb_value spec_spell_retry_after_delay(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    return cpp_to_mrb_value(mrb, http::spell_retry_after(std::chrono::seconds{seconds}));
+}
+
+mrb_value spec_spell_retry_after_date(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    return cpp_to_mrb_value(
+        mrb, http::spell_retry_after(std::chrono::sys_seconds{std::chrono::seconds{seconds}}));
+}
+
+mrb_value spec_is_token68(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::is_token68(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_parse_credentials(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_credentials(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->auth_scheme),
+        cpp_to_mrb_value(mrb, got->rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_spell_challenge(mrb_state *mrb, mrb_value)
+{
+    const char *scheme = nullptr;
+    const char *realm = nullptr;
+    mrb_int scheme_length = 0;
+    mrb_int realm_length = 0;
+    mrb_get_args(mrb, "ss", &scheme, &scheme_length, &realm, &realm_length);
+    const auto got =
+        http::spell_challenge(std::string_view(scheme, static_cast<size_t>(scheme_length)),
+                              std::string_view(realm, static_cast<size_t>(realm_length)));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_status_properties(mrb_state *mrb, mrb_value)
+{
+    mrb_int status = 0;
+    mrb_get_args(mrb, "i", &status);
+    const auto code = static_cast<uint16_t>(status);
+    mrb_value out[5] = {
+        mrb_bool_value(http::is_status(code)),
+        http::is_status(code) ? cpp_to_mrb_value(mrb, static_cast<int>(http::status_class(code)))
+                              : mrb_nil_value(),
+        cpp_to_mrb_value(mrb, http::reason_phrase(code)),
+        mrb_bool_value(http::is_heuristically_cacheable(code)),
+        http::is_status(code) ? mrb_bool_value(http::content_is_forbidden(code)) : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 5, out);
+}
+
+mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const http::Method method =
+        http::method_of(std::string_view(text, static_cast<size_t>(length)));
+    mrb_value out[5] = {
+        cpp_to_mrb_value(mrb, static_cast<int>(method)),
+        mrb_bool_value(http::is_safe(method)),
+        mrb_bool_value(http::is_idempotent(method)),
+        mrb_bool_value(http::is_cacheable(method)),
+        mrb_bool_value(http::content_type_is_required(method)),
+    };
+    return mrb_ary_new_from_values(mrb, 5, out);
+}
+
+mrb_value spec_problems_are_terminated(mrb_state *, mrb_value)
+{
+    for (const http::Problem &problem : http::kProblems) {
+        for (const std::string_view text :
+             {problem.section, problem.rule, problem.title, problem.allowed}) {
+            if (std::strlen(text.data()) != text.size())
+                return mrb_false_value();
+        }
+    }
+    return mrb_true_value();
+}
+
+mrb_value spec_spell_imf_fixdate(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    const auto spelled = http::spell_imf_fixdate(
+        std::chrono::sys_seconds{std::chrono::seconds{static_cast<int64_t>(seconds)}});
+    return cpp_to_mrb_value(mrb, std::string_view(spelled.data(), spelled.size()));
+}
+
+mrb_value spec_date_is_required(mrb_state *mrb, mrb_value)
+{
+    mrb_int status = 0;
+    mrb_get_args(mrb, "i", &status);
+    return mrb_bool_value(http::date_is_required(static_cast<unsigned>(status)));
+}
+
+mrb_value spec_is_language_range(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::is_language_range(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_language_range_matches(mrb_state *mrb, mrb_value)
+{
+    const char *range = nullptr;
+    const char *tag = nullptr;
+    mrb_int range_length = 0;
+    mrb_int tag_length = 0;
+    mrb_get_args(mrb, "ss", &range, &range_length, &tag, &tag_length);
+    return mrb_bool_value(
+        http::language_range_matches(std::string_view(range, static_cast<size_t>(range_length)),
+                                     std::string_view(tag, static_cast<size_t>(tag_length))));
+}
+
+mrb_value spec_parse_ranges_specifier(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const Padded padded(text, length);
+    const std::string_view whole = padded.view();
+    const auto got = http::parse_ranges_specifier(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->range_unit),
+        cpp_to_mrb_value(mrb, got->range_set),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+// [first_pos, last_pos] for an int-range, [nil, suffix_length] for a
+// suffix-range, and the rule with the offset for a refusal.
+mrb_value spec_parse_byte_range_spec(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_byte_range_spec(whole);
+    if (!got) {
+        mrb_value out[2] = {
+            cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
+            cpp_to_mrb_value(mrb, got.error().offset),
+        };
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    if (const http::SuffixRange *const suffix = std::get_if<http::SuffixRange>(&*got)) {
+        mrb_value out[2] = {mrb_nil_value(), cpp_to_mrb_value(mrb, suffix->suffix_length)};
+        return mrb_ary_new_from_values(mrb, 2, out);
+    }
+    const http::IntRange &range = std::get<http::IntRange>(*got);
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, range.first_pos),
+        range.last_pos ? cpp_to_mrb_value(mrb, *range.last_pos) : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_resolved_range(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int complete_length = 0;
+    mrb_get_args(mrb, "si", &text, &length, &complete_length);
+    const auto spec =
+        http::parse_byte_range_spec(std::string_view(text, static_cast<size_t>(length)));
+    if (!spec)
+        return mrb_nil_value();
+    const auto got = http::resolved_range(*spec, static_cast<uint64_t>(complete_length));
+    if (!got)
+        return mrb_false_value();
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->first_pos),
+        cpp_to_mrb_value(mrb, got->last_pos),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+std::optional<http::EntityTag> spec_selected_tag(const mrb_value tag)
+{
+    if (mrb_nil_p(tag))
+        return std::nullopt;
+    const auto got = http::parse_entity_tag(
+        std::string_view(RSTRING_PTR(tag), static_cast<size_t>(RSTRING_LEN(tag))));
+    if (!got)
+        return std::nullopt;
+    return *got;
+}
+
+mrb_value spec_if_match_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_bool exists = FALSE;
+    mrb_value tag = mrb_nil_value();
+    mrb_get_args(mrb, "sbo", &field, &length, &exists, &tag);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_match_passes(whole, exists != FALSE, spec_selected_tag(tag));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
+mrb_value spec_if_none_match_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_bool exists = FALSE;
+    mrb_value tag = mrb_nil_value();
+    mrb_get_args(mrb, "sbo", &field, &length, &exists, &tag);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_none_match_passes(whole, exists != FALSE, spec_selected_tag(tag));
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
+std::optional<std::chrono::sys_seconds> spec_moment(const mrb_value seconds)
+{
+    if (mrb_nil_p(seconds))
+        return std::nullopt;
+    return std::chrono::sys_seconds{std::chrono::seconds{mrb_integer(seconds)}};
+}
+
+mrb_value spec_if_modified_since_passes(mrb_state *mrb, mrb_value)
+{
+    mrb_int since = 0;
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "io", &since, &last_modified);
+    return mrb_bool_value(http::if_modified_since_passes(
+        std::chrono::sys_seconds{std::chrono::seconds{since}}, spec_moment(last_modified)));
+}
+
+mrb_value spec_if_unmodified_since_passes(mrb_state *mrb, mrb_value)
+{
+    mrb_int since = 0;
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "io", &since, &last_modified);
+    return mrb_bool_value(http::if_unmodified_since_passes(
+        std::chrono::sys_seconds{std::chrono::seconds{since}}, spec_moment(last_modified)));
+}
+
+mrb_value spec_if_range_passes(mrb_state *mrb, mrb_value)
+{
+    const char *field = nullptr;
+    mrb_int length = 0;
+    mrb_value tag = mrb_nil_value();
+    mrb_value last_modified = mrb_nil_value();
+    mrb_get_args(mrb, "soo", &field, &length, &tag, &last_modified);
+    const std::string_view whole(field, static_cast<size_t>(length));
+    const auto got = http::if_range_passes(whole, spec_selected_tag(tag),
+                                           spec_moment(last_modified), std::chrono::year{2026});
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    return mrb_bool_value(*got);
+}
+
+std::vector<std::string_view> spec_string_list(const mrb_value names)
+{
+    std::vector<std::string_view> texts;
+    for (mrb_int at = 0; at < RARRAY_LEN(names); at++) {
+        const mrb_value name = mrb_ary_entry(names, at);
+        texts.emplace_back(RSTRING_PTR(name), static_cast<size_t>(RSTRING_LEN(name)));
+    }
+    return texts;
+}
+
+mrb_value spec_spell_vary(mrb_state *mrb, mrb_value)
+{
+    mrb_value names = mrb_nil_value();
+    mrb_get_args(mrb, "A", &names);
+    const auto got = http::spell_vary(spec_string_list(names));
+    if (!got)
+        return mrb_nil_value();
+    if (!*got)
+        return mrb_false_value();
+    return cpp_to_mrb_value(mrb, **got);
+}
+
+mrb_value spec_spell_accept_ranges(mrb_state *mrb, mrb_value)
+{
+    mrb_value units = mrb_nil_value();
+    mrb_get_args(mrb, "A", &units);
+    const auto got = http::spell_accept_ranges(spec_string_list(units));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_spell_content_range(mrb_state *mrb, mrb_value)
+{
+    const char *unit = nullptr;
+    mrb_int length = 0;
+    mrb_int first_pos = 0;
+    mrb_int last_pos = 0;
+    mrb_value complete_length = mrb_nil_value();
+    mrb_get_args(mrb, "siio", &unit, &length, &first_pos, &last_pos, &complete_length);
+    const std::optional<uint64_t> complete =
+        mrb_nil_p(complete_length)
+            ? std::nullopt
+            : std::optional<uint64_t>(static_cast<uint64_t>(mrb_integer(complete_length)));
+    const auto got = http::spell_content_range(
+        std::string_view(unit, static_cast<size_t>(length)),
+        http::ResolvedRange{static_cast<uint64_t>(first_pos), static_cast<uint64_t>(last_pos)},
+        complete);
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_spell_unsatisfied_content_range(mrb_state *mrb, mrb_value)
+{
+    const char *unit = nullptr;
+    mrb_int length = 0;
+    mrb_int complete_length = 0;
+    mrb_get_args(mrb, "si", &unit, &length, &complete_length);
+    const auto got =
+        http::spell_unsatisfied_content_range(std::string_view(unit, static_cast<size_t>(length)),
+                                              static_cast<uint64_t>(complete_length));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+std::optional<bool> spec_optional_bool(const mrb_value value)
+{
+    if (mrb_nil_p(value))
+        return std::nullopt;
+    return mrb_test(value);
+}
+
+std::string_view spec_outcome_name(const http::PreconditionOutcome outcome)
+{
+    switch (outcome) {
+        case http::PreconditionOutcome::kContinue:
+            return "continue";
+        case http::PreconditionOutcome::kPreconditionFailed:
+            return "precondition failed";
+        case http::PreconditionOutcome::kNotModified:
+            return "not modified";
+        case http::PreconditionOutcome::kIgnoreRange:
+            return "ignore range";
+    }
+    return {};
+}
+
+mrb_value spec_evaluate_preconditions(mrb_state *mrb, mrb_value)
+{
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_value evaluated = mrb_nil_value();
+    mrb_get_args(mrb, "sA", &method, &length, &evaluated);
+    const http::Preconditions preconditions{
+        spec_optional_bool(mrb_ary_entry(evaluated, 0)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 1)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 2)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 3)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 4)),
+    };
+    const http::Method asked =
+        http::method_of(std::string_view(method, static_cast<size_t>(length)));
+    return cpp_to_mrb_value(mrb,
+                            spec_outcome_name(http::evaluate_preconditions(asked, preconditions)));
+}
+
+} // namespace
+
+inline void http_spec(mrb_state *mrb)
+{
+    struct RClass *wm = mrb_define_module(mrb, "Webmachine");
+    struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecHttp");
+    mrb_define_module_function(mrb, sp, "tchar?", spec_is_tchar, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "ascii_lowered", spec_ascii_lowered, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "equal_ignoring_case", spec_equal_ignoring_case,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "word_fold_answers_what_the_byte_fold_answers",
+                               spec_word_fold_answers_what_the_byte_fold_answers, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "wide_block_fits_the_padding",
+                               spec_wide_block_fits_the_padding, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "reg_name?", spec_is_reg_name, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "method_of", spec_method_of, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "request_target_form", spec_request_target_form,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_request_target", spec_parse_request_target,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_host", spec_parse_host, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "next_path_segment", spec_next_path_segment, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "path_has_dot_segment?", spec_path_has_dot_segment,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "remove_dot_segments", spec_remove_dot_segments,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "percent_decode", spec_percent_decode, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_entity_tag", spec_parse_entity_tag, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "strong_comparison", spec_strong_comparison,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "weak_comparison", spec_weak_comparison, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_media_type", spec_parse_media_type, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "value_of_parameter", spec_value_of_parameter,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "unquoted_token", spec_unquoted_token, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "content_coding", spec_content_coding, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "language_tag?", spec_is_language_tag, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length", spec_parse_content_length,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "spell_accept_query", spec_spell_accept_query,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "date_is_a_validator?",
+                               spec_modification_date_is_a_validator, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "every_expectation_is_understood",
+                               spec_every_expectation_is_understood, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_allow", spec_spell_allow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_retry_after_delay", spec_spell_retry_after_delay,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_retry_after_date", spec_spell_retry_after_date,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "is_token68", spec_is_token68, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_credentials", spec_parse_credentials,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_challenge", spec_spell_challenge, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "status_properties", spec_status_properties,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,
+                               MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length_list", spec_parse_content_length_list,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "coding_weight", spec_coding_weight, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_media_type", spec_choose_media_type,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_coding", spec_choose_coding, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "choose_language", spec_choose_language, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_weight", spec_language_weight, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "language_range_matches?", spec_language_range_matches,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_ranges_specifier", spec_parse_ranges_specifier,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_byte_range_spec", spec_parse_byte_range_spec,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "resolved_range", spec_resolved_range, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_match_passes", spec_if_match_passes, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_none_match_passes", spec_if_none_match_passes,
+                               MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_modified_since_passes", spec_if_modified_since_passes,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_unmodified_since_passes",
+                               spec_if_unmodified_since_passes, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "evaluate_preconditions", spec_evaluate_preconditions,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "spell_vary", spec_spell_vary, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_accept_ranges", spec_spell_accept_ranges,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_content_range", spec_spell_content_range,
+                               MRB_ARGS_REQ(4));
+    mrb_define_module_function(mrb, sp, "spell_unsatisfied_content_range",
+                               spec_spell_unsatisfied_content_range, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_list_element", spec_parse_list_element,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_field_value_parameter",
+                               spec_parse_field_value_parameter, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_imf_fixdate", spec_parse_imf_fixdate,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_rfc850_date", spec_parse_rfc850_date,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_asctime_date", spec_parse_asctime_date,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_http_date", spec_parse_http_date, MRB_ARGS_REQ(2));
+}

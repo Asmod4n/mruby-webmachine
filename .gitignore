@@ -1,0 +1,8 @@
+bench/run
+fuzz/run
+fuzz/crosscheck
+fuzz/crash-*
+fuzz/leak-*
+fuzz/oom-*
+fuzz/timeout-*
+mruby/
