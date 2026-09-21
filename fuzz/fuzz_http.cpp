@@ -292,7 +292,7 @@ void target_path_holds(const std::string_view path, const std::string_view text)
     inside(path, text);
 }
 
-void run_request_target(const std::string_view text, const uint64_t method)
+void run_request_target(const std::string_view text, const http::Method method)
 {
     const auto target = http::parse_request_target(text, method);
     if (!target)
@@ -566,7 +566,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     case Entry::kHost:
         return run_host(text), 0;
     case Entry::kRequestTarget:
-        return run_request_target(left_of(text), http::method_number(right_of(text))), 0;
+        return run_request_target(left_of(text), http::method_of(right_of(text))), 0;
     case Entry::kOriginForm:
         return run_origin_form(text), 0;
     case Entry::kAbsoluteForm:

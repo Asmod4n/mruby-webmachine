@@ -254,13 +254,14 @@ mrb_value spec_is_reg_name(mrb_state *mrb, mrb_value)
     return mrb_bool_value(http::is_reg_name(Padded(text, length).view()));
 }
 
-mrb_value spec_method_number(mrb_state *mrb, mrb_value)
+mrb_value spec_method_of(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
     return cpp_to_mrb_value(
-        mrb, http::method_number(std::string_view(text, static_cast<size_t>(length))));
+        mrb,
+        static_cast<int>(http::method_of(std::string_view(text, static_cast<size_t>(length)))));
 }
 
 mrb_value spec_request_target_form(mrb_state *mrb, mrb_value)
@@ -272,7 +273,7 @@ mrb_value spec_request_target_form(mrb_state *mrb, mrb_value)
     mrb_get_args(mrb, "ss", &text, &length, &method, &method_length);
     const auto got = http::request_target_form(
         std::string_view(text, static_cast<size_t>(length)),
-        http::method_number(std::string_view(method, static_cast<size_t>(method_length))));
+        http::method_of(std::string_view(method, static_cast<size_t>(method_length))));
     if (!got)
         return mrb_nil_value();
     return cpp_to_mrb_value(mrb, static_cast<int>(*got));
@@ -310,7 +311,7 @@ mrb_value spec_parse_request_target(mrb_state *mrb, mrb_value)
     const Padded padded(text, length);
     const std::string_view whole = padded.view();
     const auto got = http::parse_request_target(
-        whole, http::method_number(std::string_view(method, static_cast<size_t>(method_length))));
+        whole, http::method_of(std::string_view(method, static_cast<size_t>(method_length))));
     if (!got) {
         mrb_value out[2] = {
             cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
@@ -1033,7 +1034,7 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "token_narrow?", spec_is_token_narrow, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "reg_name_narrow?", spec_is_reg_name_narrow,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "method_number", spec_method_number, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "method_of", spec_method_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "request_target_form", spec_request_target_form,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_request_target", spec_parse_request_target,

@@ -779,33 +779,55 @@ ABSOLUTE  = 1
 AUTHORITY = 2
 ASTERISK  = 3
 
-# A short string that is only ever compared is carried as a number, not
-# as bytes. Every method RFC 9110 9.1 defines fits in eight bytes -
-# CONNECT and OPTIONS are the longest at seven - so the whole method is
-# one integer, and a comparison is one instruction instead of a memcmp.
-# The bytes go in little-endian order, so the number is the bytes.
-assert('method_number packs the bytes of a method') do
-  assert_equal 0, Webmachine::SpecHttp.method_number('')
-  assert_equal 'GET'.bytes.each_with_index.map { |b, i| b << (i * 8) }.sum,
-               Webmachine::SpecHttp.method_number('GET')
-  assert_equal 'CONNECT'.bytes.each_with_index.map { |b, i| b << (i * 8) }.sum,
-               Webmachine::SpecHttp.method_number('CONNECT')
+UNKNOWN_METHOD = 0
+GET            = 1
+HEAD           = 2
+POST           = 3
+PUT            = 4
+DELETE         = 5
+CONNECT        = 6
+OPTIONS        = 7
+TRACE          = 8
+QUERY          = 9
+
+# RFC 9110 9.3 names eight methods and RFC 10008 2 names QUERY. No two of
+# the nine share a first byte, except POST and PUT.
+assert('method_of names the nine methods this tree knows') do
+  assert_equal GET, Webmachine::SpecHttp.method_of('GET')
+  assert_equal HEAD, Webmachine::SpecHttp.method_of('HEAD')
+  assert_equal POST, Webmachine::SpecHttp.method_of('POST')
+  assert_equal PUT, Webmachine::SpecHttp.method_of('PUT')
+  assert_equal DELETE, Webmachine::SpecHttp.method_of('DELETE')
+  assert_equal CONNECT, Webmachine::SpecHttp.method_of('CONNECT')
+  assert_equal OPTIONS, Webmachine::SpecHttp.method_of('OPTIONS')
+  assert_equal TRACE, Webmachine::SpecHttp.method_of('TRACE')
+  assert_equal QUERY, Webmachine::SpecHttp.method_of('QUERY')
 end
 
 # RFC 9110 9.1: the method is case-sensitive, so this must not fold.
-# Carrying the bytes as a number gives that for nothing.
-assert('method_number keeps the case of a method') do
-  assert_not_equal Webmachine::SpecHttp.method_number('GET'),
-                   Webmachine::SpecHttp.method_number('get')
+assert('method_of keeps the case of a method') do
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('get')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('Get')
 end
 
-# We do not serve WebDAV, so a method of more than eight bytes is not one
-# of ours. It answers 0, which is what an absent method answers, and the
-# graph turns that into 501 at B12.
-assert('method_number refuses a method that does not fit') do
-  assert_equal 0, Webmachine::SpecHttp.method_number('PROPPATCH')
-  assert_equal 0, Webmachine::SpecHttp.method_number('VERSION-CONTROL')
-  assert_true Webmachine::SpecHttp.method_number('OPTIONS') > 0
+# We serve no WebDAV, and the graph turns an unknown method into 501 at
+# B12. A name that begins like one of ours is still not one of ours.
+assert('method_of refuses a method it does not know') do
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('PROPPATCH')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('VERSION-CONTROL')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('PATCH')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('GE')
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of('GETS')
+end
+
+# Found by fuzz/fuzz_http.cpp. The method used to be packed into a
+# uint64_t, and the packing padded with zero, so a name with a NUL behind
+# it read as the shorter name. The comparison now reads the bytes it was
+# given and no others.
+assert('method_of refuses a name a NUL byte follows') do
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of("POST\0\0\0\0")
+  assert_equal UNKNOWN_METHOD, Webmachine::SpecHttp.method_of("GET\0")
 end
 
 # RFC 9112 3.2 gives four forms, and the first sentence of that section

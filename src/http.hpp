@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <expected>
 #include <iterator>
 #include <optional>
@@ -165,32 +164,6 @@ private:
     unsigned char found_byte_;
 };
 
-constexpr uint64_t method_number(const std::string_view method)
-{
-    if (method.empty() || method.size() > sizeof(uint64_t))
-        return 0;
-    if consteval {
-        uint64_t number = 0;
-        for (size_t at = 0; at < method.size(); ++at)
-            number |= static_cast<uint64_t>(static_cast<unsigned char>(method.at(at)))
-                      << (at * 8);
-        return number;
-    }
-    uint64_t number = 0;
-    std::memcpy(&number, method.data(), sizeof number);
-    return number & (~uint64_t{0} >> (8 * (sizeof number - method.size())));
-}
-
-inline constexpr uint64_t kConnectNumber = method_number("CONNECT");
-inline constexpr uint64_t kOptionsNumber = method_number("OPTIONS");
-inline constexpr uint64_t kGetNumber = method_number("GET");
-inline constexpr uint64_t kHeadNumber = method_number("HEAD");
-inline constexpr uint64_t kPostNumber = method_number("POST");
-inline constexpr uint64_t kPutNumber = method_number("PUT");
-inline constexpr uint64_t kDeleteNumber = method_number("DELETE");
-inline constexpr uint64_t kTraceNumber = method_number("TRACE");
-inline constexpr uint64_t kQueryNumber = method_number("QUERY");
-
 enum class Method : uint8_t {
     kUnknown,
     kGet,
@@ -206,25 +179,27 @@ enum class Method : uint8_t {
 
 constexpr Method method_of(const std::string_view text)
 {
-    switch (method_number(text)) {
-    case kGetNumber:
-        return Method::kGet;
-    case kHeadNumber:
-        return Method::kHead;
-    case kPostNumber:
-        return Method::kPost;
-    case kPutNumber:
-        return Method::kPut;
-    case kDeleteNumber:
-        return Method::kDelete;
-    case kConnectNumber:
-        return Method::kConnect;
-    case kOptionsNumber:
-        return Method::kOptions;
-    case kTraceNumber:
-        return Method::kTrace;
-    case kQueryNumber:
-        return Method::kQuery;
+    if (text.empty())
+        return Method::kUnknown;
+    switch (text.front()) {
+    case 'G':
+        return text == "GET" ? Method::kGet : Method::kUnknown;
+    case 'H':
+        return text == "HEAD" ? Method::kHead : Method::kUnknown;
+    case 'P':
+        if (text == "POST")
+            return Method::kPost;
+        return text == "PUT" ? Method::kPut : Method::kUnknown;
+    case 'D':
+        return text == "DELETE" ? Method::kDelete : Method::kUnknown;
+    case 'C':
+        return text == "CONNECT" ? Method::kConnect : Method::kUnknown;
+    case 'O':
+        return text == "OPTIONS" ? Method::kOptions : Method::kUnknown;
+    case 'T':
+        return text == "TRACE" ? Method::kTrace : Method::kUnknown;
+    case 'Q':
+        return text == "QUERY" ? Method::kQuery : Method::kUnknown;
     default:
         return Method::kUnknown;
     }
@@ -1005,14 +980,14 @@ inline std::expected<Host, Refusal> parse_host(const std::string_view text)
 enum class TargetForm : uint8_t { kOrigin, kAbsolute, kAuthority, kAsterisk };
 
 inline std::expected<TargetForm, Refusal> request_target_form(const std::string_view text,
-                                                              const uint64_t method)
+                                                              const Method method)
 {
     if (text.empty()) [[unlikely]]
         return std::unexpected(Refusal{kRequestTargetProblem, 0});
-    if (method == kConnectNumber)
+    if (method == Method::kConnect)
         return TargetForm::kAuthority;
     if (text == "*")
-        return method == kOptionsNumber
+        return method == Method::kOptions
                    ? std::expected<TargetForm, Refusal>(TargetForm::kAsterisk)
                    : std::unexpected(Refusal{kRequestTargetProblem, 0});
     if (text.starts_with('/'))
@@ -1859,7 +1834,7 @@ if_range_passes(const std::string_view field, const std::optional<EntityTag> sel
 }
 
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,
-                                                                  const uint64_t method)
+                                                                  const Method method)
 {
     const auto form = request_target_form(text, method);
     if (!form) [[unlikely]]
