@@ -53,6 +53,41 @@ mrb_value spec_ascii_lowered(mrb_state *mrb, mrb_value)
         mrb, static_cast<unsigned char>(http::ascii_lowered(static_cast<char>(byte))));
 }
 
+// The word fold has to answer what the byte fold answers for every byte,
+// and not only for tchar. equal_ignoring_case runs before anything says
+// the bytes are tchar - the scheme of an absolute-form target reaches it
+// unchecked - and a carry out of 0xc1 + 0x3f would land in the byte above.
+// The pairs are what catch a carry, the lanes are what catch a constant
+// that is one byte short.
+constexpr bool word_fold_answers_what_the_byte_fold_answers()
+{
+    const auto byte_fold = [](const uint64_t word) {
+        uint64_t folded = 0;
+        for (size_t lane = 0; lane < sizeof(uint64_t); lane++) {
+            const auto byte = static_cast<unsigned char>((word >> (lane * 8)) & 0xffu);
+            folded |= static_cast<uint64_t>(static_cast<unsigned char>(
+                          http::ascii_lowered(static_cast<char>(byte))))
+                      << (lane * 8);
+        }
+        return folded;
+    };
+    for (unsigned low = 0; low < 256; low++)
+        for (unsigned above = 0; above < 256; above++) {
+            const uint64_t word = (static_cast<uint64_t>(above) << 8) | low;
+            if (http::ascii_lowered_word(word) != byte_fold(word))
+                return false;
+        }
+    for (unsigned value = 0; value < 256; value++)
+        for (size_t lane = 0; lane < sizeof(uint64_t); lane++) {
+            const uint64_t word = static_cast<uint64_t>(value) << (lane * 8);
+            if (http::ascii_lowered_word(word) != byte_fold(word))
+                return false;
+        }
+    return true;
+}
+
+static_assert(word_fold_answers_what_the_byte_fold_answers());
+
 mrb_value spec_equal_ignoring_case(mrb_state *mrb, mrb_value)
 {
     const char *left = nullptr;

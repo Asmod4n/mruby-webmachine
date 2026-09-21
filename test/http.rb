@@ -761,6 +761,25 @@ assert('equal_ignoring_case answers RFC 9110 5.1 for a field name') do
   assert_false Webmachine::SpecHttp.equal_ignoring_case('accept', 'accept-encoding')
 end
 
+# Three paths now, and a gap between two of them would let names that
+# differ in the middle compare equal. Eight bytes at a time while eight
+# remain, then one last word that overlaps the one before it; below eight,
+# two four byte words that overlap; below four, the byte loop. So every
+# length is walked and every byte of it is flipped.
+assert('equal_ignoring_case reads every byte at every length') do
+  missed = []
+  (0..40).each do |length|
+    text = (0...length).map { |at| ('a'.ord + (at % 26)).chr }.join
+    missed << [length, :case] unless Webmachine::SpecHttp.equal_ignoring_case(text, text.upcase)
+    length.times do |at|
+      other = text.dup
+      other[at] = (other[at].ord ^ 1).chr
+      missed << [length, at] if Webmachine::SpecHttp.equal_ignoring_case(text, other)
+    end
+  end
+  assert_equal [], missed
+end
+
 # Every one of the 65536 byte pairs, against the fold itself, so the
 # comparison and the fold cannot drift apart.
 assert('equal_ignoring_case agrees with ascii_lowered on every pair of bytes') do

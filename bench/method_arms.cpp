@@ -1,31 +1,76 @@
 #include <benchmark/benchmark.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <string_view>
 
 #include "http.hpp"
 
-// Three ways to read a method token, and the reason there is a question.
+// Three ways to read a method token, and why the tree reads it the third
+// way.
 //
-// The tree packs the bytes into a uint64_t and switches over nine
-// constants. The packing pads with zero, so "POST\0\0\0\0" packs to the
-// number "POST" packs to and method_of answers kPost for four bytes
-// nobody sent. A fuzzer found that. The packing also loads eight bytes
-// for a three byte token, which is right only because the ring leaves
-// kWidePadding behind every byte of its pool.
+// It used to pack the bytes into a uint64_t and switch over nine
+// constants. The packing padded with zero, so "POST\0\0\0\0" packed to
+// the number "POST" packs to and method_of answered kPost for four bytes
+// nobody sent; fuzz/fuzz_http.cpp found that. It also loaded eight bytes
+// for a three byte token, which held only where the caller left padding
+// behind the run, and AddressSanitizer called that a heap-buffer-overflow
+// on a token an mruby string carried.
 //
-// Two arms answer without either property. Both read exactly the bytes
-// of the token, and both refuse a token that is not one of the nine
-// whatever stands behind it.
+// That arm is kept here, written out, because a decision nobody can
+// re-run is a decision nobody can check.
 //
-// The nine names are three to seven bytes long and no two of one length
-// share a first byte, so a switch on either one leaves at most two
-// comparisons.
+// The other two read exactly the bytes of the token. The nine names are
+// three to seven bytes long, and no two of one length share a first byte,
+// so a switch on either one leaves at most two comparisons.
 namespace
 {
 
 using http::Method;
+
+constexpr uint64_t packed_number(const std::string_view method)
+{
+    if (method.empty() || method.size() > sizeof(uint64_t))
+        return 0;
+    uint64_t number = 0;
+    std::memcpy(&number, method.data(), sizeof number);
+    return number & (~uint64_t{0} >> (8 * (sizeof number - method.size())));
+}
+
+constexpr uint64_t packed_of(const char (&name)[8])
+{
+    uint64_t number = 0;
+    for (size_t at = 0; at + 1 < sizeof name; at++)
+        number |= static_cast<uint64_t>(static_cast<unsigned char>(name[at])) << (at * 8);
+    return number;
+}
+
+Method by_packed_word(const std::string_view text)
+{
+    switch (packed_number(text)) {
+    case packed_of("GET\0\0\0\0"):
+        return Method::kGet;
+    case packed_of("HEAD\0\0\0"):
+        return Method::kHead;
+    case packed_of("POST\0\0\0"):
+        return Method::kPost;
+    case packed_of("PUT\0\0\0\0"):
+        return Method::kPut;
+    case packed_of("DELETE\0"):
+        return Method::kDelete;
+    case packed_of("CONNECT"):
+        return Method::kConnect;
+    case packed_of("OPTIONS"):
+        return Method::kOptions;
+    case packed_of("TRACE\0\0"):
+        return Method::kTrace;
+    case packed_of("QUERY\0\0"):
+        return Method::kQuery;
+    default:
+        return Method::kUnknown;
+    }
+}
 
 Method by_length(const std::string_view text)
 {
@@ -121,21 +166,26 @@ const std::string_view kTokens[16] = {
     token_of(8),  token_of(9),  token_of(10), token_of(11),
     token_of(12), token_of(13), token_of(14), token_of(15)};
 
-// Two arms that answer differently measure nothing, so this runs before
-// every row. The second loop is the finding: the two new arms refuse a
-// padded name and the packed one takes it.
+// Arms that answer differently measure nothing, so this runs before every
+// row. by_first_byte is what the tree does, so it is held against the tree
+// as well and not only against its neighbours.
+//
+// The last loop is the finding that ended the packed arm: it takes a name
+// a NUL byte follows and the other two refuse it.
 void check_the_arms_agree()
 {
     for (const std::string_view token : kTokens)
-        if (http::method_of(token) != by_length(token) ||
-            by_length(token) != by_first_byte(token))
+        if (by_packed_word(token) != by_length(token) ||
+            by_length(token) != by_first_byte(token) ||
+            by_first_byte(token) != http::method_of(token))
             std::abort();
     const std::string padded = std::string("POST", 4) + std::string(4, '\0');
     const std::string_view four_nuls(padded.data(), padded.size());
-    if (http::method_of(four_nuls) != Method::kPost)
+    if (by_packed_word(four_nuls) != Method::kPost)
         std::abort();
     if (by_length(four_nuls) != Method::kUnknown ||
-        by_first_byte(four_nuls) != Method::kUnknown)
+        by_first_byte(four_nuls) != Method::kUnknown ||
+        http::method_of(four_nuls) != Method::kUnknown)
         std::abort();
 }
 
@@ -144,7 +194,7 @@ void method_packed(benchmark::State &state)
     check_the_arms_agree();
     size_t at = 0;
     for (auto _ : state) {
-        Method got = http::method_of(kTokens[at++ & 15]);
+        Method got = by_packed_word(kTokens[at++ & 15]);
         benchmark::DoNotOptimize(got);
     }
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));

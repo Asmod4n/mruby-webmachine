@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <expected>
 #include <iterator>
 #include <optional>
@@ -334,11 +335,51 @@ inline std::string ascii_lowered_copy(const std::string_view text)
     return lowered;
 }
 
+inline constexpr size_t kWordBytes = sizeof(uint64_t);
+
+constexpr uint64_t ascii_lowered_word(const uint64_t word)
+{
+    const uint64_t high = 0x8080808080808080ull;
+    const uint64_t seven = word & ~high;
+    const uint64_t at_least_a = seven + 0x3f3f3f3f3f3f3f3full;
+    const uint64_t after_z = seven + 0x2525252525252525ull;
+    return word | ((at_least_a & ~after_z & ~word & high) >> 2);
+}
+
+constexpr uint64_t word_at(const std::string_view text, const size_t at)
+{
+    if consteval {
+        uint64_t word = 0;
+        for (size_t index = 0; index < kWordBytes; index++)
+            word |= static_cast<uint64_t>(static_cast<unsigned char>(text.at(at + index)))
+                    << (index * 8);
+        return word;
+    }
+    uint64_t word = 0;
+    std::memcpy(&word, std::next(text.data(), static_cast<ptrdiff_t>(at)), kWordBytes);
+    return word;
+}
+
+constexpr bool words_are_equal_ignoring_case(const std::string_view left,
+                                             const std::string_view right, const size_t at)
+{
+    return ascii_lowered_word(word_at(left, at)) == ascii_lowered_word(word_at(right, at));
+}
+
 constexpr bool equal_ignoring_case(const std::string_view left, const std::string_view right)
 {
-    return std::ranges::equal(left, right, [](const char a, const char b) {
-        return ascii_lowered(a) == ascii_lowered(b);
-    });
+    if (left.size() != right.size())
+        return false;
+    const size_t whole = right.size();
+    if (whole < kWordBytes)
+        return std::ranges::equal(left, right, [](const char a, const char b) {
+            return ascii_lowered(a) == ascii_lowered(b);
+        });
+    size_t at = 0;
+    for (; at + kWordBytes <= whole; at += kWordBytes)
+        if (!words_are_equal_ignoring_case(left, right, at))
+            return false;
+    return at == whole || words_are_equal_ignoring_case(left, right, whole - kWordBytes);
 }
 
 inline constexpr std::array<bool, 256> kTchar = [] {
