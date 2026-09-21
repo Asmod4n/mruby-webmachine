@@ -35,21 +35,22 @@
 namespace
 {
 
-const std::string kHead = std::string("GET /index.html HTTP/1.1\r\n"
-                                      "Host: www.example.com\r\n"
-                                      "Connection: keep-alive\r\n"
-                                      "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
-                                      "sec-ch-ua-mobile: ?0\r\n"
-                                      "sec-ch-ua-platform: \"Linux\"\r\n"
-                                      "Upgrade-Insecure-Requests: 1\r\n"
-                                      "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
-                                      "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
-                                      "Sec-Fetch-Site: none\r\n"
-                                      "Sec-Fetch-Mode: navigate\r\n"
-                                      "Accept-Encoding: gzip, deflate, br, zstd\r\n"
-                                      "Accept-Language: en-US,en;q=0.9\r\n"
-                                      "\r\n") +
-                          std::string(http::kWidePadding, '\0');
+const std::string kHead =
+    std::string("GET /index.html HTTP/1.1\r\n"
+                "Host: www.example.com\r\n"
+                "Connection: keep-alive\r\n"
+                "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Linux\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
+                "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Accept-Encoding: gzip, deflate, br, zstd\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "\r\n") +
+    std::string(http::kWidePadding, '\0');
 
 const size_t kHeadSize = kHead.size() - http::kWidePadding;
 
@@ -80,14 +81,14 @@ size_t value_bytes_of(const std::string_view whole, const std::vector<size_t> &s
     return sum;
 }
 
-const size_t kValueBytes = value_bytes_of(std::string_view(kHead).substr(0, kHeadSize),
-                                          kValueStarts);
+const size_t kValueBytes =
+    value_bytes_of(std::string_view(kHead).substr(0, kHeadSize), kValueStarts);
 
 #ifdef __SSE4_2__
 // get_token_to_eol's own ranges, copied from picohttpparser.
-alignas(16) const char kEolStopRanges[16] = "\0\010"     /* allow HT */
-                                            "\012\037"   /* allow SP and up to but not DEL */
-                                            "\177\177";  /* allow chars w. MSB set */
+alignas(16) const char kEolStopRanges[16] = "\0\010"    /* allow HT */
+                                            "\012\037"  /* allow SP and up to but not DEL */
+                                            "\177\177"; /* allow chars w. MSB set */
 
 size_t first_stop_pcmpestri(const std::string_view text)
 {
@@ -96,9 +97,8 @@ size_t first_stop_pcmpestri(const std::string_view text)
     for (; at + 16 <= text.size(); at += 16) {
         const __m128i bytes =
             _mm_loadu_si128(reinterpret_cast<const __m128i *>(std::next(text.data(), at)));
-        const int found = _mm_cmpestri(ranges, 6, bytes, 16,
-                                       _SIDD_LEAST_SIGNIFICANT | _SIDD_CMP_RANGES |
-                                           _SIDD_UBYTE_OPS);
+        const int found = _mm_cmpestri(
+            ranges, 6, bytes, 16, _SIDD_LEAST_SIGNIFICANT | _SIDD_CMP_RANGES | _SIDD_UBYTE_OPS);
         if (found != 16) {
             at += static_cast<size_t>(found);
             break;
@@ -121,12 +121,11 @@ uint32_t avx2_value_refusals(const char *at)
 {
     const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(at));
     const __m256i below_space =
-        _mm256_cmpeq_epi8(_mm256_max_epu8(bytes, _mm256_set1_epi8(0x1f)),
-                          _mm256_set1_epi8(0x1f));
+        _mm256_cmpeq_epi8(_mm256_max_epu8(bytes, _mm256_set1_epi8(0x1f)), _mm256_set1_epi8(0x1f));
     const __m256i horizontal_tab = _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8('\t'));
     const __m256i delete_byte = _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8(0x7f));
-    const __m256i refused = _mm256_or_si256(
-        _mm256_andnot_si256(horizontal_tab, below_space), delete_byte);
+    const __m256i refused =
+        _mm256_or_si256(_mm256_andnot_si256(horizontal_tab, below_space), delete_byte);
     return static_cast<uint32_t>(_mm256_movemask_epi8(refused));
 }
 

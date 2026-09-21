@@ -31,21 +31,22 @@
 namespace
 {
 
-const std::string kHead = std::string("GET /index.html HTTP/1.1\r\n"
-                                      "Host: www.example.com\r\n"
-                                      "Connection: keep-alive\r\n"
-                                      "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
-                                      "sec-ch-ua-mobile: ?0\r\n"
-                                      "sec-ch-ua-platform: \"Linux\"\r\n"
-                                      "Upgrade-Insecure-Requests: 1\r\n"
-                                      "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
-                                      "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
-                                      "Sec-Fetch-Site: none\r\n"
-                                      "Sec-Fetch-Mode: navigate\r\n"
-                                      "Accept-Encoding: gzip, deflate, br, zstd\r\n"
-                                      "Accept-Language: en-US,en;q=0.9\r\n"
-                                      "\r\n") +
-                          std::string(http::kWidePadding, '\0');
+const std::string kHead =
+    std::string("GET /index.html HTTP/1.1\r\n"
+                "Host: www.example.com\r\n"
+                "Connection: keep-alive\r\n"
+                "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Linux\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
+                "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Accept-Encoding: gzip, deflate, br, zstd\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "\r\n") +
+    std::string(http::kWidePadding, '\0');
 
 const size_t kHeadSize = kHead.size() - http::kWidePadding;
 
@@ -62,7 +63,8 @@ std::vector<size_t> name_starts_of(const std::string_view whole)
     return starts;
 }
 
-const std::vector<size_t> kNameStarts = name_starts_of(std::string_view(kHead).substr(0, kHeadSize));
+const std::vector<size_t> kNameStarts =
+    name_starts_of(std::string_view(kHead).substr(0, kHeadSize));
 
 #ifdef __SSE4_2__
 // picohttpparser's own ranges for a field name, copied from parse_token.
@@ -85,9 +87,9 @@ size_t first_stop_pcmpestri(const std::string_view text)
     for (; at + 16 <= text.size(); at += 16) {
         const __m128i bytes =
             _mm_loadu_si128(reinterpret_cast<const __m128i *>(std::next(text.data(), at)));
-        const int found = _mm_cmpestri(ranges, static_cast<int>(range_size), bytes, 16,
-                                       _SIDD_LEAST_SIGNIFICANT | _SIDD_CMP_RANGES |
-                                           _SIDD_UBYTE_OPS);
+        const int found =
+            _mm_cmpestri(ranges, static_cast<int>(range_size), bytes, 16,
+                         _SIDD_LEAST_SIGNIFICANT | _SIDD_CMP_RANGES | _SIDD_UBYTE_OPS);
         if (found != 16) {
             at += static_cast<size_t>(found);
             break;

@@ -23,7 +23,7 @@ namespace
 // sanitizer can see the wall.
 class Padded
 {
-public:
+  public:
     Padded(const char *from, const mrb_int size)
         : bytes_(static_cast<size_t>(size) + http::kWidePadding, '\0'),
           length_(static_cast<size_t>(size))
@@ -31,9 +31,12 @@ public:
         std::copy_n(from, length_, bytes_.begin());
     }
 
-    std::string_view view() const { return {bytes_.data(), length_}; }
+    std::string_view view() const
+    {
+        return {bytes_.data(), length_};
+    }
 
-private:
+  private:
     std::vector<char> bytes_;
     size_t length_;
 };
@@ -65,8 +68,8 @@ constexpr bool word_fold_answers_what_the_byte_fold_answers()
         uint64_t folded = 0;
         for (size_t lane = 0; lane < sizeof(uint64_t); lane++) {
             const auto byte = static_cast<unsigned char>((word >> (lane * 8)) & 0xffu);
-            folded |= static_cast<uint64_t>(static_cast<unsigned char>(
-                          http::ascii_lowered(static_cast<char>(byte))))
+            folded |= static_cast<uint64_t>(
+                          static_cast<unsigned char>(http::ascii_lowered(static_cast<char>(byte))))
                       << (lane * 8);
         }
         return folded;
@@ -95,9 +98,9 @@ mrb_value spec_equal_ignoring_case(mrb_state *mrb, mrb_value)
     mrb_int left_length = 0;
     mrb_int right_length = 0;
     mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
-    return mrb_bool_value(http::equal_ignoring_case(
-        std::string_view(left, static_cast<size_t>(left_length)),
-        std::string_view(right, static_cast<size_t>(right_length))));
+    return mrb_bool_value(
+        http::equal_ignoring_case(std::string_view(left, static_cast<size_t>(left_length)),
+                                  std::string_view(right, static_cast<size_t>(right_length))));
 }
 
 mrb_value spec_parse_error(mrb_state *mrb, mrb_value)
@@ -125,8 +128,7 @@ mrb_value spec_parse_quoted_string(mrb_state *mrb, mrb_value)
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
     const std::string_view whole(text, static_cast<size_t>(length));
-    const auto got =
-        http::parse_quoted_string(whole);
+    const auto got = http::parse_quoted_string(whole);
     if (got.has_value())
         return cpp_to_mrb_value(mrb, *got);
     mrb_value out[3] = {
@@ -158,8 +160,7 @@ mrb_value spec_parse_field_value_parameter(mrb_state *mrb, mrb_value)
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
     const std::string_view whole(text, static_cast<size_t>(length));
-    const auto got =
-        http::parse_field_value_parameter(whole);
+    const auto got = http::parse_field_value_parameter(whole);
     if (!got) {
         mrb_value out[2] = {
             cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule()),
@@ -200,8 +201,8 @@ mrb_value spec_parse_rfc850_date(mrb_state *mrb, mrb_value)
     mrb_int current_year = 0;
     mrb_get_args(mrb, "si", &text, &length, &current_year);
     const std::string_view whole(text, static_cast<size_t>(length));
-    const auto got = http::parse_rfc850_date(whole,
-                                             std::chrono::year{static_cast<int>(current_year)});
+    const auto got =
+        http::parse_rfc850_date(whole, std::chrono::year{static_cast<int>(current_year)});
     if (got.has_value())
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
@@ -234,8 +235,8 @@ mrb_value spec_parse_http_date(mrb_state *mrb, mrb_value)
     mrb_int current_year = 0;
     mrb_get_args(mrb, "si", &text, &length, &current_year);
     const std::string_view whole(text, static_cast<size_t>(length));
-    const auto got = http::parse_http_date(whole,
-                                           std::chrono::year{static_cast<int>(current_year)});
+    const auto got =
+        http::parse_http_date(whole, std::chrono::year{static_cast<int>(current_year)});
     if (got.has_value())
         return cpp_to_mrb_value(mrb, got->time_since_epoch().count());
     mrb_value out[2] = {
@@ -294,9 +295,8 @@ mrb_value spec_method_of(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
-    return cpp_to_mrb_value(
-        mrb,
-        static_cast<int>(http::method_of(std::string_view(text, static_cast<size_t>(length)))));
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::method_of(
+                                     std::string_view(text, static_cast<size_t>(length)))));
 }
 
 mrb_value spec_request_target_form(mrb_state *mrb, mrb_value)
@@ -441,7 +441,8 @@ mrb_value spec_strong_comparison(mrb_state *mrb, mrb_value)
     mrb_int left_length = 0;
     mrb_int right_length = 0;
     mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
-    const auto one = http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto one =
+        http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
     const auto other =
         http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
     if (!one || !other)
@@ -456,7 +457,8 @@ mrb_value spec_weak_comparison(mrb_state *mrb, mrb_value)
     mrb_int left_length = 0;
     mrb_int right_length = 0;
     mrb_get_args(mrb, "ss", &left, &left_length, &right, &right_length);
-    const auto one = http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
+    const auto one =
+        http::parse_entity_tag(std::string_view(left, static_cast<size_t>(left_length)));
     const auto other =
         http::parse_entity_tag(std::string_view(right, static_cast<size_t>(right_length)));
     if (!one || !other)
@@ -522,9 +524,8 @@ mrb_value spec_content_coding(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
-    return cpp_to_mrb_value(
-        mrb, static_cast<int>(
-                 http::content_coding(std::string_view(text, static_cast<size_t>(length)))));
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::content_coding(
+                                     std::string_view(text, static_cast<size_t>(length)))));
 }
 
 mrb_value spec_is_language_tag(mrb_state *mrb, mrb_value)
@@ -661,9 +662,8 @@ mrb_value spec_choose_media_type(mrb_state *mrb, mrb_value)
             return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
         provided.push_back(*media);
     }
-    const auto got = http::choose_media_type(provided,
-                                             std::string_view(accept,
-                                                              static_cast<size_t>(accept_length)));
+    const auto got = http::choose_media_type(
+        provided, std::string_view(accept, static_cast<size_t>(accept_length)));
     if (!got)
         return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
     if (!*got)
@@ -734,9 +734,8 @@ mrb_value spec_field_combining(mrb_state *mrb, mrb_value)
     const char *name = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &name, &length);
-    return cpp_to_mrb_value(
-        mrb, static_cast<int>(
-                 http::field_combining(std::string_view(name, static_cast<size_t>(length)))));
+    return cpp_to_mrb_value(mrb, static_cast<int>(http::field_combining(
+                                     std::string_view(name, static_cast<size_t>(length)))));
 }
 
 mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
@@ -809,8 +808,8 @@ mrb_value spec_every_expectation_is_understood(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
-    return mrb_bool_value(http::every_expectation_is_understood(
-        std::string_view(text, static_cast<size_t>(length))));
+    return mrb_bool_value(
+        http::every_expectation_is_understood(std::string_view(text, static_cast<size_t>(length))));
 }
 
 mrb_value spec_spell_allow(mrb_state *mrb, mrb_value)
@@ -846,8 +845,7 @@ mrb_value spec_is_token68(mrb_state *mrb, mrb_value)
     const char *text = nullptr;
     mrb_int length = 0;
     mrb_get_args(mrb, "s", &text, &length);
-    return mrb_bool_value(
-        http::is_token68(std::string_view(text, static_cast<size_t>(length))));
+    return mrb_bool_value(http::is_token68(std::string_view(text, static_cast<size_t>(length))));
 }
 
 mrb_value spec_parse_credentials(mrb_state *mrb, mrb_value)
@@ -892,8 +890,7 @@ mrb_value spec_status_properties(mrb_state *mrb, mrb_value)
                               : mrb_nil_value(),
         cpp_to_mrb_value(mrb, http::reason_phrase(code)),
         mrb_bool_value(http::is_heuristically_cacheable(code)),
-        http::is_status(code) ? mrb_bool_value(http::content_is_forbidden(code))
-                              : mrb_nil_value(),
+        http::is_status(code) ? mrb_bool_value(http::content_is_forbidden(code)) : mrb_nil_value(),
     };
     return mrb_ary_new_from_values(mrb, 5, out);
 }
@@ -1020,7 +1017,8 @@ mrb_value spec_resolved_range(mrb_state *mrb, mrb_value)
     mrb_int length = 0;
     mrb_int complete_length = 0;
     mrb_get_args(mrb, "si", &text, &length, &complete_length);
-    const auto spec = http::parse_byte_range_spec(std::string_view(text, static_cast<size_t>(length)));
+    const auto spec =
+        http::parse_byte_range_spec(std::string_view(text, static_cast<size_t>(length)));
     if (!spec)
         return mrb_nil_value();
     const auto got = http::resolved_range(*spec, static_cast<uint64_t>(complete_length));
@@ -1174,28 +1172,20 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "remove_dot_segments", spec_remove_dot_segments,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "percent_decode", spec_percent_decode,
-                               MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_entity_tag", spec_parse_entity_tag,
-                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "percent_decode", spec_percent_decode, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_entity_tag", spec_parse_entity_tag, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "strong_comparison", spec_strong_comparison,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "weak_comparison", spec_weak_comparison,
-                               MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "parse_media_type", spec_parse_media_type,
-                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "weak_comparison", spec_weak_comparison, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_media_type", spec_parse_media_type, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "value_of_parameter", spec_value_of_parameter,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "unquoted_token", spec_unquoted_token,
+    mrb_define_module_function(mrb, sp, "unquoted_token", spec_unquoted_token, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "content_coding", spec_content_coding, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "language_tag?", spec_is_language_tag, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length", spec_parse_content_length,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "content_coding", spec_content_coding,
-                               MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "language_tag?", spec_is_language_tag,
-                               MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_content_length",
-                               spec_parse_content_length, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue,
-                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_qvalue", spec_parse_qvalue, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
@@ -1204,20 +1194,18 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "date_is_a_validator?",
                                spec_modification_date_is_a_validator, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods,
-                               MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "every_expectation_is_understood",
                                spec_every_expectation_is_understood, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "spell_allow", spec_spell_allow, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_retry_after_delay",
-                               spec_spell_retry_after_delay, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_retry_after_delay", spec_spell_retry_after_delay,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "spell_retry_after_date", spec_spell_retry_after_date,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "is_token68", spec_is_token68, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_credentials", spec_parse_credentials,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_challenge", spec_spell_challenge,
-                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "spell_challenge", spec_spell_challenge, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "status_properties", spec_status_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
@@ -1226,42 +1214,34 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required,
+    mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_content_length_list", spec_parse_content_length_list,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining,
-                               MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_content_length_list",
-                               spec_parse_content_length_list, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "coding_weight", spec_coding_weight, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "choose_media_type", spec_choose_media_type,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "choose_coding", spec_choose_coding, MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "choose_language", spec_choose_language,
-                               MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "language_weight", spec_language_weight,
-                               MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range,
-                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "choose_language", spec_choose_language, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_weight", spec_language_weight, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "language_range?", spec_is_language_range, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "language_range_matches?", spec_language_range_matches,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "parse_ranges_specifier",
-                               spec_parse_ranges_specifier, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_byte_range_spec",
-                               spec_parse_byte_range_spec, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "resolved_range", spec_resolved_range,
-                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_ranges_specifier", spec_parse_ranges_specifier,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_byte_range_spec", spec_parse_byte_range_spec,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "resolved_range", spec_resolved_range, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "flow_node", spec_flow_node, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "flow_names", spec_flow_names, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, sp, "if_match_passes", spec_if_match_passes,
+    mrb_define_module_function(mrb, sp, "if_match_passes", spec_if_match_passes, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_none_match_passes", spec_if_none_match_passes,
                                MRB_ARGS_REQ(3));
-    mrb_define_module_function(mrb, sp, "if_none_match_passes",
-                               spec_if_none_match_passes, MRB_ARGS_REQ(3));
-    mrb_define_module_function(mrb, sp, "if_modified_since_passes",
-                               spec_if_modified_since_passes, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "if_modified_since_passes", spec_if_modified_since_passes,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "if_unmodified_since_passes",
                                spec_if_unmodified_since_passes, MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes,
-                               MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));
@@ -1275,6 +1255,5 @@ inline void http_spec(mrb_state *mrb)
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_asctime_date", spec_parse_asctime_date,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "parse_http_date", spec_parse_http_date,
-                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "parse_http_date", spec_parse_http_date, MRB_ARGS_REQ(2));
 }

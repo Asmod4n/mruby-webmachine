@@ -31,21 +31,22 @@ namespace
 
 // The request Chrome sends, with the padding the ring leaves behind every
 // byte of its pool.
-const std::string kHead = std::string("GET /index.html HTTP/1.1\r\n"
-                                      "Host: www.example.com\r\n"
-                                      "Connection: keep-alive\r\n"
-                                      "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
-                                      "sec-ch-ua-mobile: ?0\r\n"
-                                      "sec-ch-ua-platform: \"Linux\"\r\n"
-                                      "Upgrade-Insecure-Requests: 1\r\n"
-                                      "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
-                                      "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
-                                      "Sec-Fetch-Site: none\r\n"
-                                      "Sec-Fetch-Mode: navigate\r\n"
-                                      "Accept-Encoding: gzip, deflate, br, zstd\r\n"
-                                      "Accept-Language: en-US,en;q=0.9\r\n"
-                                      "\r\n") +
-                          std::string(http::kWidePadding, '\0');
+const std::string kHead =
+    std::string("GET /index.html HTTP/1.1\r\n"
+                "Host: www.example.com\r\n"
+                "Connection: keep-alive\r\n"
+                "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Linux\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
+                "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Accept-Encoding: gzip, deflate, br, zstd\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "\r\n") +
+    std::string(http::kWidePadding, '\0');
 
 const size_t kHeadSize = kHead.size() - http::kWidePadding;
 
@@ -82,9 +83,9 @@ wanted::Wanted phr_then_sink_once()
     size_t field_count = kMaxFields;
     wanted::Wanted found{};
     wanted::sink = &found;
-    const int read = hooked_phr_parse_request(kHead.data(), kHeadSize, &method, &method_len,
-                                              &target, &target_len, &minor_version, fields,
-                                              &field_count, 0);
+    const int read =
+        hooked_phr_parse_request(kHead.data(), kHeadSize, &method, &method_len, &target,
+                                 &target_len, &minor_version, fields, &field_count, 0);
     if (read < 0)
         return wanted::Wanted{};
     return found;

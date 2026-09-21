@@ -68,24 +68,23 @@ inline bool name_is(const std::string_view name, const std::string_view lowercas
 inline void note_field(const std::string_view name, const std::string_view value, Wanted &wanted)
 {
     switch (name.size()) {
-    case 4:
-        if (name_is(name, "host"))
-            wanted.host = value;
-        break;
-    case 6:
-        if (name_is(name, "accept"))
-            wanted.accept = value;
-        break;
-    case 15:
-        if (name_is(name, "accept-encoding"))
-            wanted.accept_encoding = value;
-        else if (name_is(name, "accept-language"))
-            wanted.accept_language = value;
-        break;
-    default:
-        break;
+        case 4:
+            if (name_is(name, "host"))
+                wanted.host = value;
+            break;
+        case 6:
+            if (name_is(name, "accept"))
+                wanted.accept = value;
+            break;
+        case 15:
+            if (name_is(name, "accept-encoding"))
+                wanted.accept_encoding = value;
+            else if (name_is(name, "accept-language"))
+                wanted.accept_language = value;
+            break;
+        default:
+            break;
     }
 }
-
 
 } // namespace wanted

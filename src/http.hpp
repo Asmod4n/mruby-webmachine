@@ -38,8 +38,8 @@ struct Problem {
 
 inline constexpr std::array kProblems = std::to_array<Problem>({
     {"", "", "", "", 0},
-    {"RFC 9110 5.6.2", "tchar", "The field name is not valid",
-     "!#$%&'*+-.^_`|~ / DIGIT / ALPHA", 400},
+    {"RFC 9110 5.6.2", "tchar", "The field name is not valid", "!#$%&'*+-.^_`|~ / DIGIT / ALPHA",
+     400},
     {"RFC 9110 5.6.4", "quoted-string", "The field value is not valid",
      "DQUOTE *( qdtext / quoted-pair ) DQUOTE", 400},
     {"RFC 9110 5.6.4", "qdtext", "The field value is not valid",
@@ -63,13 +63,11 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "origin-form / absolute-form / authority-form / asterisk-form", 400},
     {"RFC 9110 4.1", "absolute-path", "The request target is not valid",
      "1*( \"/\" segment ), segment = *pchar", 400},
-    {"RFC 3986 3.4", "query", "The request target is not valid",
-     "*( pchar / \"/\" / \"?\" )", 400},
+    {"RFC 3986 3.4", "query", "The request target is not valid", "*( pchar / \"/\" / \"?\" )", 400},
     {"RFC 9110 4.2.1", "scheme", "The request target is not valid", "\"http\" / \"https\"", 400},
     {"RFC 9110 4.2.4", "userinfo", "The request target is not valid",
      "no userinfo in an http or https URI", 400},
-    {"RFC 3986 2.1", "pct-encoded", "The request target is not valid", "\"%\" HEXDIG HEXDIG",
-     400},
+    {"RFC 3986 2.1", "pct-encoded", "The request target is not valid", "\"%\" HEXDIG HEXDIG", 400},
     {"RFC 9110 8.8.3", "entity-tag", "The entity tag is not valid",
      "[ \"W/\" ] DQUOTE *etagc DQUOTE, etagc = %x21 / %x23-7E / obs-text", 400},
     {"RFC 9110 8.3.1", "media-type", "The media type is not valid",
@@ -84,8 +82,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 500},
     {"RFC 9651 4.1", "sf-item",
      "A media type this resource provides cannot be spelled as a Structured Field",
-     "sf-token = ( ALPHA / \"*\" ) *( tchar / \":\" / \"/\" ); a string holds %x20-7E; "
-     "a parameter key holds ( lcalpha / \"*\" ) *( lcalpha / DIGIT / \"_\" / \"-\" / \".\" / \"*\" )",
+     "sf-token = ( ALPHA / \"*\" ) *( tchar / \":\" / \"/\" ); a string holds %x20-7E; a "
+     "parameter key holds ( lcalpha / \"*\" ) *( lcalpha / DIGIT / \"_\" / \"-\" / \".\" / \"*\" )",
      500},
     {"RFC 9110 11.4", "credentials", "The credentials are not valid",
      "auth-scheme [ 1*SP ( token68 / #auth-param ) ]", 400},
@@ -133,15 +131,14 @@ inline constexpr size_t kExcerptBefore = 16;
 
 class ParseError : public std::runtime_error
 {
-public:
+  public:
     ParseError(const Refusal refusal, const std::string_view text)
         : std::runtime_error(""), refusal_(refusal),
           found_byte_(refusal.offset < text.size()
                           ? static_cast<unsigned char>(text.at(refusal.offset))
                           : 0)
     {
-        const size_t back =
-            refusal.offset < kExcerptBefore ? 0 : refusal.offset - kExcerptBefore;
+        const size_t back = refusal.offset < kExcerptBefore ? 0 : refusal.offset - kExcerptBefore;
         const size_t from = std::min(back, text.size());
         for (const char letter : text.substr(from, excerpt_.size()))
             excerpt_.at(excerpt_length_++) = letter;
@@ -151,17 +148,44 @@ public:
     {
         return kProblems.at(refusal_.problem).title.data();
     }
-    uint16_t problem() const noexcept { return refusal_.problem; }
-    std::string_view section() const noexcept { return kProblems.at(refusal_.problem).section; }
-    std::string_view rule() const noexcept { return kProblems.at(refusal_.problem).rule; }
-    std::string_view title() const noexcept { return kProblems.at(refusal_.problem).title; }
-    std::string_view allowed() const noexcept { return kProblems.at(refusal_.problem).allowed; }
-    uint16_t status() const noexcept { return kProblems.at(refusal_.problem).status; }
-    size_t offset() const noexcept { return refusal_.offset; }
-    unsigned char found_byte() const noexcept { return found_byte_; }
-    std::string_view excerpt() const noexcept { return {excerpt_.data(), excerpt_length_}; }
+    uint16_t problem() const noexcept
+    {
+        return refusal_.problem;
+    }
+    std::string_view section() const noexcept
+    {
+        return kProblems.at(refusal_.problem).section;
+    }
+    std::string_view rule() const noexcept
+    {
+        return kProblems.at(refusal_.problem).rule;
+    }
+    std::string_view title() const noexcept
+    {
+        return kProblems.at(refusal_.problem).title;
+    }
+    std::string_view allowed() const noexcept
+    {
+        return kProblems.at(refusal_.problem).allowed;
+    }
+    uint16_t status() const noexcept
+    {
+        return kProblems.at(refusal_.problem).status;
+    }
+    size_t offset() const noexcept
+    {
+        return refusal_.offset;
+    }
+    unsigned char found_byte() const noexcept
+    {
+        return found_byte_;
+    }
+    std::string_view excerpt() const noexcept
+    {
+        return {excerpt_.data(), excerpt_length_};
+    }
 
-private:
+  private:
     Refusal refusal_;
     std::array<char, 32> excerpt_{};
     uint8_t excerpt_length_ = 0;
@@ -186,52 +210,52 @@ constexpr Method method_of(const std::string_view text)
     if (text.empty())
         return Method::kUnknown;
     switch (text.front()) {
-    case 'G':
-        return text == "GET" ? Method::kGet : Method::kUnknown;
-    case 'H':
-        return text == "HEAD" ? Method::kHead : Method::kUnknown;
-    case 'P':
-        if (text == "POST")
-            return Method::kPost;
-        return text == "PUT" ? Method::kPut : Method::kUnknown;
-    case 'D':
-        return text == "DELETE" ? Method::kDelete : Method::kUnknown;
-    case 'C':
-        return text == "CONNECT" ? Method::kConnect : Method::kUnknown;
-    case 'O':
-        return text == "OPTIONS" ? Method::kOptions : Method::kUnknown;
-    case 'T':
-        return text == "TRACE" ? Method::kTrace : Method::kUnknown;
-    case 'Q':
-        return text == "QUERY" ? Method::kQuery : Method::kUnknown;
-    default:
-        return Method::kUnknown;
+        case 'G':
+            return text == "GET" ? Method::kGet : Method::kUnknown;
+        case 'H':
+            return text == "HEAD" ? Method::kHead : Method::kUnknown;
+        case 'P':
+            if (text == "POST")
+                return Method::kPost;
+            return text == "PUT" ? Method::kPut : Method::kUnknown;
+        case 'D':
+            return text == "DELETE" ? Method::kDelete : Method::kUnknown;
+        case 'C':
+            return text == "CONNECT" ? Method::kConnect : Method::kUnknown;
+        case 'O':
+            return text == "OPTIONS" ? Method::kOptions : Method::kUnknown;
+        case 'T':
+            return text == "TRACE" ? Method::kTrace : Method::kUnknown;
+        case 'Q':
+            return text == "QUERY" ? Method::kQuery : Method::kUnknown;
+        default:
+            return Method::kUnknown;
     }
 }
 
 constexpr std::string_view method_name_of(const Method method)
 {
     switch (method) {
-    case Method::kGet:
-        return "GET";
-    case Method::kHead:
-        return "HEAD";
-    case Method::kPost:
-        return "POST";
-    case Method::kPut:
-        return "PUT";
-    case Method::kDelete:
-        return "DELETE";
-    case Method::kConnect:
-        return "CONNECT";
-    case Method::kOptions:
-        return "OPTIONS";
-    case Method::kTrace:
-        return "TRACE";
-    case Method::kQuery:
-        return "QUERY";
-    case Method::kUnknown:
-        return {};
+        case Method::kGet:
+            return "GET";
+        case Method::kHead:
+            return "HEAD";
+        case Method::kPost:
+            return "POST";
+        case Method::kPut:
+            return "PUT";
+        case Method::kDelete:
+            return "DELETE";
+        case Method::kConnect:
+            return "CONNECT";
+        case Method::kOptions:
+            return "OPTIONS";
+        case Method::kTrace:
+            return "TRACE";
+        case Method::kQuery:
+            return "QUERY";
+        case Method::kUnknown:
+            return {};
     }
     return {};
 }
@@ -523,8 +547,7 @@ inline constexpr auto kQueryByteLowBits = ascii_low_nibble_bits_of(kQueryByte);
 inline constexpr auto kTcharLowBits = ascii_low_nibble_bits_of(kTchar);
 inline constexpr auto kLowercaseTcharLowBits = ascii_low_nibble_bits_of(kLowercaseTchar);
 
-inline bool every_byte_is_allowed(const std::string_view text,
-                                  const std::array<bool, 256> &allowed)
+inline bool every_byte_is_allowed(const std::string_view text, const std::array<bool, 256> &allowed)
 {
     for (const char letter : text)
         if (!allowed.at(static_cast<unsigned char>(letter))) [[unlikely]]
@@ -537,8 +560,7 @@ inline uint64_t neon_block_refusals(const unsigned char *at,
                                     const std::array<unsigned char, 16> &low_bits)
 {
     const uint8x16_t bytes = vld1q_u8(at);
-    const uint8x16_t low =
-        vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
+    const uint8x16_t low = vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
     const uint8x16_t high = vqtbl1q_u8(vld1q_u8(kHighNibbleBit.data()), vshrq_n_u8(bytes, 4));
     const uint8x16_t refused = vceqq_u8(vandq_u8(low, high), vdupq_n_u8(0));
     return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(refused), 4)), 0);
@@ -639,7 +661,8 @@ inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::s
         const std::string_view escaped = rest.substr(stop + 1);
         if (escaped.empty())
             break;
-        if (!is_qdtext(escaped.front()) && escaped.front() != '"' && escaped.front() != '\\') [[unlikely]]
+        if (!is_qdtext(escaped.front()) && escaped.front() != '"' && escaped.front() != '\\')
+            [[unlikely]]
             return std::unexpected(Refusal{kQdtextProblem, static_cast<uint32_t>(at + stop + 1)});
         rest = escaped.substr(1);
     }
@@ -766,20 +789,20 @@ enum class FieldCombining : uint8_t { kList, kRefuse, kMustAgree, kNeverCombined
 constexpr FieldCombining field_combining(const std::string_view name)
 {
     switch (name.size()) {
-    case 4:
-        return equal_ignoring_case(name, "host") ? FieldCombining::kRefuse
-                                                 : FieldCombining::kList;
-    case 10:
-        return equal_ignoring_case(name, "set-cookie") ? FieldCombining::kNeverCombined
-                                                       : FieldCombining::kList;
-    case 12:
-        return equal_ignoring_case(name, "content-type") ? FieldCombining::kRefuse
-                                                         : FieldCombining::kList;
-    case 14:
-        return equal_ignoring_case(name, "content-length") ? FieldCombining::kMustAgree
+        case 4:
+            return equal_ignoring_case(name, "host") ? FieldCombining::kRefuse
+                                                     : FieldCombining::kList;
+        case 10:
+            return equal_ignoring_case(name, "set-cookie") ? FieldCombining::kNeverCombined
                                                            : FieldCombining::kList;
-    default:
-        return FieldCombining::kList;
+        case 12:
+            return equal_ignoring_case(name, "content-type") ? FieldCombining::kRefuse
+                                                             : FieldCombining::kList;
+        case 14:
+            return equal_ignoring_case(name, "content-length") ? FieldCombining::kMustAgree
+                                                               : FieldCombining::kList;
+        default:
+            return FieldCombining::kList;
     }
 }
 
@@ -799,16 +822,19 @@ parse_field_value_parameter(const std::string_view text)
         return std::optional<FieldValueParameter>{};
     const std::string_view name(rest.begin(), std::ranges::find_if_not(rest, is_tchar));
     if (name.empty()) [[unlikely]]
-        return std::unexpected(Refusal{kTcharProblem, static_cast<uint32_t>(text.size() - rest.size())});
+        return std::unexpected(
+            Refusal{kTcharProblem, static_cast<uint32_t>(text.size() - rest.size())});
     const std::string_view after = rest.substr(name.size());
     if (!after.starts_with('=')) [[unlikely]]
-        return std::unexpected(Refusal{kParameterProblem, static_cast<uint32_t>(text.size() - after.size())});
+        return std::unexpected(
+            Refusal{kParameterProblem, static_cast<uint32_t>(text.size() - after.size())});
     const std::string_view raw = after.substr(1);
     const size_t begins = text.size() - raw.size();
     if (raw.starts_with('"')) {
         const auto quoted = parse_quoted_string(raw);
         if (!quoted) [[unlikely]]
-            return std::unexpected(Refusal{quoted.error().problem, static_cast<uint32_t>(begins + quoted.error().offset)});
+            return std::unexpected(Refusal{quoted.error().problem,
+                                           static_cast<uint32_t>(begins + quoted.error().offset)});
         return FieldValueParameter{name, *quoted, raw.substr(quoted->size())};
     }
     const std::string_view value(raw.begin(), std::ranges::find_if_not(raw, is_tchar));
@@ -873,8 +899,8 @@ parse_imf_fixdate(const std::string_view text)
 
 // RFC 9110 5.6.7: day-name = %s"Mon" / %s"Tue" / %s"Wed" / %s"Thu" /
 // %s"Fri" / %s"Sat" / %s"Sun", and %s means the case is part of the rule.
-inline constexpr std::array kDayNames = std::to_array<std::string_view>(
-    {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"});
+inline constexpr std::array kDayNames =
+    std::to_array<std::string_view>({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"});
 
 constexpr std::array<char, 2> two_digits(const unsigned value)
 {
@@ -1016,16 +1042,14 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
 // so a valid one is stepped over three bytes at a time.
 constexpr bool is_hexdig(const char letter)
 {
-    return is_digit(letter) || (letter >= 'A' && letter <= 'F') ||
-           (letter >= 'a' && letter <= 'f');
+    return is_digit(letter) || (letter >= 'A' && letter <= 'F') || (letter >= 'a' && letter <= 'f');
 }
 
 inline size_t first_broken_pct_encoded(const std::string_view text)
 {
-    for (size_t at = text.find('%'); at != std::string_view::npos;
-         at = text.find('%', at + 3))
-        if (text.size() - at < 3 || !is_hexdig(text.at(at + 1)) ||
-            !is_hexdig(text.at(at + 2))) [[unlikely]]
+    for (size_t at = text.find('%'); at != std::string_view::npos; at = text.find('%', at + 3))
+        if (text.size() - at < 3 || !is_hexdig(text.at(at + 1)) || !is_hexdig(text.at(at + 2)))
+            [[unlikely]]
             return at;
     return std::string_view::npos;
 }
@@ -1338,8 +1362,7 @@ inline constexpr size_t kQvaluePointAt = 1;
 inline constexpr size_t kQvalueDigitsAt = 2;
 inline constexpr size_t kQvalueLength = 5;
 
-inline std::expected<uint64_t, Refusal>
-parse_content_length_list(const std::string_view combined)
+inline std::expected<uint64_t, Refusal> parse_content_length_list(const std::string_view combined)
 {
     std::optional<uint64_t> agreed;
     std::string_view rest = combined;
@@ -1373,8 +1396,8 @@ inline std::expected<uint16_t, Refusal> parse_qvalue(const std::string_view text
     for (size_t at = kQvalueDigitsAt; at < text.size(); ++at) {
         if (!is_digit(text.at(at))) [[unlikely]]
             return std::unexpected(Refusal{kQvalueProblem, static_cast<uint32_t>(at)});
-        thousandths = static_cast<uint16_t>(thousandths +
-                                            static_cast<unsigned>(text.at(at) - '0') * place);
+        thousandths =
+            static_cast<uint16_t>(thousandths + static_cast<unsigned>(text.at(at) - '0') * place);
         place = static_cast<uint16_t>(place / 10);
     }
     if (whole == kMostPreferred && thousandths != 0) [[unlikely]]
@@ -1419,8 +1442,7 @@ media_range_precedence(const MediaType range, const MediaType media_type)
         if (!equal_ignoring_case((*parameter)->name, "q")) {
             const auto provided = value_of_parameter(media_type.parameters, (*parameter)->name);
             if (!provided) [[unlikely]]
-                return std::unexpected(
-                    Refusal{kProvidedMediaTypeProblem, provided.error().offset});
+                return std::unexpected(Refusal{kProvidedMediaTypeProblem, provided.error().offset});
             if (!*provided || !equal_ignoring_case(unquoted_token(**provided),
                                                    unquoted_token((*parameter)->value)))
                 return std::optional<unsigned>{};
@@ -1486,10 +1508,9 @@ inline std::expected<uint16_t, Refusal> coding_weight(const std::string_view acc
         const std::string_view codings = before_parameters(element->element);
         if (codings != "*" && !is_token(codings)) [[unlikely]]
             return std::unexpected(Refusal{kTcharProblem, static_cast<uint32_t>(at)});
-        const unsigned precedence = codings == "*" ? kAnyCodingPrecedence
-                                    : equal_ignoring_case(codings, coding)
-                                        ? kNamedCodingPrecedence
-                                        : 0;
+        const unsigned precedence = codings == "*"                         ? kAnyCodingPrecedence
+                                    : equal_ignoring_case(codings, coding) ? kNamedCodingPrecedence
+                                                                           : 0;
         if (precedence > most_specific) {
             const auto found = weight_of(parameters_of(element->element));
             if (!found) [[unlikely]]
@@ -1526,8 +1547,7 @@ inline unsigned language_range_precedence(const std::string_view range)
 {
     return range == "*"
                ? kAnyLanguagePrecedence
-               : kAnyLanguagePrecedence + 1 +
-                     static_cast<unsigned>(std::ranges::count(range, '-'));
+               : kAnyLanguagePrecedence + 1 + static_cast<unsigned>(std::ranges::count(range, '-'));
 }
 
 inline std::expected<uint16_t, Refusal> language_weight(const std::string_view accept_language,
@@ -1564,9 +1584,8 @@ constexpr bool is_structured_token(const std::string_view text)
 {
     if (text.empty() || !(is_alpha(text.front()) || text.front() == '*'))
         return false;
-    return std::ranges::all_of(text, [](const char letter) {
-        return is_tchar(letter) || letter == ':' || letter == '/';
-    });
+    return std::ranges::all_of(
+        text, [](const char letter) { return is_tchar(letter) || letter == ':' || letter == '/'; });
 }
 
 // RFC 9651: key = ( lcalpha / "*" ) *( lcalpha / DIGIT / "_" / "-" / "."
@@ -1581,8 +1600,8 @@ constexpr bool is_structured_key(const std::string_view text)
     if (text.empty() || !(is_lowercase_alpha(text.front()) || text.front() == '*'))
         return false;
     return std::ranges::all_of(text, [&is_lowercase_alpha](const char letter) {
-        return is_lowercase_alpha(letter) || is_digit(letter) || letter == '_' ||
-               letter == '-' || letter == '.' || letter == '*';
+        return is_lowercase_alpha(letter) || is_digit(letter) || letter == '_' || letter == '-' ||
+               letter == '.' || letter == '*';
     });
 }
 
@@ -1596,8 +1615,7 @@ inline std::expected<std::string, Refusal> spell_structured_string(const std::st
     for (size_t at = 0; at < text.size(); at++) {
         const unsigned char byte = static_cast<unsigned char>(text.at(at));
         if (byte < 0x20 || byte > 0x7e) [[unlikely]]
-            return std::unexpected(
-                Refusal{kStructuredItemProblem, static_cast<uint32_t>(at)});
+            return std::unexpected(Refusal{kStructuredItemProblem, static_cast<uint32_t>(at)});
         if (byte == '"' || byte == '\\')
             spelled.push_back('\\');
         spelled.push_back(text.at(at));
@@ -1640,8 +1658,8 @@ spell_accept_query(const std::span<const MediaType> provided)
         while (true) {
             const auto parameter = parse_field_value_parameter(rest);
             if (!parameter) [[unlikely]]
-                return std::unexpected(Refusal{kProvidedMediaTypeProblem,
-                                               parameter.error().offset});
+                return std::unexpected(
+                    Refusal{kProvidedMediaTypeProblem, parameter.error().offset});
             if (!*parameter)
                 break;
             const std::string key = ascii_lowered_copy((*parameter)->name);
@@ -1714,12 +1732,12 @@ enum class SelectingField : uint8_t { kAccept, kAcceptEncoding, kAcceptLanguage 
 constexpr std::string_view field_name_of(const SelectingField field)
 {
     switch (field) {
-    case SelectingField::kAccept:
-        return "accept";
-    case SelectingField::kAcceptEncoding:
-        return "accept-encoding";
-    case SelectingField::kAcceptLanguage:
-        return "accept-language";
+        case SelectingField::kAccept:
+            return "accept";
+        case SelectingField::kAcceptEncoding:
+            return "accept-encoding";
+        case SelectingField::kAcceptLanguage:
+            return "accept-language";
     }
     return {};
 }
@@ -1808,9 +1826,8 @@ inline std::optional<ResolvedRange> resolved_range(const ByteRangeSpec spec,
     const IntRange &range = std::get<IntRange>(spec);
     if (range.first_pos >= complete_length)
         return std::nullopt;
-    return ResolvedRange{range.first_pos,
-                         std::min(range.last_pos.value_or(complete_length - 1),
-                                  complete_length - 1)};
+    return ResolvedRange{range.first_pos, std::min(range.last_pos.value_or(complete_length - 1),
+                                                   complete_length - 1)};
 }
 
 struct EntityTag {
@@ -1888,9 +1905,8 @@ inline std::expected<bool, Refusal> if_none_match_passes(const std::string_view 
     return true;
 }
 
-constexpr bool
-if_modified_since_passes(const std::chrono::sys_seconds since,
-                         const std::optional<std::chrono::sys_seconds> last_modified)
+constexpr bool if_modified_since_passes(const std::chrono::sys_seconds since,
+                                        const std::optional<std::chrono::sys_seconds> last_modified)
 {
     return !last_modified || *last_modified > since;
 }
@@ -1928,26 +1944,25 @@ inline std::expected<RequestTarget, Refusal> parse_request_target(const std::str
     if (!form) [[unlikely]]
         return std::unexpected(form.error());
     switch (*form) {
-    case TargetForm::kOrigin: {
-        const auto origin = parse_origin_form(text);
-        if (!origin) [[unlikely]]
-            return std::unexpected(origin.error());
-        return RequestTarget{*form, {}, {}, origin->path, origin->query};
-    }
-    case TargetForm::kAbsolute:
-        return parse_absolute_form(text);
-    case TargetForm::kAuthority: {
-        const auto authority = parse_authority_form(text);
-        if (!authority) [[unlikely]]
-            return std::unexpected(authority.error());
-        return RequestTarget{*form, {}, *authority, {}, {}};
-    }
-    case TargetForm::kAsterisk:
-        return RequestTarget{*form, {}, {}, {}, {}};
+        case TargetForm::kOrigin: {
+            const auto origin = parse_origin_form(text);
+            if (!origin) [[unlikely]]
+                return std::unexpected(origin.error());
+            return RequestTarget{*form, {}, {}, origin->path, origin->query};
+        }
+        case TargetForm::kAbsolute:
+            return parse_absolute_form(text);
+        case TargetForm::kAuthority: {
+            const auto authority = parse_authority_form(text);
+            if (!authority) [[unlikely]]
+                return std::unexpected(authority.error());
+            return RequestTarget{*form, {}, *authority, {}, {}};
+        }
+        case TargetForm::kAsterisk:
+            return RequestTarget{*form, {}, {}, {}, {}};
     }
     std::unreachable();
 }
-
 
 // RFC 9110 15: "All valid status codes are within the range of 100 to
 // 599, inclusive." and "Values outside the range 100..599 are invalid."
@@ -1978,96 +1993,96 @@ constexpr StatusClass status_class(const uint16_t status)
 constexpr std::string_view reason_phrase(const uint16_t status)
 {
     switch (status) {
-    case 100:
-        return "Continue";
-    case 101:
-        return "Switching Protocols";
-    case 200:
-        return "OK";
-    case 201:
-        return "Created";
-    case 202:
-        return "Accepted";
-    case 203:
-        return "Non-Authoritative Information";
-    case 204:
-        return "No Content";
-    case 205:
-        return "Reset Content";
-    case 206:
-        return "Partial Content";
-    case 300:
-        return "Multiple Choices";
-    case 301:
-        return "Moved Permanently";
-    case 302:
-        return "Found";
-    case 303:
-        return "See Other";
-    case 304:
-        return "Not Modified";
-    case 305:
-        return "Use Proxy";
-    case 307:
-        return "Temporary Redirect";
-    case 308:
-        return "Permanent Redirect";
-    case 400:
-        return "Bad Request";
-    case 401:
-        return "Unauthorized";
-    case 402:
-        return "Payment Required";
-    case 403:
-        return "Forbidden";
-    case 404:
-        return "Not Found";
-    case 405:
-        return "Method Not Allowed";
-    case 406:
-        return "Not Acceptable";
-    case 407:
-        return "Proxy Authentication Required";
-    case 408:
-        return "Request Timeout";
-    case 409:
-        return "Conflict";
-    case 410:
-        return "Gone";
-    case 411:
-        return "Length Required";
-    case 412:
-        return "Precondition Failed";
-    case 413:
-        return "Content Too Large";
-    case 414:
-        return "URI Too Long";
-    case 415:
-        return "Unsupported Media Type";
-    case 416:
-        return "Range Not Satisfiable";
-    case 417:
-        return "Expectation Failed";
-    case 421:
-        return "Misdirected Request";
-    case 422:
-        return "Unprocessable Content";
-    case 426:
-        return "Upgrade Required";
-    case 500:
-        return "Internal Server Error";
-    case 501:
-        return "Not Implemented";
-    case 502:
-        return "Bad Gateway";
-    case 503:
-        return "Service Unavailable";
-    case 504:
-        return "Gateway Timeout";
-    case 505:
-        return "HTTP Version Not Supported";
-    default:
-        return {};
+        case 100:
+            return "Continue";
+        case 101:
+            return "Switching Protocols";
+        case 200:
+            return "OK";
+        case 201:
+            return "Created";
+        case 202:
+            return "Accepted";
+        case 203:
+            return "Non-Authoritative Information";
+        case 204:
+            return "No Content";
+        case 205:
+            return "Reset Content";
+        case 206:
+            return "Partial Content";
+        case 300:
+            return "Multiple Choices";
+        case 301:
+            return "Moved Permanently";
+        case 302:
+            return "Found";
+        case 303:
+            return "See Other";
+        case 304:
+            return "Not Modified";
+        case 305:
+            return "Use Proxy";
+        case 307:
+            return "Temporary Redirect";
+        case 308:
+            return "Permanent Redirect";
+        case 400:
+            return "Bad Request";
+        case 401:
+            return "Unauthorized";
+        case 402:
+            return "Payment Required";
+        case 403:
+            return "Forbidden";
+        case 404:
+            return "Not Found";
+        case 405:
+            return "Method Not Allowed";
+        case 406:
+            return "Not Acceptable";
+        case 407:
+            return "Proxy Authentication Required";
+        case 408:
+            return "Request Timeout";
+        case 409:
+            return "Conflict";
+        case 410:
+            return "Gone";
+        case 411:
+            return "Length Required";
+        case 412:
+            return "Precondition Failed";
+        case 413:
+            return "Content Too Large";
+        case 414:
+            return "URI Too Long";
+        case 415:
+            return "Unsupported Media Type";
+        case 416:
+            return "Range Not Satisfiable";
+        case 417:
+            return "Expectation Failed";
+        case 421:
+            return "Misdirected Request";
+        case 422:
+            return "Unprocessable Content";
+        case 426:
+            return "Upgrade Required";
+        case 500:
+            return "Internal Server Error";
+        case 501:
+            return "Not Implemented";
+        case 502:
+            return "Bad Gateway";
+        case 503:
+            return "Service Unavailable";
+        case 504:
+            return "Gateway Timeout";
+        case 505:
+            return "HTTP Version Not Supported";
+        default:
+            return {};
     }
 }
 
@@ -2079,21 +2094,21 @@ constexpr std::string_view reason_phrase(const uint16_t status)
 constexpr bool is_heuristically_cacheable(const uint16_t status)
 {
     switch (status) {
-    case 200:
-    case 203:
-    case 204:
-    case 206:
-    case 300:
-    case 301:
-    case 308:
-    case 404:
-    case 405:
-    case 410:
-    case 414:
-    case 501:
-        return true;
-    default:
-        return false;
+        case 200:
+        case 203:
+        case 204:
+        case 206:
+        case 300:
+        case 301:
+        case 308:
+        case 404:
+        case 405:
+        case 410:
+        case 414:
+        case 501:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -2103,10 +2118,8 @@ constexpr bool is_heuristically_cacheable(const uint16_t status)
 // 15.4.5: a 304 tells the client it already holds the representation.
 constexpr bool content_is_forbidden(const uint16_t status)
 {
-    return status_class(status) == StatusClass::kInformational || status == 204 ||
-           status == 304;
+    return status_class(status) == StatusClass::kInformational || status == 204 || status == 304;
 }
-
 
 // RFC 9110 10.1.1: "Expect = #expectation", "expectation = token [ "="
 // ( token / quoted-string ) parameters ]", the value "is
@@ -2153,7 +2166,6 @@ inline std::string spell_retry_after(const std::chrono::sys_seconds moment)
     return std::string(spelled.data(), spelled.size());
 }
 
-
 // RFC 9110 11.1: "token68 = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
 // "+" / "/" ) *"="". The name counts the 66 characters plus the two the
 // padding needs, and it is the RFC's name, so it is the one used here.
@@ -2195,8 +2207,8 @@ inline std::expected<Credentials, Refusal> parse_credentials(const std::string_v
     if (after.empty())
         return Credentials{auth_scheme, {}};
     if (after.front() != ' ') [[unlikely]]
-        return std::unexpected(Refusal{kCredentialsProblem,
-                                       static_cast<uint32_t>(auth_scheme.size())});
+        return std::unexpected(
+            Refusal{kCredentialsProblem, static_cast<uint32_t>(auth_scheme.size())});
     const size_t body = after.find_first_not_of(' ');
     if (body == std::string_view::npos)
         return Credentials{auth_scheme, {}};
@@ -2223,4 +2235,4 @@ inline std::expected<std::string, Refusal> spell_challenge(const std::string_vie
     return spelled;
 }
 
-}
+} // namespace http

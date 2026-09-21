@@ -48,7 +48,7 @@ constexpr char kAllowedEverywhere = 'a';
 
 class Walled
 {
-public:
+  public:
     Walled()
     {
         const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
@@ -72,7 +72,7 @@ public:
         return {at, bytes.size()};
     }
 
-private:
+  private:
     char *wall_ = nullptr;
 };
 
@@ -204,8 +204,7 @@ void run_quoted_string(const std::string_view text)
         return refusal_holds(quoted.error(), text);
     inside(*quoted, text);
     demand(quoted->size() >= 2, "a quoted-string is shorter than two bytes");
-    demand(quoted->starts_with('"') && quoted->ends_with('"'),
-           "a quoted-string is not in quotes");
+    demand(quoted->starts_with('"') && quoted->ends_with('"'), "a quoted-string is not in quotes");
 }
 
 // The loop has to end. rest shrinks on every round or parse_list_element
@@ -265,8 +264,8 @@ void run_fixdate_round_trip(const std::string_view text)
     // std::chrono::year holds -32767 to 32767, and spell_imf_fixdate has
     // four digits for the year. Outside that the answer is undefined and
     // the question is not this tree's.
-    constexpr int64_t kFirst = -62167219200;  // 0000-01-01T00:00:00Z
-    constexpr int64_t kLast = 253402300799;   // 9999-12-31T23:59:59Z
+    constexpr int64_t kFirst = -62167219200; // 0000-01-01T00:00:00Z
+    constexpr int64_t kLast = 253402300799;  // 9999-12-31T23:59:59Z
     if (seconds < kFirst || seconds > kLast)
         return;
     const std::chrono::sys_seconds moment{std::chrono::seconds{seconds}};
@@ -550,8 +549,7 @@ void run_method(const std::string_view text)
     demand(http::method_name_of(method) == text, "a method does not spell its own name");
     demand(!http::is_safe(method) || http::is_idempotent(method),
            "a safe method is not idempotent");
-    demand(!http::is_cacheable(method) || http::is_safe(method) ||
-               method == http::Method::kPost,
+    demand(!http::is_cacheable(method) || http::is_safe(method) || method == http::Method::kPost,
            "a method nobody may cache is cacheable");
 }
 
@@ -561,9 +559,8 @@ void run_status(const std::string_view text)
 {
     if (text.size() < 2)
         return;
-    const auto status =
-        static_cast<uint16_t>((static_cast<unsigned char>(text[0]) << 8) |
-                              static_cast<unsigned char>(text[1]));
+    const auto status = static_cast<uint16_t>((static_cast<unsigned char>(text[0]) << 8) |
+                                              static_cast<unsigned char>(text[1]));
     if (!http::is_status(status))
         return;
     const http::StatusClass held = http::status_class(status);
@@ -625,64 +622,64 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     const std::string_view text = kWalled.hold({std::next(data), size - 1});
 
     switch (entry) {
-    case Entry::kRuns:
-        return run_runs(text), 0;
-    case Entry::kQuotedString:
-        return run_quoted_string(text), 0;
-    case Entry::kListElements:
-        return run_list_elements(text), 0;
-    case Entry::kFieldValueParameter:
-        return run_field_value_parameter(text), 0;
-    case Entry::kHttpDate:
-        return run_http_date(text), 0;
-    case Entry::kFixdateRoundTrip:
-        return run_fixdate_round_trip(text), 0;
-    case Entry::kHost:
-        return run_host(text), 0;
-    case Entry::kRequestTarget:
-        return run_request_target(left_of(text), http::method_of(right_of(text))), 0;
-    case Entry::kOriginForm:
-        return run_origin_form(text), 0;
-    case Entry::kAbsoluteForm:
-        return run_absolute_form(text), 0;
-    case Entry::kPath:
-        return run_path(text), 0;
-    case Entry::kPercentDecode:
-        return run_percent_decode(text), 0;
-    case Entry::kMediaType:
-        return run_media_type(text), 0;
-    case Entry::kContentLength:
-        return run_content_length(text), 0;
-    case Entry::kQvalue:
-        return run_qvalue(text), 0;
-    case Entry::kMediaTypeWeight:
-        return run_media_type_weight(text), 0;
-    case Entry::kCodingWeight:
-        return run_coding_weight(text), 0;
-    case Entry::kLanguageWeight:
-        return run_language_weight(text), 0;
-    case Entry::kStructuredItem:
-        return run_structured_item(text), 0;
-    case Entry::kAcceptQuery:
-        return run_accept_query(text), 0;
-    case Entry::kRange:
-        return run_range(text), 0;
-    case Entry::kEntityTag:
-        return run_entity_tag(text), 0;
-    case Entry::kConditionals:
-        return run_conditionals(text), 0;
-    case Entry::kMethod:
-        return run_method(text), 0;
-    case Entry::kStatus:
-        return run_status(text), 0;
-    case Entry::kExpectation:
-        return run_expectation(text), 0;
-    case Entry::kCredentials:
-        return run_credentials(text), 0;
-    case Entry::kQuotedStringRoundTrip:
-        return run_quoted_string_round_trip(text), 0;
-    case Entry::kCount:
-        break;
+        case Entry::kRuns:
+            return run_runs(text), 0;
+        case Entry::kQuotedString:
+            return run_quoted_string(text), 0;
+        case Entry::kListElements:
+            return run_list_elements(text), 0;
+        case Entry::kFieldValueParameter:
+            return run_field_value_parameter(text), 0;
+        case Entry::kHttpDate:
+            return run_http_date(text), 0;
+        case Entry::kFixdateRoundTrip:
+            return run_fixdate_round_trip(text), 0;
+        case Entry::kHost:
+            return run_host(text), 0;
+        case Entry::kRequestTarget:
+            return run_request_target(left_of(text), http::method_of(right_of(text))), 0;
+        case Entry::kOriginForm:
+            return run_origin_form(text), 0;
+        case Entry::kAbsoluteForm:
+            return run_absolute_form(text), 0;
+        case Entry::kPath:
+            return run_path(text), 0;
+        case Entry::kPercentDecode:
+            return run_percent_decode(text), 0;
+        case Entry::kMediaType:
+            return run_media_type(text), 0;
+        case Entry::kContentLength:
+            return run_content_length(text), 0;
+        case Entry::kQvalue:
+            return run_qvalue(text), 0;
+        case Entry::kMediaTypeWeight:
+            return run_media_type_weight(text), 0;
+        case Entry::kCodingWeight:
+            return run_coding_weight(text), 0;
+        case Entry::kLanguageWeight:
+            return run_language_weight(text), 0;
+        case Entry::kStructuredItem:
+            return run_structured_item(text), 0;
+        case Entry::kAcceptQuery:
+            return run_accept_query(text), 0;
+        case Entry::kRange:
+            return run_range(text), 0;
+        case Entry::kEntityTag:
+            return run_entity_tag(text), 0;
+        case Entry::kConditionals:
+            return run_conditionals(text), 0;
+        case Entry::kMethod:
+            return run_method(text), 0;
+        case Entry::kStatus:
+            return run_status(text), 0;
+        case Entry::kExpectation:
+            return run_expectation(text), 0;
+        case Entry::kCredentials:
+            return run_credentials(text), 0;
+        case Entry::kQuotedStringRoundTrip:
+            return run_quoted_string_round_trip(text), 0;
+        case Entry::kCount:
+            break;
     }
     return 0;
 }

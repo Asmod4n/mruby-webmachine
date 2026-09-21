@@ -26,9 +26,10 @@ const std::string_view kTimestamps[16] = {
     "Sun, 08 Feb 1998 22:22:22 GMT", "Mon, 27 Dec 2049 16:05:44 GMT"};
 
 const std::string_view kFieldNames[16] = {
-    "host", "user-agent", "accept", "accept-encoding", "connection", "content-type",
-    "content-length", "if-none-match", "if-modified-since", "authorization", "cookie",
-    "referer", "x-forwarded-for", "cache-control", "sec-fetch-mode", "origin"};
+    "host",         "user-agent",     "accept",          "accept-encoding",   "connection",
+    "content-type", "content-length", "if-none-match",   "if-modified-since", "authorization",
+    "cookie",       "referer",        "x-forwarded-for", "cache-control",     "sec-fetch-mode",
+    "origin"};
 
 const std::string_view kQuoted[4] = {"\"utf-8\"", "\"a b c\"", "\"x\\\"y\"", "\"\""};
 
@@ -51,21 +52,20 @@ void is_tchar(benchmark::State &state)
 // The field names of a real request, as views into the buffer that
 // carries it, so the wide load has the rest of the request behind it.
 const std::string kChrome =
-    std::string(
-    "GET /index.html HTTP/1.1\r\n"
-    "Host: www.example.com\r\n"
-    "Connection: keep-alive\r\n"
-    "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
-    "sec-ch-ua-mobile: ?0\r\n"
-    "sec-ch-ua-platform: \"Linux\"\r\n"
-    "Upgrade-Insecure-Requests: 1\r\n"
-    "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
-    "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
-    "Sec-Fetch-Site: none\r\n"
-    "Sec-Fetch-Mode: navigate\r\n"
-    "Accept-Encoding: gzip, deflate, br, zstd\r\n"
-    "Accept-Language: en-US,en;q=0.9\r\n"
-    "\r\n")
+    std::string("GET /index.html HTTP/1.1\r\n"
+                "Host: www.example.com\r\n"
+                "Connection: keep-alive\r\n"
+                "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Linux\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\n"
+                "Accept: text/html,application/xhtml+xml;q=0.9\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Accept-Encoding: gzip, deflate, br, zstd\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "\r\n")
     // The ring gives a wide read kWidePadding bytes behind any byte of the
     // pool. A std::string gives none, and the last field name here is close
     // enough to the end for a 32 byte load to pass it.
@@ -105,10 +105,9 @@ void every_byte_over_field_names(benchmark::State &state)
     }
 }
 
-const std::string_view kHostOfChrome =
-    std::string_view(kChrome).substr(kChrome.find("Host: ") + 6,
-                                     kChrome.find("\r\n", kChrome.find("Host: ")) -
-                                         kChrome.find("Host: ") - 6);
+const std::string_view kHostOfChrome = std::string_view(kChrome).substr(
+    kChrome.find("Host: ") + 6,
+    kChrome.find("\r\n", kChrome.find("Host: ")) - kChrome.find("Host: ") - 6);
 
 void is_reg_name_over_a_host(benchmark::State &state)
 {
@@ -332,7 +331,6 @@ void charset_new(benchmark::State &state)
     }
 }
 
-
 // The scale a real request has: this block is what Chrome sends, and the
 // arms below read it the way the server would. One arm is the readers
 // this tree has; the other is a single pass that writes down where the
@@ -354,7 +352,8 @@ std::vector<ChromeField> fields_of(const std::string &request)
         size_t value_from = colon + 1;
         while (value_from < line_end && (whole[value_from] == ' ' || whole[value_from] == '\t'))
             value_from++;
-        fields.push_back({whole.substr(at, colon - at), whole.substr(value_from, line_end - value_from)});
+        fields.push_back(
+            {whole.substr(at, colon - at), whole.substr(value_from, line_end - value_from)});
         at = line_end + 2;
     }
     return fields;
@@ -421,7 +420,6 @@ void chrome_read_every_field(benchmark::State &state)
     state.SetBytesProcessed(static_cast<int64_t>(state.iterations() * kChromeBlock.size()));
 }
 
-
 // A plain GET of a static file: the graph reaches O18 with every
 // conditional and conneg fact false, so the only field value anybody
 // reads is the Host that routed it.
@@ -443,8 +441,8 @@ const std::string kRevalidate =
                 "If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n") +
     std::string(http::kWidePadding, '\0');
 
-const std::vector<ChromeField> kRevalidateFields = fields_of(
-    std::string("GET / HTTP/1.1\r\n") + kRevalidate);
+const std::vector<ChromeField> kRevalidateFields =
+    fields_of(std::string("GET / HTTP/1.1\r\n") + kRevalidate);
 
 void chrome_conditional_get(benchmark::State &state)
 {
@@ -458,8 +456,8 @@ void chrome_conditional_get(benchmark::State &state)
             answered += http::parse_entity_tag(element->element).has_value();
             rest = element->rest;
         }
-        answered += http::parse_http_date(kRevalidateFields[1].value, std::chrono::year{2026})
-                        .has_value();
+        answered +=
+            http::parse_http_date(kRevalidateFields[1].value, std::chrono::year{2026}).has_value();
         benchmark::DoNotOptimize(answered);
     }
 }
@@ -512,7 +510,8 @@ void chrome_one_pass(benchmark::State &state)
             const char *const from = std::next(kChromeBlock.data(), at);
             const size_t left = kChromeBlock.size() - at;
             const uint32_t inside = left >= 32 ? ~0u : (1u << left) - 1;
-            structural[block] = ~http::avx2_block_refusals(from, structural_table, high_table) & inside;
+            structural[block] =
+                ~http::avx2_block_refusals(from, structural_table, high_table) & inside;
             tchar[block] = ~http::avx2_block_refusals(from, tchar_table, high_table) & inside;
         }
         benchmark::DoNotOptimize(structural);
@@ -525,9 +524,9 @@ void chrome_one_pass(benchmark::State &state)
 // The same walk on both sides, over the parameters alone: this says how
 // much of the difference above is the grammar check and how much is the
 // walk itself.
-const std::string_view kParameterLists[4] = {
-    ";charset=utf-8", ";q=0.8;charset=utf-8", ";boundary=----WebKitFormBoundaryABC123",
-    ";level=1;charset=utf-8;q=0.9"};
+const std::string_view kParameterLists[4] = {";charset=utf-8", ";q=0.8;charset=utf-8",
+                                             ";boundary=----WebKitFormBoundaryABC123",
+                                             ";level=1;charset=utf-8;q=0.9"};
 
 void parameter_walk_archive(benchmark::State &state)
 {
@@ -603,8 +602,7 @@ std::string_view libreactor_field_lookup(const std::vector<ChromeField> &fields,
     return std::string_view{};
 }
 
-std::string_view field_lookup(const std::vector<ChromeField> &fields,
-                              const std::string_view name)
+std::string_view field_lookup(const std::vector<ChromeField> &fields, const std::string_view name)
 {
     for (size_t at = 0; at < fields.size(); at++)
         if (http::equal_ignoring_case(fields[at].name, name))
@@ -778,22 +776,22 @@ KnownFields classify_once(const std::vector<ChromeField> &fields)
         if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
             continue;
         switch (length) {
-        case 4:
-            if (http::equal_ignoring_case(field.name, "host"))
-                known.host = field.value;
-            break;
-        case 6:
-            if (http::equal_ignoring_case(field.name, "accept"))
-                known.accept = field.value;
-            break;
-        case 15:
-            if (http::equal_ignoring_case(field.name, "accept-encoding"))
-                known.accept_encoding = field.value;
-            else if (http::equal_ignoring_case(field.name, "accept-language"))
-                known.accept_language = field.value;
-            break;
-        default:
-            break;
+            case 4:
+                if (http::equal_ignoring_case(field.name, "host"))
+                    known.host = field.value;
+                break;
+            case 6:
+                if (http::equal_ignoring_case(field.name, "accept"))
+                    known.accept = field.value;
+                break;
+            case 15:
+                if (http::equal_ignoring_case(field.name, "accept-encoding"))
+                    known.accept_encoding = field.value;
+                else if (http::equal_ignoring_case(field.name, "accept-language"))
+                    known.accept_language = field.value;
+                break;
+            default:
+                break;
         }
     }
     return known;
@@ -807,22 +805,22 @@ KnownFields classify_once_wide(const std::vector<ChromeField> &fields)
         if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
             continue;
         switch (length) {
-        case 4:
-            if (equal_ignoring_case_wide(field.name, "host"))
-                known.host = field.value;
-            break;
-        case 6:
-            if (equal_ignoring_case_wide(field.name, "accept"))
-                known.accept = field.value;
-            break;
-        case 15:
-            if (equal_ignoring_case_wide(field.name, "accept-encoding"))
-                known.accept_encoding = field.value;
-            else if (equal_ignoring_case_wide(field.name, "accept-language"))
-                known.accept_language = field.value;
-            break;
-        default:
-            break;
+            case 4:
+                if (equal_ignoring_case_wide(field.name, "host"))
+                    known.host = field.value;
+                break;
+            case 6:
+                if (equal_ignoring_case_wide(field.name, "accept"))
+                    known.accept = field.value;
+                break;
+            case 15:
+                if (equal_ignoring_case_wide(field.name, "accept-encoding"))
+                    known.accept_encoding = field.value;
+                else if (equal_ignoring_case_wide(field.name, "accept-language"))
+                    known.accept_language = field.value;
+                break;
+            default:
+                break;
         }
     }
     return known;
@@ -832,16 +830,15 @@ void classify_once_wide_four(benchmark::State &state)
 {
     for (auto _ : state) {
         const KnownFields known = classify_once_wide(kChromeFields);
-        size_t seen = known.host.size() + known.accept.size() +
-                      known.accept_encoding.size() + known.accept_language.size();
+        size_t seen = known.host.size() + known.accept.size() + known.accept_encoding.size() +
+                      known.accept_language.size();
         benchmark::DoNotOptimize(seen);
     }
 }
 
 bool equal_ignoring_case_libc(const std::string_view left, const std::string_view right)
 {
-    return left.size() == right.size() &&
-           strncasecmp(left.data(), right.data(), right.size()) == 0;
+    return left.size() == right.size() && strncasecmp(left.data(), right.data(), right.size()) == 0;
 }
 
 KnownFields classify_once_libc(const std::vector<ChromeField> &fields)
@@ -852,22 +849,22 @@ KnownFields classify_once_libc(const std::vector<ChromeField> &fields)
         if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
             continue;
         switch (length) {
-        case 4:
-            if (equal_ignoring_case_libc(field.name, "host"))
-                known.host = field.value;
-            break;
-        case 6:
-            if (equal_ignoring_case_libc(field.name, "accept"))
-                known.accept = field.value;
-            break;
-        case 15:
-            if (equal_ignoring_case_libc(field.name, "accept-encoding"))
-                known.accept_encoding = field.value;
-            else if (equal_ignoring_case_libc(field.name, "accept-language"))
-                known.accept_language = field.value;
-            break;
-        default:
-            break;
+            case 4:
+                if (equal_ignoring_case_libc(field.name, "host"))
+                    known.host = field.value;
+                break;
+            case 6:
+                if (equal_ignoring_case_libc(field.name, "accept"))
+                    known.accept = field.value;
+                break;
+            case 15:
+                if (equal_ignoring_case_libc(field.name, "accept-encoding"))
+                    known.accept_encoding = field.value;
+                else if (equal_ignoring_case_libc(field.name, "accept-language"))
+                    known.accept_language = field.value;
+                break;
+            default:
+                break;
         }
     }
     return known;
@@ -877,8 +874,8 @@ void classify_once_libc_four(benchmark::State &state)
 {
     for (auto _ : state) {
         const KnownFields known = classify_once_libc(kChromeFields);
-        size_t seen = known.host.size() + known.accept.size() +
-                      known.accept_encoding.size() + known.accept_language.size();
+        size_t seen = known.host.size() + known.accept.size() + known.accept_encoding.size() +
+                      known.accept_language.size();
         benchmark::DoNotOptimize(seen);
     }
 }
@@ -993,22 +990,22 @@ KnownFields classify_once_padded(const std::vector<ChromeField> &fields)
         if (length >= 32 || ((kKnownFieldLengths >> length) & 1u) == 0)
             continue;
         switch (length) {
-        case 4:
-            if (name_is(field.name, "host"))
-                known.host = field.value;
-            break;
-        case 6:
-            if (name_is(field.name, "accept"))
-                known.accept = field.value;
-            break;
-        case 15:
-            if (name_is(field.name, "accept-encoding"))
-                known.accept_encoding = field.value;
-            else if (name_is(field.name, "accept-language"))
-                known.accept_language = field.value;
-            break;
-        default:
-            break;
+            case 4:
+                if (name_is(field.name, "host"))
+                    known.host = field.value;
+                break;
+            case 6:
+                if (name_is(field.name, "accept"))
+                    known.accept = field.value;
+                break;
+            case 15:
+                if (name_is(field.name, "accept-encoding"))
+                    known.accept_encoding = field.value;
+                else if (name_is(field.name, "accept-language"))
+                    known.accept_language = field.value;
+                break;
+            default:
+                break;
         }
     }
     return known;
@@ -1018,8 +1015,8 @@ void classify_once_padded_four(benchmark::State &state)
 {
     for (auto _ : state) {
         const KnownFields known = classify_once_padded(kChromeFields);
-        size_t seen = known.host.size() + known.accept.size() +
-                      known.accept_encoding.size() + known.accept_language.size();
+        size_t seen = known.host.size() + known.accept.size() + known.accept_encoding.size() +
+                      known.accept_language.size();
         benchmark::DoNotOptimize(seen);
     }
 }
@@ -1028,8 +1025,8 @@ void classify_once_four(benchmark::State &state)
 {
     for (auto _ : state) {
         const KnownFields known = classify_once(kChromeFields);
-        size_t seen = known.host.size() + known.accept.size() +
-                      known.accept_encoding.size() + known.accept_language.size();
+        size_t seen = known.host.size() + known.accept.size() + known.accept_encoding.size() +
+                      known.accept_language.size();
         benchmark::DoNotOptimize(seen);
     }
 }
