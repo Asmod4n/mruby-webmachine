@@ -19,8 +19,10 @@ read. `bench/instructions.sh --help` prints its own.
 
 ## What is committed
 
-Four commits on `dev`:
+Six commits on `dev`, pushed:
 
+    39bd876  Write the handover note
+    28a6a94  Grow the fuzz corpus by 223 inputs
     887b1e3  Write RFC 9110 sections 12.5.5, 13.2.2, 14.3 and 14.4
     b7f01ec  Let mrbtest count what a constant expression answers
     3002ff9  Keep comments in test/ alone
