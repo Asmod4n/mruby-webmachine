@@ -1667,6 +1667,22 @@ constexpr std::string_view field_name_of(const SelectingField field)
     return {};
 }
 
+inline std::expected<std::optional<std::string>, Refusal>
+spell_vary(const std::span<const std::string_view> field_names)
+{
+    if (field_names.empty())
+        return std::nullopt;
+    std::string spelled;
+    for (const std::string_view field_name : field_names) {
+        if (!is_token(field_name)) [[unlikely]]
+            return std::unexpected(Refusal{kTcharProblem, 0});
+        if (!spelled.empty())
+            spelled.append(", ");
+        spelled.append(field_name);
+    }
+    return spelled;
+}
+
 struct RangesSpecifier {
     std::string_view range_unit;
     std::string_view range_set;
@@ -1753,6 +1769,52 @@ inline std::optional<ResolvedRange> resolved_range(const ByteRangeSpec spec,
         return std::nullopt;
     return ResolvedRange{range.first_pos, std::min(range.last_pos.value_or(complete_length - 1),
                                                    complete_length - 1)};
+}
+
+inline std::expected<std::string, Refusal>
+spell_accept_ranges(const std::span<const std::string_view> range_units)
+{
+    if (range_units.empty())
+        return std::string("none");
+    std::string spelled;
+    for (const std::string_view range_unit : range_units) {
+        if (!is_token(range_unit)) [[unlikely]]
+            return std::unexpected(Refusal{kTcharProblem, 0});
+        if (!spelled.empty())
+            spelled.append(", ");
+        spelled.append(range_unit);
+    }
+    return spelled;
+}
+
+inline std::expected<std::string, Refusal>
+spell_content_range(const std::string_view range_unit, const ResolvedRange resolved,
+                    const std::optional<uint64_t> complete_length)
+{
+    if (!is_token(range_unit)) [[unlikely]]
+        return std::unexpected(Refusal{kTcharProblem, 0});
+    std::string spelled(range_unit);
+    spelled.push_back(' ');
+    spelled.append(std::to_string(resolved.first_pos));
+    spelled.push_back('-');
+    spelled.append(std::to_string(resolved.last_pos));
+    spelled.push_back('/');
+    if (complete_length)
+        spelled.append(std::to_string(*complete_length));
+    else
+        spelled.push_back('*');
+    return spelled;
+}
+
+inline std::expected<std::string, Refusal>
+spell_unsatisfied_content_range(const std::string_view range_unit, const uint64_t complete_length)
+{
+    if (!is_token(range_unit)) [[unlikely]]
+        return std::unexpected(Refusal{kTcharProblem, 0});
+    std::string spelled(range_unit);
+    spelled.append(" */");
+    spelled.append(std::to_string(complete_length));
+    return spelled;
 }
 
 struct EntityTag {
@@ -1860,6 +1922,43 @@ if_range_passes(const std::string_view field, const std::optional<EntityTag> sel
     if (!date) [[unlikely]]
         return std::unexpected(date.error());
     return last_modified.has_value() && *last_modified == *date;
+}
+
+enum class PreconditionOutcome : uint8_t {
+    kContinue,
+    kPreconditionFailed,
+    kNotModified,
+    kIgnoreRange,
+};
+
+struct Preconditions {
+    std::optional<bool> if_match;
+    std::optional<bool> if_unmodified_since;
+    std::optional<bool> if_none_match;
+    std::optional<bool> if_modified_since;
+    std::optional<bool> if_range;
+};
+
+constexpr PreconditionOutcome evaluate_preconditions(const Method method,
+                                                     const Preconditions evaluated)
+{
+    if (evaluated.if_match) {
+        if (!*evaluated.if_match)
+            return PreconditionOutcome::kPreconditionFailed;
+    } else if (evaluated.if_unmodified_since && !*evaluated.if_unmodified_since) {
+        return PreconditionOutcome::kPreconditionFailed;
+    }
+    const bool selects = method == Method::kGet || method == Method::kHead;
+    if (evaluated.if_none_match) {
+        if (!*evaluated.if_none_match)
+            return selects ? PreconditionOutcome::kNotModified
+                           : PreconditionOutcome::kPreconditionFailed;
+    } else if (selects && evaluated.if_modified_since && !*evaluated.if_modified_since) {
+        return PreconditionOutcome::kNotModified;
+    }
+    if (method == Method::kGet && evaluated.if_range && !*evaluated.if_range)
+        return PreconditionOutcome::kIgnoreRange;
+    return PreconditionOutcome::kContinue;
 }
 
 inline std::expected<RequestTarget, Refusal> parse_request_target(const std::string_view text,

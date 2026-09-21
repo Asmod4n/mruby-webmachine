@@ -1153,6 +1153,114 @@ mrb_value spec_if_range_passes(mrb_state *mrb, mrb_value)
     return mrb_bool_value(*got);
 }
 
+std::vector<std::string_view> spec_string_list(const mrb_value names)
+{
+    std::vector<std::string_view> texts;
+    for (mrb_int at = 0; at < RARRAY_LEN(names); at++) {
+        const mrb_value name = mrb_ary_entry(names, at);
+        texts.emplace_back(RSTRING_PTR(name), static_cast<size_t>(RSTRING_LEN(name)));
+    }
+    return texts;
+}
+
+mrb_value spec_spell_vary(mrb_state *mrb, mrb_value)
+{
+    mrb_value names = mrb_nil_value();
+    mrb_get_args(mrb, "A", &names);
+    const auto got = http::spell_vary(spec_string_list(names));
+    if (!got)
+        return mrb_nil_value();
+    if (!*got)
+        return mrb_false_value();
+    return cpp_to_mrb_value(mrb, **got);
+}
+
+mrb_value spec_spell_accept_ranges(mrb_state *mrb, mrb_value)
+{
+    mrb_value units = mrb_nil_value();
+    mrb_get_args(mrb, "A", &units);
+    const auto got = http::spell_accept_ranges(spec_string_list(units));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_spell_content_range(mrb_state *mrb, mrb_value)
+{
+    const char *unit = nullptr;
+    mrb_int length = 0;
+    mrb_int first_pos = 0;
+    mrb_int last_pos = 0;
+    mrb_value complete_length = mrb_nil_value();
+    mrb_get_args(mrb, "siio", &unit, &length, &first_pos, &last_pos, &complete_length);
+    const std::optional<uint64_t> complete =
+        mrb_nil_p(complete_length)
+            ? std::nullopt
+            : std::optional<uint64_t>(static_cast<uint64_t>(mrb_integer(complete_length)));
+    const auto got = http::spell_content_range(
+        std::string_view(unit, static_cast<size_t>(length)),
+        http::ResolvedRange{static_cast<uint64_t>(first_pos), static_cast<uint64_t>(last_pos)},
+        complete);
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_spell_unsatisfied_content_range(mrb_state *mrb, mrb_value)
+{
+    const char *unit = nullptr;
+    mrb_int length = 0;
+    mrb_int complete_length = 0;
+    mrb_get_args(mrb, "si", &unit, &length, &complete_length);
+    const auto got =
+        http::spell_unsatisfied_content_range(std::string_view(unit, static_cast<size_t>(length)),
+                                              static_cast<uint64_t>(complete_length));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+std::optional<bool> spec_optional_bool(const mrb_value value)
+{
+    if (mrb_nil_p(value))
+        return std::nullopt;
+    return mrb_test(value);
+}
+
+std::string_view spec_outcome_name(const http::PreconditionOutcome outcome)
+{
+    switch (outcome) {
+        case http::PreconditionOutcome::kContinue:
+            return "continue";
+        case http::PreconditionOutcome::kPreconditionFailed:
+            return "precondition failed";
+        case http::PreconditionOutcome::kNotModified:
+            return "not modified";
+        case http::PreconditionOutcome::kIgnoreRange:
+            return "ignore range";
+    }
+    return {};
+}
+
+mrb_value spec_evaluate_preconditions(mrb_state *mrb, mrb_value)
+{
+    const char *method = nullptr;
+    mrb_int length = 0;
+    mrb_value evaluated = mrb_nil_value();
+    mrb_get_args(mrb, "sA", &method, &length, &evaluated);
+    const http::Preconditions preconditions{
+        spec_optional_bool(mrb_ary_entry(evaluated, 0)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 1)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 2)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 3)),
+        spec_optional_bool(mrb_ary_entry(evaluated, 4)),
+    };
+    const http::Method asked =
+        http::method_of(std::string_view(method, static_cast<size_t>(length)));
+    return cpp_to_mrb_value(mrb,
+                            spec_outcome_name(http::evaluate_preconditions(asked, preconditions)));
+}
+
 } // namespace
 
 inline void http_spec(mrb_state *mrb)
@@ -1255,6 +1363,15 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "if_unmodified_since_passes",
                                spec_if_unmodified_since_passes, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes, MRB_ARGS_REQ(3));
+    mrb_define_module_function(mrb, sp, "evaluate_preconditions", spec_evaluate_preconditions,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "spell_vary", spec_spell_vary, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_accept_ranges", spec_spell_accept_ranges,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_content_range", spec_spell_content_range,
+                               MRB_ARGS_REQ(4));
+    mrb_define_module_function(mrb, sp, "spell_unsatisfied_content_range",
+                               spec_spell_unsatisfied_content_range, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

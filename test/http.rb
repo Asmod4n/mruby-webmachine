@@ -2298,3 +2298,89 @@ end
 assert('the padding covers one block of the wide scanner') do
   assert_true Webmachine::SpecHttp.wide_block_fits_the_padding
 end
+
+# RFC 9110 13.2.2 orders the preconditions: If-Match before
+# If-Unmodified-Since, If-None-Match before If-Modified-Since, and the
+# later field is read only when the earlier one is absent.
+assert('evaluate_preconditions walks the six steps of RFC 9110 13.2.2 in order') do
+  none = [nil, nil, nil, nil, nil]
+  assert_equal 'continue', Webmachine::SpecHttp.evaluate_preconditions('GET', none)
+  assert_equal 'precondition failed',
+               Webmachine::SpecHttp.evaluate_preconditions('PUT', [false, nil, nil, nil, nil])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('PUT', [true, false, nil, nil, nil])
+  assert_equal 'precondition failed',
+               Webmachine::SpecHttp.evaluate_preconditions('PUT', [nil, false, nil, nil, nil])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('GET', [true, nil, true, nil, nil])
+end
+
+# RFC 9110 13.2.2 step 3: a failed If-None-Match is 304 for a method that
+# selects a representation and 412 for one that changes it.
+assert('a failed If-None-Match is 304 for GET and HEAD and 412 for the rest') do
+  failed = [nil, nil, false, nil, nil]
+  assert_equal 'not modified', Webmachine::SpecHttp.evaluate_preconditions('GET', failed)
+  assert_equal 'not modified', Webmachine::SpecHttp.evaluate_preconditions('HEAD', failed)
+  assert_equal 'precondition failed',
+               Webmachine::SpecHttp.evaluate_preconditions('POST', failed)
+  assert_equal 'precondition failed',
+               Webmachine::SpecHttp.evaluate_preconditions('DELETE', failed)
+end
+
+# RFC 9110 13.2.2 step 4 reads If-Modified-Since for GET and HEAD alone,
+# and only when If-None-Match is absent. Step 5 reads If-Range for GET
+# alone, and a failed one drops the Range instead of refusing.
+assert('If-Modified-Since and If-Range are read for the methods RFC 9110 13.2.2 names') do
+  assert_equal 'not modified',
+               Webmachine::SpecHttp.evaluate_preconditions('GET', [nil, nil, nil, false, nil])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('POST', [nil, nil, nil, false, nil])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('GET', [nil, nil, true, false, nil])
+  assert_equal 'ignore range',
+               Webmachine::SpecHttp.evaluate_preconditions('GET', [nil, nil, nil, nil, false])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('HEAD', [nil, nil, nil, nil, false])
+  assert_equal 'continue',
+               Webmachine::SpecHttp.evaluate_preconditions('GET', [nil, nil, nil, nil, true])
+end
+
+# RFC 9110 12.5.5: "Vary = #( "*" / field-name )". RFC 9110 5.6.1.1 tells
+# a sender not to generate an empty list, so a response that selects on
+# nothing carries no Vary at all.
+assert('spell_vary writes the list of RFC 9110 12.5.5, and nothing for an empty one') do
+  assert_false Webmachine::SpecHttp.spell_vary([])
+  assert_equal 'accept', Webmachine::SpecHttp.spell_vary(%w[accept])
+  assert_equal 'accept, accept-encoding, accept-language',
+               Webmachine::SpecHttp.spell_vary(%w[accept accept-encoding accept-language])
+  assert_equal '*', Webmachine::SpecHttp.spell_vary(%w[*])
+  assert_nil Webmachine::SpecHttp.spell_vary(['a b'])
+end
+
+# RFC 9110 14.3: "acceptable-ranges = 1#range-unit", and a server that
+# supports no range request for the resource "MAY send Accept-Ranges:
+# none".
+assert('spell_accept_ranges writes none for the empty list of RFC 9110 14.3') do
+  assert_equal 'none', Webmachine::SpecHttp.spell_accept_ranges([])
+  assert_equal 'bytes', Webmachine::SpecHttp.spell_accept_ranges(%w[bytes])
+  assert_equal 'bytes, items', Webmachine::SpecHttp.spell_accept_ranges(%w[bytes items])
+  assert_nil Webmachine::SpecHttp.spell_accept_ranges(['by tes'])
+end
+
+# RFC 9110 14.4: "range-resp = incl-range "/" ( complete-length / "*" )".
+# A sender that does not know the complete length spells "*" for it.
+assert('spell_content_range writes the two forms of RFC 9110 14.4') do
+  assert_equal 'bytes 0-499/1234',
+               Webmachine::SpecHttp.spell_content_range('bytes', 0, 499, 1234)
+  assert_equal 'bytes 500-999/*',
+               Webmachine::SpecHttp.spell_content_range('bytes', 500, 999, nil)
+  assert_nil Webmachine::SpecHttp.spell_content_range('by tes', 0, 1, 2)
+end
+
+# RFC 9110 14.4: "unsatisfied-resp = "*" "/" complete-length". A 416
+# carries this form, and it names the length the range could not reach.
+assert('spell_unsatisfied_content_range writes what a 416 carries') do
+  assert_equal 'bytes */1234',
+               Webmachine::SpecHttp.spell_unsatisfied_content_range('bytes', 1234)
+  assert_nil Webmachine::SpecHttp.spell_unsatisfied_content_range('by tes', 1)
+end
