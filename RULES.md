@@ -1097,10 +1097,10 @@ So the key has two halves, and each side names only what it can see:
 
 The names come from the route, in the notation the route already uses -
 a literal is a string, a name is a symbol, `:*` is the splat. A route
-names path segments today, and it grows to name a query parameter, a
-cookie and a field, so that every named part of a request is declared
-once, in one place, at `route.add`. A name the route does not know is a
-refusal at startup.
+names path segments today, and it grows to name a query parameter and a
+field, so that every named part of a request is declared once, in one
+place, at `route.add`. A name the route does not know is a refusal at
+startup.
 
 Which of those names built *this* body is the handler's to say, and
 nobody else's. The body is built inside the block, so a hit never builds
