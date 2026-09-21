@@ -253,4 +253,34 @@ task :fuzz, [:seconds] do |_task, args|
      "-artifact_prefix=#{fuzz}/", '-max_len=512', '-print_final_stats=1', *limit)
 end
 
+# The arm of a scanner that no machine here has. allowed_run_length
+# compiles one of AVX2, NEON or a byte loop, so a build here never touches
+# the NEON arm and the fuzz corpus never reaches its block boundaries -
+# sixteen bytes where AVX2 has thirty two. qemu runs it.
+#
+# Correctness only. qemu translates instructions and models no pipeline,
+# so nothing here is ever a number for bench/results.
+CROSS_CXX = ENV.fetch('CROSS_CXX', 'aarch64-linux-gnu-g++').freeze
+CROSS_RUN = ENV.fetch('CROSS_RUN', 'qemu-aarch64').freeze
+
+desc 'run the wide scanners of another architecture under qemu'
+task :crosscheck do
+  %W[#{CROSS_CXX} #{CROSS_RUN}].each do |tool|
+    next if system("command -v #{tool} >/dev/null 2>&1")
+
+    raise "#{tool} is not installed; apt install g++-aarch64-linux-gnu qemu-user-static"
+  end
+  ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
+  raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
+
+  fuzz = File.join(__dir__, 'fuzz')
+  binary = File.join(fuzz, 'crosscheck')
+  includes = [File.join(__dir__, 'src'), File.join(ada, 'include')]
+  sh "#{CROSS_CXX} -std=c++23 -O2 -g -static " \
+     "#{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
+     "#{File.join(fuzz, 'crosscheck.cpp')} #{File.join(fuzz, 'fuzz_http.cpp')} " \
+     "#{File.join(ada, 'src', 'ada.cpp')} -o #{binary}"
+  sh CROSS_RUN, binary, File.join(fuzz, 'corpus')
+end
+
 task default: :test
