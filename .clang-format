@@ -26,3 +26,5 @@ AllowShortBlocksOnASingleLine: Never
 IndentCaseLabels: true
 SpaceAfterCStyleCast: false
 SortIncludes: Never
+
+FixNamespaceComments: false

@@ -13,25 +13,6 @@
 #include <x86intrin.h>
 #endif
 
-// The other half of the head. The names are scanned by parse_token and
-// measured in scan_arms.cpp; the values are scanned by get_token_to_eol,
-// which looks for the byte that ends the line.
-//
-// RFC 9110 5.5 says what may stand in a value:
-//
-//   field-vchar = VCHAR / obs-text
-//   obs-text    = %x80-FF
-//
-// So 0x80 to 0xFF are allowed, and "a recipient SHOULD treat other
-// allowed octets in field content (i.e., obs-text) as opaque data". The
-// nibble table this tree uses for tchar cannot say that: its mask holds
-// eight bits for sixteen high nibbles, so it is ASCII only and every byte
-// above 0x7f is refused.
-//
-// It does not need to. The stop set here is not a scattered set of
-// characters, it is a range: below SP except HT, plus DEL. AVX2 compares
-// ranges without any table, and unsigned comparison leaves 0x80 to 0xFF
-// allowed by itself.
 namespace
 {
 
@@ -54,8 +35,6 @@ const std::string kHead =
 
 const size_t kHeadSize = kHead.size() - http::kWidePadding;
 
-// Where each field value begins, which is where a scan for the end of the
-// line starts.
 std::vector<size_t> value_starts_of(const std::string_view whole)
 {
     std::vector<size_t> starts;
@@ -85,10 +64,10 @@ const size_t kValueBytes =
     value_bytes_of(std::string_view(kHead).substr(0, kHeadSize), kValueStarts);
 
 #ifdef __SSE4_2__
-// get_token_to_eol's own ranges, copied from picohttpparser.
-alignas(16) const char kEolStopRanges[16] = "\0\010"    /* allow HT */
-                                            "\012\037"  /* allow SP and up to but not DEL */
-                                            "\177\177"; /* allow chars w. MSB set */
+
+alignas(16) const char kEolStopRanges[16] = "\0\010"
+                                            "\012\037"
+                                            "\177\177";
 
 size_t first_stop_pcmpestri(const std::string_view text)
 {
@@ -114,9 +93,7 @@ size_t first_stop_pcmpestri(const std::string_view text)
 #endif
 
 #if defined(__AVX2__)
-// Refused: below SP and not HT, or DEL. _mm256_max_epu8 answers the
-// unsigned "at most" that _mm256_cmpgt_epi8 cannot, and that is what
-// leaves obs-text alone.
+
 uint32_t avx2_value_refusals(const char *at)
 {
     const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(at));
@@ -174,4 +151,4 @@ void scan_values_range(benchmark::State &state)
 BENCHMARK(scan_values_pcmpestri);
 BENCHMARK(scan_values_range);
 
-} // namespace
+}

@@ -13,8 +13,6 @@
 namespace
 {
 
-// The inputs change from call to call, so the compiler cannot compute
-// the answer once and lift it out of the loop.
 const std::string_view kTimestamps[16] = {
     "Sun, 06 Nov 1994 08:49:37 GMT", "Mon, 07 Dec 2020 23:59:59 GMT",
     "Tue, 01 Jan 1980 00:00:00 GMT", "Wed, 29 Feb 2020 12:30:01 GMT",
@@ -49,8 +47,6 @@ void is_tchar(benchmark::State &state)
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-// The field names of a real request, as views into the buffer that
-// carries it, so the wide load has the rest of the request behind it.
 const std::string kChrome =
     std::string("GET /index.html HTTP/1.1\r\n"
                 "Host: www.example.com\r\n"
@@ -66,9 +62,7 @@ const std::string kChrome =
                 "Accept-Encoding: gzip, deflate, br, zstd\r\n"
                 "Accept-Language: en-US,en;q=0.9\r\n"
                 "\r\n")
-    // The ring gives a wide read kWidePadding bytes behind any byte of the
-    // pool. A std::string gives none, and the last field name here is close
-    // enough to the end for a 32 byte load to pass it.
+
     + std::string(http::kWidePadding, '\0');
 
 std::vector<std::string_view> field_names_of(const std::string &request)
@@ -169,11 +163,6 @@ void parse_http_date(benchmark::State &state)
     }
 }
 
-// The archive's media type reader, from src/resource.cpp of
-// webmachine-archive, copied so that the old way and the new way run in
-// one binary. It checks no grammar: the base is everything before the
-// first ';', trimmed, and a parameter is split at ';' and at '=' with no
-// regard for a quoted-string.
 std::string_view archive_trim_optional_space(std::string_view text)
 {
     size_t index = 0;
@@ -244,8 +233,6 @@ std::string_view archive_param_find_named(std::string_view value, std::string_vi
     return {};
 }
 
-// A wide read goes past the run it is given, so the inputs are held with
-// the padding the ring's guard buffer gives a real one.
 std::string held_with_padding(const std::string_view bytes)
 {
     std::string held(bytes);
@@ -268,8 +255,6 @@ const std::string kHeldQuoted = held_with_padding("text/html;charset=\"utf-8\"")
 const std::string_view kQuotedCharset =
     std::string_view(kHeldQuoted).substr(0, kHeldQuoted.size() - http::kWidePadding);
 
-// Two arms that answer differently measure nothing, so this runs before
-// every row that claims to compare them.
 void check_the_arms_agree()
 {
     for (const std::string_view text : kContentTypes) {
@@ -331,11 +316,6 @@ void charset_new(benchmark::State &state)
     }
 }
 
-// The scale a real request has: this block is what Chrome sends, and the
-// arms below read it the way the server would. One arm is the readers
-// this tree has; the other is a single pass that writes down where the
-// structural bytes and the tchars are, which is the budget a reader
-// built on masks would have to fit into.
 struct ChromeField {
     std::string_view name;
     std::string_view value;
@@ -406,11 +386,6 @@ size_t read_chrome_with_todays_readers()
     return answered;
 }
 
-// The upper bound nobody pays: every field of the request read. The
-// decision graph does not work that way - it walks on facts, and a fact
-// is "is there an If-None-Match", not what stands in it. A value is read
-// where a node needs it, and a Ruby object is made where a resource asks
-// for it. The three arms under this one are what a request really costs.
 void chrome_read_every_field(benchmark::State &state)
 {
     for (auto _ : state) {
@@ -420,9 +395,6 @@ void chrome_read_every_field(benchmark::State &state)
     state.SetBytesProcessed(static_cast<int64_t>(state.iterations() * kChromeBlock.size()));
 }
 
-// A plain GET of a static file: the graph reaches O18 with every
-// conditional and conneg fact false, so the only field value anybody
-// reads is the Host that routed it.
 void chrome_plain_get(benchmark::State &state)
 {
     const std::string_view host = kChromeFields[0].value;
@@ -434,8 +406,6 @@ void chrome_plain_get(benchmark::State &state)
     }
 }
 
-// What a browser sends on the second visit: the same GET with the two
-// validators. Now three values are read, and not one more.
 const std::string kRevalidate =
     std::string("If-None-Match: \"686897696a7c876b7e\", W/\"xyzzy\"\r\n"
                 "If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n") +
@@ -462,8 +432,6 @@ void chrome_conditional_get(benchmark::State &state)
     }
 }
 
-// A resource that offers more than one media type: the graph asks C4,
-// and only then is Accept read.
 void chrome_negotiated_get(benchmark::State &state)
 {
     const std::string_view host = kChromeFields[0].value;
@@ -521,9 +489,6 @@ void chrome_one_pass(benchmark::State &state)
 }
 #endif
 
-// The same walk on both sides, over the parameters alone: this says how
-// much of the difference above is the grammar check and how much is the
-// walk itself.
 const std::string_view kParameterLists[4] = {";charset=utf-8", ";q=0.8;charset=utf-8",
                                              ";boundary=----WebKitFormBoundaryABC123",
                                              ";level=1;charset=utf-8;q=0.9"};
@@ -555,9 +520,6 @@ void parameter_walk_new(benchmark::State &state)
     }
 }
 
-// The quoted spelling is where the two stop answering the same thing:
-// the archive hands back the quotes and RFC 9110 5.6.6 says the quoted
-// and the unquoted value are the same. The rows are named for that.
 void charset_quoted_archive_keeps_quotes(benchmark::State &state)
 {
     for (auto _ : state) {
@@ -576,22 +538,6 @@ void charset_quoted_new_unquotes(benchmark::State &state)
     }
 }
 
-// libreactor serves a request the way this tree plans to: picohttpparser
-// fills a flat array of fields, and every field the server wants is found
-// by name afterwards. src/reactor/http.c:
-//
-//   data http_field_lookup(http_field *fields, size_t fields_count, data name)
-//   {
-//     for (i = 0; i < fields_count; i++)
-//       if (data_size(fields[i].name) == data_size(name) &&
-//           strncasecmp(data_base(fields[i].name), data_base(name),
-//                       data_size(name)) == 0)
-//         return fields[i].value;
-//     return data_null();
-//   }
-//
-// The shape is ours as well, so the arms below differ in one call:
-// strncasecmp against http::equal_ignoring_case.
 std::string_view libreactor_field_lookup(const std::vector<ChromeField> &fields,
                                          const std::string_view name)
 {
@@ -610,8 +556,6 @@ std::string_view field_lookup(const std::vector<ChromeField> &fields, const std:
     return std::string_view{};
 }
 
-// First, last and absent, because a linear scan costs what the position
-// of the answer costs. Host is field 1 of 13 and Accept-Language is 13.
 void libreactor_field_lookup_first(benchmark::State &state)
 {
     for (auto _ : state) {
@@ -660,9 +604,6 @@ void field_lookup_absent(benchmark::State &state)
     }
 }
 
-// What one request really asks for: the four fields a negotiated GET
-// needs. Four scans of the same array, which is what the flat array
-// costs when more than one field is wanted.
 void libreactor_four_lookups(benchmark::State &state)
 {
     for (auto _ : state) {
@@ -685,11 +626,6 @@ void four_lookups(benchmark::State &state)
     }
 }
 
-// Whether the gap is glibc's vector code or our byte loop. Eight bytes
-// at a time, and only 'A' to 'Z' fold: 0x41 + 0x3f sets bit 7 and 0x5a +
-// 0x25 does not, so the two carries name the range without a branch. It
-// holds for tchar alone - a byte above 0x7f would carry into its
-// neighbour - and a field name is tchar.
 uint64_t ascii_lowered_word(const uint64_t word)
 {
     const uint64_t high = 0x8080808080808080ull;
@@ -754,11 +690,6 @@ void wide_four_lookups(benchmark::State &state)
     }
 }
 
-// The third shape, and the archive's: the fields are walked once and the
-// names this server knows are recognised on the way past. A length that
-// no known name has is one test - webmachine.hpp's length_is_one_of - so
-// most fields are rejected before a byte is compared. After the pass the
-// four values are in hand and no lookup happens at all.
 constexpr uint32_t kKnownFieldLengths = (1u << 4) | (1u << 6) | (1u << 15);
 
 struct KnownFields {
@@ -880,12 +811,6 @@ void classify_once_libc_four(benchmark::State &state)
     }
 }
 
-// Can we hold to HTTP and still beat it. The one thing glibc cannot do
-// and this tree can: read past the end of a name. The ring leaves
-// kWidePadding bytes behind every byte of the pool, so a name of four
-// bytes can be loaded as eight and the bytes that are not the name are
-// masked away. The needle is a literal, so its word is a constant and the
-// whole comparison is a load, an and, the fold and one compare.
 constexpr uint64_t ascii_word_at(const std::string_view text, const size_t at)
 {
     uint64_t word = 0;
@@ -903,10 +828,6 @@ inline uint64_t padded_word_at(const std::string_view text, const size_t at)
     return left >= 8 ? word : word & ((uint64_t{1} << (left * 8)) - 1);
 }
 
-// The fold above is right for tchar and wrong for a byte above 0x7f: the
-// carry of 0xc1 + 0x3f lands in the next byte. A field name is tchar, but
-// the comparison runs before anything says so, so bit 7 is taken out of
-// the range test and put back as the last and.
 uint64_t ascii_lowered_word_safe(const uint64_t word)
 {
     const uint64_t high = 0x8080808080808080ull;
@@ -1074,6 +995,6 @@ BENCHMARK(parameter_walk_new);
 BENCHMARK(charset_quoted_archive_keeps_quotes);
 BENCHMARK(charset_quoted_new_unquotes);
 
-} // namespace
+}
 
 BENCHMARK_MAIN();

@@ -6,9 +6,6 @@
 #include <iterator>
 #include <string_view>
 
-// The four fields a negotiated GET wants, and the one function that puts a
-// field into its slot. Two translation units include this: the plain copy
-// of picohttpparser and the hooked one.
 namespace wanted
 {
 
@@ -19,11 +16,6 @@ struct Wanted {
     std::string_view accept_language;
 };
 
-// Eight bytes of a name, lowercased, against the same eight bytes of a
-// literal, which the compiler folds to a constant. The load may pass the
-// end of the name because the pool has kWidePadding behind it, and that
-// is the one thing neither picohttpparser nor strncasecmp is allowed to
-// do.
 constexpr uint64_t ascii_word_at(const std::string_view text, const size_t at)
 {
     uint64_t word = 0;
@@ -41,10 +33,6 @@ inline uint64_t padded_word_at(const std::string_view text, const size_t at)
     return left >= 8 ? word : word & ((uint64_t{1} << (left * 8)) - 1);
 }
 
-// Only 'A' to 'Z' fold: 0x41 + 0x3f sets bit 7 and 0x5a + 0x25 does not,
-// so the two carries name the range without a branch. Bit 7 is taken out
-// of the range test and put back as the last and, so a byte above 0x7f
-// neither folds nor carries into its neighbour.
 inline uint64_t ascii_lowered_word(const uint64_t word)
 {
     const uint64_t high = 0x8080808080808080ull;
@@ -87,4 +75,4 @@ inline void note_field(const std::string_view name, const std::string_view value
     }
 }
 
-} // namespace wanted
+}

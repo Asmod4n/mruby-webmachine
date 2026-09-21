@@ -260,59 +260,20 @@ constexpr std::string_view method_name_of(const Method method)
     return {};
 }
 
-// webmachine-ruby's STANDARD_HTTP_METHODS holds the eight of RFC 9110
-// 9.3, and its known_methods returns that list. This one is those eight
-// and QUERY, which RFC 10008 made Standards Track long after webmachine
-// was written. It says what this server understands, so a method outside
-// it is the 501 of B12. What a resource permits is allowed_methods, and
-// that default stays GET and HEAD, as webmachine has it - a resource
-// that wants QUERY says so.
 inline constexpr std::array kKnownMethods =
     std::to_array({Method::kGet, Method::kHead, Method::kPost, Method::kPut, Method::kDelete,
                    Method::kTrace, Method::kConnect, Method::kOptions, Method::kQuery});
 
-// RFC 9110 8.3 leaves a missing Content-Type to the recipient: it "MAY
-// either assume a media type of application/octet-stream or examine the
-// data to determine its type". RFC 10008 2 takes that choice away for
-// QUERY, because there the content is the question being asked:
-// "Servers MUST fail the request if the Content-Type request field is
-// missing or is inconsistent with the request content." A QUERY without
-// one is malformed, which is B9 and a 400.
 constexpr bool content_type_is_required(const Method method)
 {
     return method == Method::kQuery;
 }
 
-// RFC 10008 2.6: "The selected representation of a QUERY request is the
-// same as for a GET request to the equivalent resource of that QUERY
-// request", and 2.2: the equivalent resource "is derived from the
-// resource implementing QUERY by incorporating the request content".
-//
-// A modification date says when the data changed. It cannot say which
-// query it belonged to, so two different queries against one resource
-// share it, and a 304 would hand a client the other query's answer. The
-// example in RFC 10008 A.5 answers 304 to exactly this and is right to,
-// because that server recognised two spellings of one query and gave
-// them one equivalent resource - knowledge a date does not carry.
-//
-// An entity tag can carry it, because RFC 9110 8.8.3 makes it "an opaque
-// validator" that the origin composes. So: a date is a validator for a
-// QUERY only where an entity tag stands beside it and settles which
-// query is meant.
 constexpr bool modification_date_is_a_validator(const Method method, const bool has_entity_tag)
 {
     return method != Method::kQuery || has_entity_tag;
 }
 
-// What a resource permits, which is the 405 of B10. webmachine-ruby
-// defaults allowed_methods to GET and HEAD; this tree adds QUERY,
-// because RFC 10008 2.4 gives the honest answer for a resource that does
-// not understand one: "If a media type is specified but is not supported
-// by the resource, a 415 (Unsupported Media Type) is appropriate. This
-// specifically includes the case where the media type is known in
-// principle, but it lacks semantics specific to a QUERY to the target
-// resource." So a default QUERY is refused at B5 by known_content_type?,
-// not answered with the whole representation at O18.
 inline constexpr std::array kAllowedMethods =
     std::to_array({Method::kGet, Method::kHead, Method::kQuery});
 
@@ -321,28 +282,17 @@ constexpr bool is_known_method(const Method method)
     return std::ranges::find(kKnownMethods, method) != kKnownMethods.end();
 }
 
-// RFC 9110 9.2.1: "Of the request methods defined by this specification,
-// the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
-// RFC 10008 2.1 adds QUERY: "QUERY requests are safe with regard to the
-// target resource."
 constexpr bool is_safe(const Method method)
 {
     return method == Method::kGet || method == Method::kHead || method == Method::kOptions ||
            method == Method::kTrace || method == Method::kQuery;
 }
 
-// RFC 9110 9.2.2: "Of the request methods defined by this specification,
-// PUT, DELETE, and safe request methods are idempotent."
 constexpr bool is_idempotent(const Method method)
 {
     return is_safe(method) || method == Method::kPut || method == Method::kDelete;
 }
 
-// RFC 9110 9.2.3: "This specification defines caching semantics for GET,
-// HEAD, and POST, although the overwhelming majority of cache
-// implementations only support GET and HEAD." RFC 10008 2.7: "The
-// response to a QUERY method is cacheable; a cache MAY use it to satisfy
-// subsequent QUERY requests."
 constexpr bool is_cacheable(const Method method)
 {
     return method == Method::kGet || method == Method::kHead || method == Method::kPost ||
@@ -669,10 +619,6 @@ inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::s
     return std::unexpected(Refusal{kQuotedStringProblem, static_cast<uint32_t>(text.size())});
 }
 
-// RFC 9110 5.6.4: "quoted-string = DQUOTE *( qdtext / quoted-pair )
-// DQUOTE" and "quoted-pair = "\\" ( HTAB / SP / VCHAR / obs-text )". So
-// DQUOTE and the backslash are the two bytes an escape exists for, and a
-// control character other than HTAB cannot be carried at all.
 inline std::expected<std::string, Refusal> spell_quoted_string(const std::string_view text)
 {
     std::string spelled(1, '"');
@@ -897,8 +843,6 @@ parse_imf_fixdate(const std::string_view text)
     return std::chrono::sys_days{date} + *time;
 }
 
-// RFC 9110 5.6.7: day-name = %s"Mon" / %s"Tue" / %s"Wed" / %s"Thu" /
-// %s"Fri" / %s"Sat" / %s"Sun", and %s means the case is part of the rule.
 inline constexpr std::array kDayNames =
     std::to_array<std::string_view>({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"});
 
@@ -939,9 +883,6 @@ inline std::array<char, kFixdateLength> spell_imf_fixdate(const std::chrono::sys
     return spelled;
 }
 
-// RFC 9110 6.6.1: "An origin server with a clock ... MUST generate a Date
-// header field in all 2xx, 3xx, and 4xx responses, and MAY generate a
-// Date header field in 1xx and 5xx responses."
 constexpr bool date_is_required(const uint16_t status)
 {
     return status >= 200 && status < 500;
@@ -1035,11 +976,6 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
     return fixdate;
 }
 
-// RFC 3986 2.1: "pct-encoded = "%" HEXDIG HEXDIG". The byte tables above
-// let a "%" through because a path, a query and a reg-name all carry
-// pct-encoded, and a table of single bytes cannot say what two bytes
-// follow. This says it. A "%" inside a whole triplet cannot start another,
-// so a valid one is stepped over three bytes at a time.
 constexpr bool is_hexdig(const char letter)
 {
     return is_digit(letter) || (letter >= 'A' && letter <= 'F') || (letter >= 'a' && letter <= 'f');
@@ -1579,7 +1515,6 @@ inline std::expected<uint16_t, Refusal> language_weight(const std::string_view a
     return weight;
 }
 
-// RFC 9651 4.1.3.1: sf-token = ( ALPHA / "*" ) *( tchar / ":" / "/" ).
 constexpr bool is_structured_token(const std::string_view text)
 {
     if (text.empty() || !(is_alpha(text.front()) || text.front() == '*'))
@@ -1588,10 +1523,6 @@ constexpr bool is_structured_token(const std::string_view text)
         text, [](const char letter) { return is_tchar(letter) || letter == ':' || letter == '/'; });
 }
 
-// RFC 9651: key = ( lcalpha / "*" ) *( lcalpha / DIGIT / "_" / "-" / "."
-// / "*" ). A media type parameter name is a tchar run and case
-// insensitive, so most of them lower into a key and a few - the ones
-// holding ! # $ % & ' + ^ ` | ~ - cannot.
 constexpr bool is_structured_key(const std::string_view text)
 {
     const auto is_lowercase_alpha = [](const char letter) {
@@ -1605,10 +1536,6 @@ constexpr bool is_structured_key(const std::string_view text)
     });
 }
 
-// RFC 9651: sf-string = DQUOTE *( unescaped / "%" / bs-escaped ) DQUOTE,
-// unescaped = %x20-21 / %x23-24 / %x26-5B / %x5D-7E, and
-// bs-escaped = "\" ( DQUOTE / "\" ). So only those two bytes are
-// escaped, and nothing outside %x20-7E can be carried at all.
 inline std::expected<std::string, Refusal> spell_structured_string(const std::string_view text)
 {
     std::string spelled(1, '"');
@@ -1624,10 +1551,6 @@ inline std::expected<std::string, Refusal> spell_structured_string(const std::st
     return spelled;
 }
 
-// A token where the bytes allow one, a string otherwise. RFC 10008 3 says
-// the choice carries no meaning: recipients "MAY convert Tokens to
-// Strings, but MUST NOT process them differently based on the received
-// type", so one rule, applied everywhere, is enough.
 inline std::expected<std::string, Refusal> spell_structured_item(const std::string_view text)
 {
     if (is_structured_token(text))
@@ -1635,11 +1558,6 @@ inline std::expected<std::string, Refusal> spell_structured_item(const std::stri
     return spell_structured_string(text);
 }
 
-// RFC 10008 3: the Accept-Query response field "contains a list of media
-// ranges ... using Structured Fields syntax", each "without parameters",
-// and "media type parameters, if any, are mapped to Structured Field
-// Parameters". It is built once, from what the resource declared, and
-// sent as bytes from then on.
 inline std::expected<std::string, Refusal>
 spell_accept_query(const std::span<const MediaType> provided)
 {
@@ -1964,15 +1882,11 @@ inline std::expected<RequestTarget, Refusal> parse_request_target(const std::str
     std::unreachable();
 }
 
-// RFC 9110 15: "All valid status codes are within the range of 100 to
-// 599, inclusive." and "Values outside the range 100..599 are invalid."
 constexpr bool is_status(const uint16_t status)
 {
     return status >= 100 && status <= 599;
 }
 
-// RFC 9110 15: "The first digit of the status code defines the class of
-// response. The last two digits do not have any categorization role."
 enum class StatusClass : uint8_t {
     kInformational,
     kSuccessful,
@@ -1986,10 +1900,6 @@ constexpr StatusClass status_class(const uint16_t status)
     return static_cast<StatusClass>(status / 100 - 1);
 }
 
-// RFC 9110 15.1: "The reason phrases listed here are only
-// recommendations -- they can be replaced by local equivalents or left
-// out altogether without affecting the protocol." 306 and 418 are
-// "(Unused)" and no origin sends one, so neither has a phrase here.
 constexpr std::string_view reason_phrase(const uint16_t status)
 {
     switch (status) {
@@ -2086,11 +1996,6 @@ constexpr std::string_view reason_phrase(const uint16_t status)
     }
 }
 
-// RFC 9110 15.1: "Responses with status codes that are defined as
-// heuristically cacheable (e.g., 200, 203, 204, 206, 300, 301, 308, 404,
-// 405, 410, 414, and 501 in this specification) can be reused by a cache
-// with heuristic expiration ... all other status codes are not
-// heuristically cacheable."
 constexpr bool is_heuristically_cacheable(const uint16_t status)
 {
     switch (status) {
@@ -2112,21 +2017,11 @@ constexpr bool is_heuristically_cacheable(const uint16_t status)
     }
 }
 
-// RFC 9110 15.2: a 1xx response "is terminated by the end of the header
-// section; it cannot contain content or trailers". 15.3.5: a 204 says
-// "there is no additional content to send in the response content".
-// 15.4.5: a 304 tells the client it already holds the representation.
 constexpr bool content_is_forbidden(const uint16_t status)
 {
     return status_class(status) == StatusClass::kInformational || status == 204 || status == 304;
 }
 
-// RFC 9110 10.1.1: "Expect = #expectation", "expectation = token [ "="
-// ( token / quoted-string ) parameters ]", the value "is
-// case-insensitive", and "The only expectation defined by this
-// specification is 100-continue (with no defined parameters)." A server
-// that receives any other member "MAY respond with a 417 (Expectation
-// Failed)".
 inline bool every_expectation_is_understood(const std::string_view field)
 {
     std::string_view rest = field;
@@ -2138,10 +2033,6 @@ inline bool every_expectation_is_understood(const std::string_view field)
     return true;
 }
 
-// RFC 9110 10.2.1: "Allow = #method" and "An origin server MUST generate
-// an Allow header field in a 405 (Method Not Allowed) response". "An
-// empty Allow field value indicates that the resource allows no
-// methods", so an empty list spells an empty value and not no field.
 inline std::string spell_allow(const std::span<const Method> allowed)
 {
     std::string spelled;
@@ -2153,8 +2044,6 @@ inline std::string spell_allow(const std::span<const Method> allowed)
     return spelled;
 }
 
-// RFC 9110 10.2.3: "Retry-After = HTTP-date / delay-seconds" and
-// "delay-seconds = 1*DIGIT".
 inline std::string spell_retry_after(const std::chrono::seconds delay)
 {
     return std::to_string(delay.count());
@@ -2166,9 +2055,6 @@ inline std::string spell_retry_after(const std::chrono::sys_seconds moment)
     return std::string(spelled.data(), spelled.size());
 }
 
-// RFC 9110 11.1: "token68 = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
-// "+" / "/" ) *"="". The name counts the 66 characters plus the two the
-// padding needs, and it is the RFC's name, so it is the one used here.
 inline constexpr std::array<bool, 256> kToken68 = [] {
     std::array<bool, 256> table{};
     for (const char letter : std::string_view("-._~+/"))
@@ -2189,10 +2075,6 @@ inline bool is_token68(const std::string_view text)
     return !body.empty() && every_byte_is_allowed(body, kToken68);
 }
 
-// RFC 9110 11.4: "credentials = auth-scheme [ 1*SP ( token68 /
-// #auth-param ) ]" and 11.1: the auth-scheme "is a case-insensitive
-// token". What follows the scheme is the scheme's own business, so it
-// comes back unread.
 struct Credentials {
     std::string_view auth_scheme;
     std::string_view rest;
@@ -2215,10 +2097,6 @@ inline std::expected<Credentials, Refusal> parse_credentials(const std::string_v
     return Credentials{auth_scheme, after.substr(body)};
 }
 
-// RFC 9110 11.3: "challenge = auth-scheme [ 1*SP ( token68 / #auth-param
-// ) ]", and a 401 carries "at least one challenge applicable to the
-// requested resource". RFC 9110 11.5 makes realm the one parameter every
-// scheme may use, and its value is a quoted-string.
 inline std::expected<std::string, Refusal> spell_challenge(const std::string_view auth_scheme,
                                                            const std::string_view realm)
 {
@@ -2235,4 +2113,4 @@ inline std::expected<std::string, Refusal> spell_challenge(const std::string_vie
     return spelled;
 }
 
-} // namespace http
+}

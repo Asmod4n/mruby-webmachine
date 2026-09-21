@@ -7,23 +7,6 @@
 
 #include "http.hpp"
 
-// Three ways to read a method token, and why the tree reads it the third
-// way.
-//
-// It used to pack the bytes into a uint64_t and switch over nine
-// constants. The packing padded with zero, so "POST\0\0\0\0" packed to
-// the number "POST" packs to and method_of answered kPost for four bytes
-// nobody sent; fuzz/fuzz_http.cpp found that. It also loaded eight bytes
-// for a three byte token, which held only where the caller left padding
-// behind the run, and AddressSanitizer called that a heap-buffer-overflow
-// on a token an mruby string carried.
-//
-// That arm is kept here, written out, because a decision nobody can
-// re-run is a decision nobody can check.
-//
-// The other two read exactly the bytes of the token. The nine names are
-// three to seven bytes long, and no two of one length share a first byte,
-// so a switch on either one leaves at most two comparisons.
 namespace
 {
 
@@ -136,9 +119,6 @@ Method by_first_byte(const std::string_view text)
     }
 }
 
-// The padding is not zero. Zero behind a token is the one case the
-// packed arm masks away for free, and a bench that only feeds it zeros
-// measures the easy half.
 std::string held_with_padding(const std::string_view text)
 {
     return std::string(text) + std::string(http::kWidePadding, 'a');
@@ -163,12 +143,6 @@ const std::string_view kTokens[16] = {token_of(0),  token_of(1),  token_of(2),  
                                       token_of(8),  token_of(9),  token_of(10), token_of(11),
                                       token_of(12), token_of(13), token_of(14), token_of(15)};
 
-// Arms that answer differently measure nothing, so this runs before every
-// row. by_first_byte is what the tree does, so it is held against the tree
-// as well and not only against its neighbours.
-//
-// The last loop is the finding that ended the packed arm: it takes a name
-// a NUL byte follows and the other two refuse it.
 void check_the_arms_agree()
 {
     for (const std::string_view token : kTokens)
@@ -221,4 +195,4 @@ BENCHMARK(method_packed);
 BENCHMARK(method_by_length);
 BENCHMARK(method_by_first_byte);
 
-} // namespace
+}

@@ -15,30 +15,14 @@ require 'etc'
 require 'tmpdir'
 require 'shellwords'
 
-# -march=native is not one ISA: this tree is built in containers that land
-# on hosts that differ. WM_MARCH= pins it, so a row measured here can be
-# read beside a row measured elsewhere.
 BENCH_MARCH = ENV.fetch('WM_MARCH', 'native').freeze
 
-# One cpu fewer than the box has, for the whole measurement, server and
-# client together. What perturbs a median is the work beside the run - an
-# agent building and testing in the background moves one arm of a
-# comparison and not the others - so one cpu stays out of it.
 BENCH_THREADS_MAX = [Etc.nprocessors - 1, 1].max
-# The alignment flags are not decoration. Without them a relink moves a
-# number by a third: the same source read 66, 90 and 90 ns against three
-# builds of the timing library, and with -falign-* they all read 89.0 plus
-# or minus 0.5. What moved was where the linker put the hot loop.
 BENCH_ALIGN = '-falign-functions=64 -falign-loops=64 -falign-jumps=64'.freeze
 BENCH_FLAGS = "-std=c++23 -O3 -march=#{BENCH_MARCH} #{BENCH_ALIGN}".freeze
 
-# Read off the binary, never off PATH: a run can point at another build,
-# and `g++ --version` would then name a compiler that never touched it.
 def bench_compiler(binary)
   comment = `readelf -p .comment #{binary} 2>/dev/null`
-  # crt1.o comes from the distribution's GCC and stands first on every
-  # link line, so a clang binary carries a GCC string as well. A clang
-  # string anywhere names the compiler; its absence names GCC.
   clang = comment[/clang version.*/]
   return clang.squeeze(' ').strip if clang
   gcc = comment[/GCC:.*/]
@@ -50,10 +34,6 @@ def bench_shared_library(binary, pattern)
   path ? File.basename(File.realpath(path)) : nil
 end
 
-# The library that will load, asked for its own version. Ubuntu writes
-# "(Ubuntu GLIBC 2.39)" and openSUSE writes "(GNU libc)", so a search for
-# the word GLIBC finds nothing on one of them. A line that guesses is
-# worse than one that says it does not know.
 def bench_libc(binary)
   path = `ldd #{binary} 2>/dev/null`[%r{/[^ ]*/libc\.so[^ ]*}]
   return 'static' unless path
@@ -65,8 +45,6 @@ def bench_libc(binary)
   "glibc #{number.last || '?'}"
 end
 
-# Same hardware, a container in a virtual machine and one on metal read
-# different rates, so both questions are asked and neither is guessed.
 def bench_on
   return 'unreadable' unless system('command -v systemd-detect-virt >/dev/null 2>&1')
 
@@ -76,9 +54,6 @@ def bench_on
   parts.empty? ? 'metal' : parts.join('/')
 end
 
-# A sched_ext scheduler is BPF, loaded at run time and swapped without a
-# reboot, so the kernel name does not say who placed the threads. The
-# same binary on the same machine then reads differently through the day.
 def bench_scheduler
   state = %w[/sys/kernel/sched_ext/state /sys/kernel/sched_ext/root/state]
           .find { |f| File.readable?(f) && File.read(f).strip == 'enabled' }
@@ -93,22 +68,6 @@ def bench_scheduler
   switched == '1' ? name : "#{name}(switch_all=#{switched})"
 end
 
-# The run goes first at every point where it meets the other work of this
-# user. Thirty points: -15 here, +15 for the rest. Ten does not do it, and
-# +19 alone cannot build the gap from above.
-#
-# Kernel threads are skipped, and that is not cosmetic. As root, ps -u lists
-# them too - 67 of the 76 processes on this box - and ksoftirqd carries the
-# softirq that delivers a loopback packet, which is what a server bench
-# measures. Putting it behind the run would distort the number the run
-# exists to take.
-#
-# The run's own ancestors are skipped as well: a nice value raised beyond
-# the limit cannot be lowered again, and one of them is the shell that
-# started this.
-#
-# Gives back what it lowered, so it can be put back. A bench is a moment; an
-# editor left at +15 outlives it.
 def bench_priority
   return [] unless system("renice -n -15 -p #{Process.pid} >/dev/null 2>&1")
 
@@ -135,18 +94,6 @@ def bench_restore(pids)
   system("renice -n 0 -p #{Process.pid} >/dev/null 2>&1")
 end
 
-# Never as root. Root holds CAP_SYS_NICE and CAP_IPC_LOCK, so RLIMIT_NICE and
-# RLIMIT_MEMLOCK are advisory for it. A provided buffer pool is ordinary
-# memory and is not charged, but io_uring's SQ and CQ rings are: measured on
-# 6.18 against an 8192 KiB limit, root opened 512 rings of 32768 entries
-# without a refusal, and an unprivileged user was stopped at two. A run as
-# root does not meet the machine the server meets.
-#
-# The nice value survives the uid change, so the priority is raised first
-# and the privileges dropped after. On a machine that allows it the same
-# -15 comes from an RLIMIT_NICE grant in /etc/security/limits.d, and the
-# user needs no help; this container has no CAP_SYS_RESOURCE, so no process
-# can raise that limit and the inherited value stands in for it.
 BENCH_USER = 'bench'
 
 def bench_runner
@@ -181,13 +128,9 @@ def bench_provenance(binary, nice)
   }
 end
 
-desc 'build and run the benchmarks'
+desc 'build and run the benchmarks; WM_MARCH sets -march (default: native)'
 task :bench do
   sources = Dir[File.join(__dir__, 'bench', '*.cpp')].sort
-  # src/http.hpp calls ada, so the bench binary carries ada as well. The
-  # copy is the one mruby-uri-parser vendors, and it is compiled here with
-  # the bench's own flags rather than linked from the debug build: an -Og
-  # object in an -O3 binary measures the wrong thing.
   ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
   raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
 
@@ -198,16 +141,11 @@ task :bench do
   mkdir_p results
   sh "g++ #{BENCH_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
      "#{sources.join(' ')} -lbenchmark -lpthread -o #{binary}"
-  # After the build, never before: a compiler running beside the run is the
-  # noise this exists to keep out, and the sweep should see the process list
-  # the run will actually meet.
   lowered = bench_priority
   context = bench_provenance(binary, lowered.empty? ? '0' : '1').map do |k, v|
     "--benchmark_context=#{k}=#{v.gsub(/[^A-Za-z0-9.:+~@\/-]+/, '_')}"
   end
   out = File.join(results, "#{Time.now.utc.strftime('%Y-%m-%d-%H%M%SZ')}.json")
-  # The run cannot write into a tree it does not own, so it reports into the
-  # world writable directory and this task, which does own the tree, moves it.
   staged = File.join(Dir.tmpdir, "webmachine-bench-#{Process.pid}.json")
   sh(*bench_runner, binary, '--benchmark_repetitions=5',
      '--benchmark_report_aggregates_only=true',
@@ -217,23 +155,12 @@ task :bench do
   puts "wrote #{out}"
 end
 
-# A test states one case; a fuzzer states an invariant and hunts for the
-# case that breaks it. fuzz/fuzz_http.cpp holds the invariants, and it
-# puts every input against a page nobody may read: the wide scanners load
-# a vector at a time and do not shorten the last load, so an input copied
-# into a std::string would hide a read that walks too far in whatever
-# slack the allocator left.
-#
-# clang, because libFuzzer is clang's. clang 18 leaves __cpp_concepts at
-# 201907 and libstdc++ wants 202002 before it declares std::expected, so
-# the macro is set by hand. The other way out, -stdlib=libc++, would
-# measure a standard library this tree never builds against.
 FUZZ_CC = ENV.fetch('FUZZ_CC', 'clang++').freeze
 FUZZ_FLAGS = "-std=c++23 -O1 -g -march=#{BENCH_MARCH} -fno-omit-frame-pointer " \
              '-fsanitize=address,undefined,fuzzer ' \
              '-D__cpp_concepts=202002L -Wno-builtin-macro-redefined'.freeze
 
-desc 'build and run the fuzzer; rake fuzz[300] stops after 300 seconds'
+desc 'build and run the fuzzer; rake fuzz[300] stops after 300 seconds; FUZZ_CC sets the compiler (default: clang++)'
 task :fuzz, [:seconds] do |_task, args|
   ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
   raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
@@ -243,8 +170,6 @@ task :fuzz, [:seconds] do |_task, args|
   includes = [File.join(__dir__, 'src'), File.join(ada, 'include')]
   sh "#{FUZZ_CC} #{FUZZ_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
      "#{File.join(fuzz, 'fuzz_http.cpp')} #{File.join(ada, 'src', 'ada.cpp')} -o #{binary}"
-  # The corpus grows in place, so the next run starts where this one
-  # stopped. rake fuzz[0] builds and stops.
   seconds = args[:seconds].to_i
   next if args[:seconds] && seconds.zero?
 
@@ -253,17 +178,10 @@ task :fuzz, [:seconds] do |_task, args|
      "-artifact_prefix=#{fuzz}/", '-max_len=512', '-print_final_stats=1', *limit)
 end
 
-# The arm of a scanner that no machine here has. allowed_run_length
-# compiles one of AVX2, NEON or a byte loop, so a build here never touches
-# the NEON arm and the fuzz corpus never reaches its block boundaries -
-# sixteen bytes where AVX2 has thirty two. qemu runs it.
-#
-# Correctness only. qemu translates instructions and models no pipeline,
-# so nothing here is ever a number for bench/results.
 CROSS_CXX = ENV.fetch('CROSS_CXX', 'aarch64-linux-gnu-g++').freeze
 CROSS_RUN = ENV.fetch('CROSS_RUN', 'qemu-aarch64').freeze
 
-desc 'run the wide scanners of another architecture under qemu'
+desc 'run the wide scanners of another architecture under qemu; CROSS_CXX and CROSS_RUN set the tools'
 task :crosscheck do
   %W[#{CROSS_CXX} #{CROSS_RUN}].each do |tool|
     next if system("command -v #{tool} >/dev/null 2>&1")

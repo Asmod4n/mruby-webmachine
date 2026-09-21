@@ -1,6 +1,3 @@
-// The same parser with the hook filled in. The public names are renamed so
-// that both copies live in one binary; the static helpers do not collide
-// because each copy is its own translation unit.
 #include "phr_wanted.hpp"
 
 namespace wanted

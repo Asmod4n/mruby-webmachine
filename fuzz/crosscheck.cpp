@@ -1,22 +1,3 @@
-// What another architecture answers, without another machine.
-//
-// allowed_run_length has three arms. AVX2 reads thirty two bytes at a
-// time, NEON reads sixteen and takes its answer out of a shift-and-narrow
-// that packs four bits per byte, and the fallback is a byte loop. Only one
-// of the three is compiled on any machine, so a build here never touches
-// the NEON arm and a corpus grown here never reaches its block boundaries.
-//
-// Cross compile this and run it under qemu and the arm that no machine
-// here has meets the same two questions:
-//
-//   - Does the wide scan find the byte the byte loop finds, for every
-//     table, at every length, at every position, for all 256 values.
-//   - Does every oracle in fuzz_http.cpp still hold over the corpus.
-//
-// It answers correctness and nothing else. qemu translates instructions
-// and models no pipeline, so a time taken here is not a time, and no row
-// of bench/results is ever made this way.
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -124,7 +105,7 @@ size_t walk_the_corpus(const std::filesystem::path &corpus)
     return walked;
 }
 
-} // namespace
+}
 
 int main(int argc, char **argv)
 {
@@ -132,9 +113,7 @@ int main(int argc, char **argv)
         std::fputs("usage: crosscheck <corpus directory>\n", stderr);
         return 2;
     }
-    // A corpus input that breaks an oracle aborts inside the harness, and
-    // a static binary under qemu keeps its stdout to itself when it does.
-    // So what the tables answered is flushed before the corpus is walked.
+
     std::printf("the wide scan of this build is %s\n", kArm.data());
     const long missed = walk_the_tables();
     std::fflush(stdout);

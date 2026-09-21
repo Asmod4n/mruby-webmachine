@@ -301,4 +301,4 @@ constexpr Target next(const Node id, const bool answer)
     return answer ? node_of(id).on_true : node_of(id).on_false;
 }
 
-} // namespace flow
+}

@@ -1,13 +1,3 @@
-// Every parser in src/http.hpp, against a wall.
-//
-// The wide scanners load 32 bytes at a time and do not shorten the last
-// load to the bytes that remain. kWidePadding is what the ring promises
-// behind every byte of its pool, and a fuzzer that copies an input into a
-// std::string proves nothing about that promise: the allocator leaves
-// slack, so a load that walks one vector too far reads slack and passes.
-// Here the byte after the padding is a page nobody may read, so the same
-// load dies.
-
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -41,9 +31,6 @@ void demand(const bool held, const char *const what)
 
 constexpr size_t kArenaBytes = 64 * 1024;
 
-// The padding carries a byte every table in this tree allows. A refused
-// byte there would stop a scan before its own bound did, and the bound is
-// what the wall exists to test.
 constexpr char kAllowedEverywhere = 'a';
 
 class Walled
@@ -78,20 +65,11 @@ class Walled
 
 const Walled kWalled;
 
-// Two things hold of every refusal this tree makes, and both are what
-// ParseError does with one. It indexes kProblems with the number, so a
-// number the table does not hold throws std::out_of_range where a 400 was
-// meant. It reads the text at the offset, so an offset past the end names
-// a byte the client never sent.
 void problem_holds(const http::Refusal refusal)
 {
     demand(refusal.problem < http::kProblems.size(), "the problem is not in the table");
 }
 
-// A refusal that carries a 500 is about what the resource declared and not
-// about what a client sent, so its offset counts into that declaration.
-// The caller holds the client's text and not the resource's, so there is
-// nothing here to hold the offset against.
 void refusal_holds(const http::Refusal refusal, const std::string_view text)
 {
     problem_holds(refusal);
@@ -103,9 +81,6 @@ void refusal_holds(const http::Refusal refusal, const std::string_view text)
     demand(error.excerpt().size() <= text.size(), "the excerpt is longer than the text");
 }
 
-// A view a parser gives back names bytes of what it was given. An empty
-// one names nothing, and a default constructed string_view holds a null
-// pointer, so it is let through.
 void inside(const std::string_view part, const std::string_view whole)
 {
     if (part.empty())
@@ -116,11 +91,6 @@ void inside(const std::string_view part, const std::string_view whole)
            "the result ends after the text");
 }
 
-// The wide scan and the byte loop answer one question. AVX2 reads a nibble
-// table, the fallback reads the 256 entry table that nibble table was
-// folded from, and a fold that lost a byte shows here. On a build without
-// AVX2 and without NEON the two arms are the same code and this says
-// nothing.
 void scans_agree(const std::string_view text, const std::array<bool, 256> &allowed,
                  const std::array<unsigned char, 16> &low_bits)
 {
@@ -164,9 +134,6 @@ enum class Entry : uint8_t {
     kCount,
 };
 
-// Two arguments come from one input, cut at the first LF. No field value
-// carries an LF - picohttpparser refuses one before this code sees it - so
-// the cut costs no coverage.
 constexpr char kCut = '\n';
 
 std::string_view left_of(const std::string_view both)
@@ -207,9 +174,6 @@ void run_quoted_string(const std::string_view text)
     demand(quoted->starts_with('"') && quoted->ends_with('"'), "a quoted-string is not in quotes");
 }
 
-// The loop has to end. rest shrinks on every round or parse_list_element
-// stops, and a round that does neither hangs the server on a field a
-// client wrote.
 void run_list_elements(const std::string_view text)
 {
     std::string_view rest = text;
@@ -253,19 +217,15 @@ void run_http_date(const std::string_view text)
         refusal_holds(asctime.error(), text);
 }
 
-// RFC 9110 5.6.7 says a sender spells IMF-fixdate and a recipient reads
-// all three forms. So what this tree spells, this tree reads back.
 void run_fixdate_round_trip(const std::string_view text)
 {
     if (text.size() < sizeof(int64_t))
         return;
     int64_t seconds = 0;
     std::copy_n(text.data(), sizeof(seconds), reinterpret_cast<char *>(&seconds));
-    // std::chrono::year holds -32767 to 32767, and spell_imf_fixdate has
-    // four digits for the year. Outside that the answer is undefined and
-    // the question is not this tree's.
-    constexpr int64_t kFirst = -62167219200; // 0000-01-01T00:00:00Z
-    constexpr int64_t kLast = 253402300799;  // 9999-12-31T23:59:59Z
+
+    constexpr int64_t kFirst = -62167219200;
+    constexpr int64_t kLast = 253402300799;
     if (seconds < kFirst || seconds > kLast)
         return;
     const std::chrono::sys_seconds moment{std::chrono::seconds{seconds}};
@@ -287,9 +247,6 @@ void run_host(const std::string_view text)
            "the host was taken but cannot be decoded");
 }
 
-// RFC 9112 3.2.2: an absolute-form target that carries no path names the
-// root. This tree spells that "/" rather than pointing at a byte a client
-// sent, so it is the one view of a target that is not a slice of it.
 void target_path_holds(const std::string_view path, const std::string_view text)
 {
     if (path == "/")
@@ -315,10 +272,7 @@ void run_origin_form(const std::string_view text)
     inside(origin->query, text);
     const auto query = http::parse_query(origin->query);
     demand(query.has_value(), "a query the origin-form accepted is refused on its own");
-    // RFC 3986 2.1: a target this tree took has whole pct-encoded triplets
-    // in it, so what took it and what decodes it agree. The byte tables
-    // cannot say this - they see one byte at a time and "%" is one of the
-    // bytes a path may carry - and that is how a bare "%" got through.
+
     demand(http::percent_decode(origin->path).has_value(),
            "the path was taken but cannot be decoded");
     demand(http::percent_decode(origin->query).has_value(),
@@ -333,7 +287,6 @@ void run_absolute_form(const std::string_view text)
     inside(target->scheme, text);
 }
 
-// RFC 3986 5.2.4: remove_dot_segments takes bytes away and puts none back.
 void run_path(const std::string_view text)
 {
     const std::string removed = http::remove_dot_segments(text);
@@ -377,8 +330,7 @@ void run_content_length(const std::string_view text)
     const auto list = http::parse_content_length_list(text);
     if (!list)
         return refusal_holds(list.error(), text);
-    // RFC 9110 5.6.1.2: an empty list element is ignored, so a one element
-    // list and the number alone are the same number.
+
     if (one)
         demand(*one == *list, "the list and the number disagree");
 }
@@ -434,10 +386,6 @@ void run_language_weight(const std::string_view both)
     demand(chosen.has_value(), "choose_language refuses what language_weight accepted");
 }
 
-// RFC 9651 4.1.3: what this spells has to read back as one item. There is
-// no Structured Fields parser here yet, so the check is the grammar the
-// speller itself claims: a token, or a string whose only escapes are the
-// two the RFC names.
 void run_structured_item(const std::string_view text)
 {
     const auto item = http::spell_structured_item(text);
@@ -496,7 +444,7 @@ void run_range(const std::string_view both)
             refusal_holds(spec.error(), element->element);
             return;
         }
-        // RFC 9110 14.1.2: a satisfiable range names bytes that are there.
+
         if (const auto resolved = http::resolved_range(*spec, complete_length)) {
             demand(resolved->first_pos <= resolved->last_pos, "a range ends before it starts");
             demand(resolved->last_pos < complete_length, "a range names a byte that is not there");
@@ -528,10 +476,7 @@ void run_conditionals(const std::string_view both)
     const auto none = http::if_none_match_passes(field, true, tag);
     if (!none)
         refusal_holds(none.error(), field);
-    // RFC 9110 13.1.1 compares strongly and 13.1.2 compares weakly, and a
-    // strong match is a weak match as well. So If-Match passing means
-    // If-None-Match fails. The other way round does not hold: a weak tag
-    // matches weakly and not strongly, and then both fail.
+
     if (matched && none && field != "*" && tag && *matched)
         demand(!*none, "If-Match and If-None-Match both passed one entity tag");
     const auto ranged = http::if_range_passes(field, tag, std::nullopt, kCurrentYear);
@@ -553,8 +498,6 @@ void run_method(const std::string_view text)
            "a method nobody may cache is cacheable");
 }
 
-// RFC 9110 15: every status this tree can name has to answer the five
-// questions without one of them contradicting another.
 void run_status(const std::string_view text)
 {
     if (text.size() < 2)
@@ -576,8 +519,7 @@ void run_status(const std::string_view text)
 void run_expectation(const std::string_view text)
 {
     const bool understood = http::every_expectation_is_understood(text);
-    // RFC 9110 10.1.1: the one expectation the specification defines. A
-    // field of nothing but it, however the list is spaced, is understood.
+
     if (understood && !text.empty())
         demand(text.find(',') == std::string_view::npos ||
                    http::every_expectation_is_understood(text),
@@ -592,15 +534,12 @@ void run_credentials(const std::string_view text)
     inside(got->auth_scheme, text);
     inside(got->rest, text);
     demand(http::is_token(got->auth_scheme), "an auth-scheme that is not a token");
-    // RFC 9110 11.3: what parse_credentials read back has to be something
-    // spell_challenge can write, so the two halves of section 11 agree.
+
     const auto spelled = http::spell_challenge(got->auth_scheme, {});
     demand(spelled.has_value(), "a scheme that parses cannot be spelled");
     demand(*spelled == got->auth_scheme, "spelling a bare scheme changed it");
 }
 
-// RFC 9110 5.6.4: what this tree writes as a quoted-string, it reads back
-// as the bytes it was given.
 void run_quoted_string_round_trip(const std::string_view text)
 {
     const auto spelled = http::spell_quoted_string(text);
@@ -612,7 +551,7 @@ void run_quoted_string_round_trip(const std::string_view text)
            "the quoted-string it wrote ends before its own end");
 }
 
-} // namespace
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {

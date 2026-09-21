@@ -13,21 +13,6 @@
 #include <x86intrin.h>
 #endif
 
-// The 91 percent. A head of thirteen fields parses in 233 ns and the
-// whole field lookup is 22.6 of that, so the question that decides
-// whether a parser of ours can be faster is this one: how fast does the
-// scan find the byte that ends a run.
-//
-// picohttpparser finds it with SSE4.2 _mm_cmpestri over eight ranges,
-// sixteen bytes at a time, and then walks the tail byte by byte because
-// pcmpestri takes no more than eight ranges and tchar needs more.
-//
-// This tree finds it with an AVX2 nibble table - _mm256_shuffle_epi8
-// twice and a movemask - thirty two bytes at a time, and the mask names
-// the first refused byte with std::countr_zero. It is exact: no tail
-// loop confirms it. The load reads thirty two bytes whatever the run is
-// long, which picohttpparser may not do and this tree may, because the
-// ring leaves kWidePadding free behind every byte of its pool.
 namespace
 {
 
@@ -50,8 +35,6 @@ const std::string kHead =
 
 const size_t kHeadSize = kHead.size() - http::kWidePadding;
 
-// Where each field name begins, which is where a scan for the colon
-// starts. Thirteen short runs is the pattern a head really has.
 std::vector<size_t> name_starts_of(const std::string_view whole)
 {
     std::vector<size_t> starts;
@@ -67,17 +50,15 @@ const std::vector<size_t> kNameStarts =
     name_starts_of(std::string_view(kHead).substr(0, kHeadSize));
 
 #ifdef __SSE4_2__
-// picohttpparser's own ranges for a field name, copied from parse_token.
-// `|` and `~` fall through them, which is why the caller must still walk
-// the bytes pcmpestri stopped before.
-alignas(16) const char kTokenStopRanges[] = "\x00 "  /* control chars and up to SP */
-                                            "\"\""   /* 0x22 */
-                                            "()"     /* 0x28,0x29 */
-                                            ",,"     /* 0x2c */
-                                            "//"     /* 0x2f */
-                                            ":@"     /* 0x3a-0x40 */
-                                            "[]"     /* 0x5b-0x5d */
-                                            "{\xff"; /* 0x7b-0xff */
+
+alignas(16) const char kTokenStopRanges[] = "\x00 "
+                                            "\"\""
+                                            "()"
+                                            ",,"
+                                            "//"
+                                            ":@"
+                                            "[]"
+                                            "{\xff";
 
 size_t first_stop_pcmpestri(const std::string_view text)
 {
@@ -95,9 +76,7 @@ size_t first_stop_pcmpestri(const std::string_view text)
             break;
         }
     }
-    // parse_token's own while(1): pcmpestri stops on `|` and `~` as well,
-    // which are tchar, so the byte loop has the last word. Leaving it out
-    // makes this arm faster than picohttpparser and wrong.
+
     for (; at < text.size(); at++)
         if (!http::is_tchar(text.at(at)))
             return at;
@@ -122,12 +101,8 @@ size_t first_stop_nibble(const std::string_view text)
 }
 #endif
 
-// A run of 512 tchars, then the padding, whose zero byte is not a tchar
-// and stops both scanners. The head itself cannot answer the throughput
-// question: its first space stands at byte three.
 const std::string kLongToken = std::string(512, 'a') + std::string(http::kWidePadding, '\0');
 
-// A scan of one long run. That is the throughput question.
 void scan_block_pcmpestri(benchmark::State &state)
 {
 #ifdef __SSE4_2__
@@ -156,9 +131,6 @@ void scan_block_nibble(benchmark::State &state)
 #endif
 }
 
-// Thirteen short runs, one per field name, each stopping at its colon.
-// This is the shape a head really has, and it is where a long latency
-// instruction is paid thirteen times over.
 void scan_names_pcmpestri(benchmark::State &state)
 {
 #ifdef __SSE4_2__
@@ -194,4 +166,4 @@ BENCHMARK(scan_block_nibble);
 BENCHMARK(scan_names_pcmpestri);
 BENCHMARK(scan_names_nibble);
 
-} // namespace
+}

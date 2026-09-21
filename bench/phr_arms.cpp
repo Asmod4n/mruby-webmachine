@@ -6,15 +6,6 @@
 #include "phr_wanted.hpp"
 #include "picohttpparser/picohttpparser.h"
 
-// Two ways to get the four fields a negotiated GET wants out of one request
-// head, both through picohttpparser, both in this binary.
-//
-//   phr_then_lookup   phr fills its array, we walk the array afterwards
-//   phr_then_sink     phr calls a hook at the field, where the name and the
-//                     value are still in registers, and nothing is walked
-//
-// The vendored copy is the Asmod4n fork at adc9666 plus one hook in
-// parse_headers, which expands to nothing unless PHR_ON_FIELD is defined.
 extern "C" {
 int hooked_phr_parse_request(const char *buf, size_t len, const char **method, size_t *method_len,
                              const char **path, size_t *path_len, int *minor_version,
@@ -29,8 +20,6 @@ extern Wanted *sink;
 namespace
 {
 
-// The request Chrome sends, with the padding the ring leaves behind every
-// byte of its pool.
 const std::string kHead =
     std::string("GET /index.html HTTP/1.1\r\n"
                 "Host: www.example.com\r\n"
@@ -120,4 +109,4 @@ void phr_then_sink(benchmark::State &state)
 BENCHMARK(phr_then_lookup);
 BENCHMARK(phr_then_sink);
 
-} // namespace
+}
