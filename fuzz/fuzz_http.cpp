@@ -157,6 +157,10 @@ enum class Entry : uint8_t {
     kEntityTag,
     kConditionals,
     kMethod,
+    kStatus,
+    kExpectation,
+    kCredentials,
+    kQuotedStringRoundTrip,
     kCount,
 };
 
@@ -541,6 +545,66 @@ void run_method(const std::string_view text)
            "a method nobody may cache is cacheable");
 }
 
+// RFC 9110 15: every status this tree can name has to answer the five
+// questions without one of them contradicting another.
+void run_status(const std::string_view text)
+{
+    if (text.size() < 2)
+        return;
+    const auto status =
+        static_cast<uint16_t>((static_cast<unsigned char>(text[0]) << 8) |
+                              static_cast<unsigned char>(text[1]));
+    if (!http::is_status(status))
+        return;
+    const http::StatusClass held = http::status_class(status);
+    demand(static_cast<unsigned>(held) == status / 100u - 1u,
+           "the class does not follow the first digit");
+    demand(!http::is_heuristically_cacheable(status) || !http::reason_phrase(status).empty(),
+           "a status a cache may keep has no reason phrase");
+    demand(http::content_is_forbidden(status) ==
+               (held == http::StatusClass::kInformational || status == 204 || status == 304),
+           "content_is_forbidden names something other than 1xx, 204 and 304");
+}
+
+void run_expectation(const std::string_view text)
+{
+    const bool understood = http::every_expectation_is_understood(text);
+    // RFC 9110 10.1.1: the one expectation the specification defines. A
+    // field of nothing but it, however the list is spaced, is understood.
+    if (understood && !text.empty())
+        demand(text.find(',') == std::string_view::npos ||
+                   http::every_expectation_is_understood(text),
+               "a list of understood expectations stopped being understood");
+}
+
+void run_credentials(const std::string_view text)
+{
+    const auto got = http::parse_credentials(text);
+    if (!got)
+        return refusal_holds(got.error(), text);
+    inside(got->auth_scheme, text);
+    inside(got->rest, text);
+    demand(http::is_token(got->auth_scheme), "an auth-scheme that is not a token");
+    // RFC 9110 11.3: what parse_credentials read back has to be something
+    // spell_challenge can write, so the two halves of section 11 agree.
+    const auto spelled = http::spell_challenge(got->auth_scheme, {});
+    demand(spelled.has_value(), "a scheme that parses cannot be spelled");
+    demand(*spelled == got->auth_scheme, "spelling a bare scheme changed it");
+}
+
+// RFC 9110 5.6.4: what this tree writes as a quoted-string, it reads back
+// as the bytes it was given.
+void run_quoted_string_round_trip(const std::string_view text)
+{
+    const auto spelled = http::spell_quoted_string(text);
+    if (!spelled)
+        return refusal_holds(spelled.error(), text);
+    const auto read_back = http::parse_quoted_string(*spelled);
+    demand(read_back.has_value(), "this tree cannot read the quoted-string it wrote");
+    demand(read_back->size() == spelled->size(),
+           "the quoted-string it wrote ends before its own end");
+}
+
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -599,6 +663,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         return run_conditionals(text), 0;
     case Entry::kMethod:
         return run_method(text), 0;
+    case Entry::kStatus:
+        return run_status(text), 0;
+    case Entry::kExpectation:
+        return run_expectation(text), 0;
+    case Entry::kCredentials:
+        return run_credentials(text), 0;
+    case Entry::kQuotedStringRoundTrip:
+        return run_quoted_string_round_trip(text), 0;
     case Entry::kCount:
         break;
     }

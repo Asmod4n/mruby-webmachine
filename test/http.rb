@@ -2111,3 +2111,147 @@ assert('a request without a usable range keeps webmachine answer') do
   assert_equal 300, flow_targets('O18b')[0][1]
   assert_equal 'O18', flow_targets('O16')[1][0]
 end
+
+INFORMATIONAL = 0
+SUCCESSFUL    = 1
+REDIRECTION   = 2
+CLIENT_ERROR  = 3
+SERVER_ERROR  = 4
+
+# RFC 9110 15: "All valid status codes are within the range of 100 to 599,
+# inclusive." and "Values outside the range 100..599 are invalid."
+assert('is_status holds RFC 9110 15 to 100..599') do
+  assert_false Webmachine::SpecHttp.status_properties(99)[0]
+  assert_true Webmachine::SpecHttp.status_properties(100)[0]
+  assert_true Webmachine::SpecHttp.status_properties(599)[0]
+  assert_false Webmachine::SpecHttp.status_properties(600)[0]
+  assert_false Webmachine::SpecHttp.status_properties(0)[0]
+end
+
+# RFC 9110 15: "The first digit of the status code defines the class of
+# response. The last two digits do not have any categorization role." So
+# 471 is a client error even though no RFC defines it.
+assert('status_class reads the first digit and nothing else') do
+  {100 => INFORMATIONAL, 199 => INFORMATIONAL, 200 => SUCCESSFUL, 299 => SUCCESSFUL,
+   300 => REDIRECTION, 399 => REDIRECTION, 400 => CLIENT_ERROR, 471 => CLIENT_ERROR,
+   499 => CLIENT_ERROR, 500 => SERVER_ERROR, 599 => SERVER_ERROR}.each do |status, want|
+    assert_equal want, Webmachine::SpecHttp.status_properties(status)[1], status.to_s
+  end
+end
+
+# RFC 9110 15.1 lists the reason phrases. They are recommendations, so a
+# code this tree never sends has none rather than a made up one. 306 and
+# 418 are "(Unused)".
+assert('reason_phrase spells what RFC 9110 15 names') do
+  {200 => 'OK', 204 => 'No Content', 206 => 'Partial Content',
+   301 => 'Moved Permanently', 304 => 'Not Modified', 308 => 'Permanent Redirect',
+   400 => 'Bad Request', 404 => 'Not Found', 405 => 'Method Not Allowed',
+   406 => 'Not Acceptable', 412 => 'Precondition Failed', 413 => 'Content Too Large',
+   415 => 'Unsupported Media Type', 416 => 'Range Not Satisfiable',
+   422 => 'Unprocessable Content', 500 => 'Internal Server Error',
+   501 => 'Not Implemented', 503 => 'Service Unavailable'}.each do |status, want|
+    assert_equal want, Webmachine::SpecHttp.status_properties(status)[2], status.to_s
+  end
+  assert_equal '', Webmachine::SpecHttp.status_properties(306)[2]
+  assert_equal '', Webmachine::SpecHttp.status_properties(418)[2]
+  assert_equal '', Webmachine::SpecHttp.status_properties(471)[2]
+end
+
+# RFC 9110 15.1 names the twelve, and says "all other status codes are not
+# heuristically cacheable". 200 is in and 201 is not, one apart.
+assert('is_heuristically_cacheable holds the twelve of RFC 9110 15.1') do
+  cacheable = [200, 203, 204, 206, 300, 301, 308, 404, 405, 410, 414, 501]
+  wrong = []
+  (100..599).each do |status|
+    said = Webmachine::SpecHttp.status_properties(status)[3]
+    wrong << status if said != cacheable.include?(status)
+  end
+  assert_equal [], wrong
+end
+
+# RFC 9110 15.2: a 1xx "is terminated by the end of the header section; it
+# cannot contain content or trailers". 15.3.5 is the 204 and 15.4.5 the
+# 304. Nothing else in the specification forbids content.
+assert('content_is_forbidden names 1xx, 204 and 304 alone') do
+  forbidden = []
+  (100..599).each do |status|
+    forbidden << status if Webmachine::SpecHttp.status_properties(status)[4]
+  end
+  assert_equal (100..199).to_a + [204, 304], forbidden
+end
+
+# RFC 9110 10.1.1: "The only expectation defined by this specification is
+# 100-continue", the value "is case-insensitive", and a server that gets
+# any other member "MAY respond with a 417 (Expectation Failed)".
+assert('every_expectation_is_understood knows 100-continue alone') do
+  assert_true Webmachine::SpecHttp.every_expectation_is_understood('100-continue')
+  assert_true Webmachine::SpecHttp.every_expectation_is_understood('100-CONTINUE')
+  assert_true Webmachine::SpecHttp.every_expectation_is_understood('')
+  assert_false Webmachine::SpecHttp.every_expectation_is_understood('100-continue, other')
+  assert_false Webmachine::SpecHttp.every_expectation_is_understood('bananas')
+end
+
+# RFC 9110 10.2.1: "Allow = #method", and "An empty Allow field value
+# indicates that the resource allows no methods", so the empty list is a
+# value and not a missing field.
+assert('spell_allow writes the list of RFC 9110 10.2.1') do
+  assert_equal 'GET, HEAD, QUERY', Webmachine::SpecHttp.spell_allow(%w[GET HEAD QUERY])
+  assert_equal 'GET', Webmachine::SpecHttp.spell_allow(%w[GET])
+  assert_equal '', Webmachine::SpecHttp.spell_allow([])
+end
+
+# RFC 9110 10.2.3: "Retry-After = HTTP-date / delay-seconds" and
+# "delay-seconds = 1*DIGIT".
+assert('spell_retry_after writes both forms of RFC 9110 10.2.3') do
+  assert_equal '120', Webmachine::SpecHttp.spell_retry_after_delay(120)
+  assert_equal '0', Webmachine::SpecHttp.spell_retry_after_delay(0)
+  assert_equal 'Sun, 06 Nov 1994 08:49:37 GMT',
+               Webmachine::SpecHttp.spell_retry_after_date(784111777)
+end
+
+# RFC 9110 11.1: token68 = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
+# "+" / "/" ) *"=". The padding is only allowed at the end, and the body
+# may not be empty.
+assert('is_token68 holds the grammar of RFC 9110 11.1') do
+  assert_true Webmachine::SpecHttp.is_token68('QWxhZGRpbjpvcGVuIHNlc2FtZQ==')
+  assert_true Webmachine::SpecHttp.is_token68('a')
+  assert_true Webmachine::SpecHttp.is_token68('a+b/c-d._~')
+  assert_false Webmachine::SpecHttp.is_token68('')
+  assert_false Webmachine::SpecHttp.is_token68('==')
+  assert_false Webmachine::SpecHttp.is_token68('a=b')
+  assert_false Webmachine::SpecHttp.is_token68('a b')
+  assert_false Webmachine::SpecHttp.is_token68('a,b')
+end
+
+# RFC 9110 11.4: "credentials = auth-scheme [ 1*SP ( token68 /
+# #auth-param ) ]". What follows the scheme belongs to the scheme, so it
+# comes back unread.
+assert('parse_credentials splits the scheme of RFC 9110 11.4 from the rest') do
+  assert_equal %w[Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==],
+               Webmachine::SpecHttp.parse_credentials('Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==')
+  assert_equal ['Bearer', 'abc'], Webmachine::SpecHttp.parse_credentials('Bearer   abc')
+  assert_equal ['Negotiate', ''], Webmachine::SpecHttp.parse_credentials('Negotiate')
+  assert_equal 'tchar', Webmachine::SpecHttp.parse_credentials('')
+  assert_equal 'credentials', Webmachine::SpecHttp.parse_credentials("Basic\tabc")
+end
+
+# RFC 9110 11.3: "challenge = auth-scheme [ 1*SP ( token68 / #auth-param
+# ) ]", and 11.5 makes realm the parameter every scheme may carry, with a
+# quoted-string for its value.
+assert('spell_challenge writes what RFC 9110 11.3 asks a 401 to carry') do
+  assert_equal 'Basic realm="the door"',
+               Webmachine::SpecHttp.spell_challenge('Basic', 'the door')
+  assert_equal 'Basic', Webmachine::SpecHttp.spell_challenge('Basic', '')
+  assert_equal 'Basic realm="say \\"hi\\""',
+               Webmachine::SpecHttp.spell_challenge('Basic', 'say "hi"')
+  assert_nil Webmachine::SpecHttp.spell_challenge('Ba sic', 'x')
+  assert_nil Webmachine::SpecHttp.spell_challenge('Basic', "a\nb")
+end
+
+# Found by fuzz/fuzz_http.cpp. RFC 9110 5.6.1.2 lets a list be empty, so a
+# scheme with nothing but spaces behind it carries an empty rest. The first
+# version asked substr for the position find_first_not_of never found.
+assert('parse_credentials takes a scheme that only spaces follow') do
+  assert_equal ['Basic', ''], Webmachine::SpecHttp.parse_credentials('Basic    ')
+  assert_equal ['Basic', ''], Webmachine::SpecHttp.parse_credentials('Basic ')
+end

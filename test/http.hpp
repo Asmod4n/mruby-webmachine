@@ -804,6 +804,100 @@ mrb_value spec_allowed_methods(mrb_state *mrb, mrb_value)
     return out;
 }
 
+mrb_value spec_every_expectation_is_understood(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(http::every_expectation_is_understood(
+        std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_spell_allow(mrb_state *mrb, mrb_value)
+{
+    mrb_value names = mrb_nil_value();
+    mrb_get_args(mrb, "A", &names);
+    std::vector<http::Method> allowed;
+    for (mrb_int at = 0; at < RARRAY_LEN(names); at++) {
+        const mrb_value name = mrb_ary_entry(names, at);
+        allowed.push_back(http::method_of(
+            std::string_view(RSTRING_PTR(name), static_cast<size_t>(RSTRING_LEN(name)))));
+    }
+    return cpp_to_mrb_value(mrb, http::spell_allow(allowed));
+}
+
+mrb_value spec_spell_retry_after_delay(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    return cpp_to_mrb_value(mrb, http::spell_retry_after(std::chrono::seconds{seconds}));
+}
+
+mrb_value spec_spell_retry_after_date(mrb_state *mrb, mrb_value)
+{
+    mrb_int seconds = 0;
+    mrb_get_args(mrb, "i", &seconds);
+    return cpp_to_mrb_value(
+        mrb, http::spell_retry_after(std::chrono::sys_seconds{std::chrono::seconds{seconds}}));
+}
+
+mrb_value spec_is_token68(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    return mrb_bool_value(
+        http::is_token68(std::string_view(text, static_cast<size_t>(length))));
+}
+
+mrb_value spec_parse_credentials(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const std::string_view whole(text, static_cast<size_t>(length));
+    const auto got = http::parse_credentials(whole);
+    if (!got)
+        return cpp_to_mrb_value(mrb, http::ParseError(got.error(), whole).rule());
+    mrb_value out[2] = {
+        cpp_to_mrb_value(mrb, got->auth_scheme),
+        cpp_to_mrb_value(mrb, got->rest),
+    };
+    return mrb_ary_new_from_values(mrb, 2, out);
+}
+
+mrb_value spec_spell_challenge(mrb_state *mrb, mrb_value)
+{
+    const char *scheme = nullptr;
+    const char *realm = nullptr;
+    mrb_int scheme_length = 0;
+    mrb_int realm_length = 0;
+    mrb_get_args(mrb, "ss", &scheme, &scheme_length, &realm, &realm_length);
+    const auto got =
+        http::spell_challenge(std::string_view(scheme, static_cast<size_t>(scheme_length)),
+                              std::string_view(realm, static_cast<size_t>(realm_length)));
+    if (!got)
+        return mrb_nil_value();
+    return cpp_to_mrb_value(mrb, *got);
+}
+
+mrb_value spec_status_properties(mrb_state *mrb, mrb_value)
+{
+    mrb_int status = 0;
+    mrb_get_args(mrb, "i", &status);
+    const auto code = static_cast<uint16_t>(status);
+    mrb_value out[5] = {
+        mrb_bool_value(http::is_status(code)),
+        http::is_status(code) ? cpp_to_mrb_value(mrb, static_cast<int>(http::status_class(code)))
+                              : mrb_nil_value(),
+        cpp_to_mrb_value(mrb, http::reason_phrase(code)),
+        mrb_bool_value(http::is_heuristically_cacheable(code)),
+        http::is_status(code) ? mrb_bool_value(http::content_is_forbidden(code))
+                              : mrb_nil_value(),
+    };
+    return mrb_ary_new_from_values(mrb, 5, out);
+}
+
 mrb_value spec_method_properties(mrb_state *mrb, mrb_value)
 {
     const char *text = nullptr;
@@ -1112,6 +1206,20 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "known_methods", spec_known_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods,
                                MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "every_expectation_is_understood",
+                               spec_every_expectation_is_understood, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_allow", spec_spell_allow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_retry_after_delay",
+                               spec_spell_retry_after_delay, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_retry_after_date", spec_spell_retry_after_date,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "is_token68", spec_is_token68, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "parse_credentials", spec_parse_credentials,
+                               MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "spell_challenge", spec_spell_challenge,
+                               MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "status_properties", spec_status_properties,
+                               MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,

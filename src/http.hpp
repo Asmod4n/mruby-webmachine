@@ -87,6 +87,8 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
      "sf-token = ( ALPHA / \"*\" ) *( tchar / \":\" / \"/\" ); a string holds %x20-7E; "
      "a parameter key holds ( lcalpha / \"*\" ) *( lcalpha / DIGIT / \"_\" / \"-\" / \".\" / \"*\" )",
      500},
+    {"RFC 9110 11.4", "credentials", "The credentials are not valid",
+     "auth-scheme [ 1*SP ( token68 / #auth-param ) ]", 400},
 });
 
 inline constexpr uint16_t kUnknownProblem = 0;
@@ -115,6 +117,7 @@ inline constexpr uint16_t kQvalueProblem = 22;
 inline constexpr uint16_t kRangeProblem = 23;
 inline constexpr uint16_t kProvidedMediaTypeProblem = 24;
 inline constexpr uint16_t kStructuredItemProblem = 25;
+inline constexpr uint16_t kCredentialsProblem = 26;
 
 struct Refusal {
     uint16_t problem;
@@ -643,6 +646,26 @@ inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::s
     return std::unexpected(Refusal{kQuotedStringProblem, static_cast<uint32_t>(text.size())});
 }
 
+// RFC 9110 5.6.4: "quoted-string = DQUOTE *( qdtext / quoted-pair )
+// DQUOTE" and "quoted-pair = "\\" ( HTAB / SP / VCHAR / obs-text )". So
+// DQUOTE and the backslash are the two bytes an escape exists for, and a
+// control character other than HTAB cannot be carried at all.
+inline std::expected<std::string, Refusal> spell_quoted_string(const std::string_view text)
+{
+    std::string spelled(1, '"');
+    for (size_t at = 0; at < text.size(); at++) {
+        const char letter = text.at(at);
+        if (letter == '"' || letter == '\\') {
+            spelled.push_back('\\');
+        } else if (!is_qdtext(letter)) [[unlikely]] {
+            return std::unexpected(Refusal{kQdtextProblem, static_cast<uint32_t>(at)});
+        }
+        spelled.push_back(letter);
+    }
+    spelled.push_back('"');
+    return spelled;
+}
+
 struct Field {
     std::string_view name;
     std::string_view value;
@@ -893,7 +916,7 @@ inline std::array<char, kFixdateLength> spell_imf_fixdate(const std::chrono::sys
 // RFC 9110 6.6.1: "An origin server with a clock ... MUST generate a Date
 // header field in all 2xx, 3xx, and 4xx responses, and MAY generate a
 // Date header field in 1xx and 5xx responses."
-constexpr bool date_is_required(const unsigned status)
+constexpr bool date_is_required(const uint16_t status)
 {
     return status >= 200 && status < 500;
 }
@@ -1899,6 +1922,281 @@ inline std::expected<RequestTarget, Refusal> parse_request_target(const std::str
         return RequestTarget{*form, {}, {}, {}, {}};
     }
     std::unreachable();
+}
+
+
+// RFC 9110 15: "All valid status codes are within the range of 100 to
+// 599, inclusive." and "Values outside the range 100..599 are invalid."
+constexpr bool is_status(const uint16_t status)
+{
+    return status >= 100 && status <= 599;
+}
+
+// RFC 9110 15: "The first digit of the status code defines the class of
+// response. The last two digits do not have any categorization role."
+enum class StatusClass : uint8_t {
+    kInformational,
+    kSuccessful,
+    kRedirection,
+    kClientError,
+    kServerError,
+};
+
+constexpr StatusClass status_class(const uint16_t status)
+{
+    return static_cast<StatusClass>(status / 100 - 1);
+}
+
+// RFC 9110 15.1: "The reason phrases listed here are only
+// recommendations -- they can be replaced by local equivalents or left
+// out altogether without affecting the protocol." 306 and 418 are
+// "(Unused)" and no origin sends one, so neither has a phrase here.
+constexpr std::string_view reason_phrase(const uint16_t status)
+{
+    switch (status) {
+    case 100:
+        return "Continue";
+    case 101:
+        return "Switching Protocols";
+    case 200:
+        return "OK";
+    case 201:
+        return "Created";
+    case 202:
+        return "Accepted";
+    case 203:
+        return "Non-Authoritative Information";
+    case 204:
+        return "No Content";
+    case 205:
+        return "Reset Content";
+    case 206:
+        return "Partial Content";
+    case 300:
+        return "Multiple Choices";
+    case 301:
+        return "Moved Permanently";
+    case 302:
+        return "Found";
+    case 303:
+        return "See Other";
+    case 304:
+        return "Not Modified";
+    case 305:
+        return "Use Proxy";
+    case 307:
+        return "Temporary Redirect";
+    case 308:
+        return "Permanent Redirect";
+    case 400:
+        return "Bad Request";
+    case 401:
+        return "Unauthorized";
+    case 402:
+        return "Payment Required";
+    case 403:
+        return "Forbidden";
+    case 404:
+        return "Not Found";
+    case 405:
+        return "Method Not Allowed";
+    case 406:
+        return "Not Acceptable";
+    case 407:
+        return "Proxy Authentication Required";
+    case 408:
+        return "Request Timeout";
+    case 409:
+        return "Conflict";
+    case 410:
+        return "Gone";
+    case 411:
+        return "Length Required";
+    case 412:
+        return "Precondition Failed";
+    case 413:
+        return "Content Too Large";
+    case 414:
+        return "URI Too Long";
+    case 415:
+        return "Unsupported Media Type";
+    case 416:
+        return "Range Not Satisfiable";
+    case 417:
+        return "Expectation Failed";
+    case 421:
+        return "Misdirected Request";
+    case 422:
+        return "Unprocessable Content";
+    case 426:
+        return "Upgrade Required";
+    case 500:
+        return "Internal Server Error";
+    case 501:
+        return "Not Implemented";
+    case 502:
+        return "Bad Gateway";
+    case 503:
+        return "Service Unavailable";
+    case 504:
+        return "Gateway Timeout";
+    case 505:
+        return "HTTP Version Not Supported";
+    default:
+        return {};
+    }
+}
+
+// RFC 9110 15.1: "Responses with status codes that are defined as
+// heuristically cacheable (e.g., 200, 203, 204, 206, 300, 301, 308, 404,
+// 405, 410, 414, and 501 in this specification) can be reused by a cache
+// with heuristic expiration ... all other status codes are not
+// heuristically cacheable."
+constexpr bool is_heuristically_cacheable(const uint16_t status)
+{
+    switch (status) {
+    case 200:
+    case 203:
+    case 204:
+    case 206:
+    case 300:
+    case 301:
+    case 308:
+    case 404:
+    case 405:
+    case 410:
+    case 414:
+    case 501:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// RFC 9110 15.2: a 1xx response "is terminated by the end of the header
+// section; it cannot contain content or trailers". 15.3.5: a 204 says
+// "there is no additional content to send in the response content".
+// 15.4.5: a 304 tells the client it already holds the representation.
+constexpr bool content_is_forbidden(const uint16_t status)
+{
+    return status_class(status) == StatusClass::kInformational || status == 204 ||
+           status == 304;
+}
+
+
+// RFC 9110 10.1.1: "Expect = #expectation", "expectation = token [ "="
+// ( token / quoted-string ) parameters ]", the value "is
+// case-insensitive", and "The only expectation defined by this
+// specification is 100-continue (with no defined parameters)." A server
+// that receives any other member "MAY respond with a 417 (Expectation
+// Failed)".
+inline bool every_expectation_is_understood(const std::string_view field)
+{
+    std::string_view rest = field;
+    while (const auto element = parse_list_element(rest)) {
+        if (!equal_ignoring_case(element->element, "100-continue")) [[unlikely]]
+            return false;
+        rest = element->rest;
+    }
+    return true;
+}
+
+// RFC 9110 10.2.1: "Allow = #method" and "An origin server MUST generate
+// an Allow header field in a 405 (Method Not Allowed) response". "An
+// empty Allow field value indicates that the resource allows no
+// methods", so an empty list spells an empty value and not no field.
+inline std::string spell_allow(const std::span<const Method> allowed)
+{
+    std::string spelled;
+    for (const Method method : allowed) {
+        if (!spelled.empty())
+            spelled.append(", ");
+        spelled.append(method_name_of(method));
+    }
+    return spelled;
+}
+
+// RFC 9110 10.2.3: "Retry-After = HTTP-date / delay-seconds" and
+// "delay-seconds = 1*DIGIT".
+inline std::string spell_retry_after(const std::chrono::seconds delay)
+{
+    return std::to_string(delay.count());
+}
+
+inline std::string spell_retry_after(const std::chrono::sys_seconds moment)
+{
+    const std::array<char, kFixdateLength> spelled = spell_imf_fixdate(moment);
+    return std::string(spelled.data(), spelled.size());
+}
+
+
+// RFC 9110 11.1: "token68 = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
+// "+" / "/" ) *"="". The name counts the 66 characters plus the two the
+// padding needs, and it is the RFC's name, so it is the one used here.
+inline constexpr std::array<bool, 256> kToken68 = [] {
+    std::array<bool, 256> table{};
+    for (const char letter : std::string_view("-._~+/"))
+        table.at(static_cast<unsigned char>(letter)) = true;
+    for (unsigned index = '0'; index <= '9'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'A'; index <= 'Z'; index++)
+        table.at(index) = true;
+    for (unsigned index = 'a'; index <= 'z'; index++)
+        table.at(index) = true;
+    return table;
+}();
+
+inline bool is_token68(const std::string_view text)
+{
+    const size_t padding = text.size() - text.find_last_not_of('=') - 1;
+    const std::string_view body = text.substr(0, text.size() - padding);
+    return !body.empty() && every_byte_is_allowed(body, kToken68);
+}
+
+// RFC 9110 11.4: "credentials = auth-scheme [ 1*SP ( token68 /
+// #auth-param ) ]" and 11.1: the auth-scheme "is a case-insensitive
+// token". What follows the scheme is the scheme's own business, so it
+// comes back unread.
+struct Credentials {
+    std::string_view auth_scheme;
+    std::string_view rest;
+};
+
+inline std::expected<Credentials, Refusal> parse_credentials(const std::string_view field)
+{
+    const std::string_view auth_scheme(field.begin(), std::ranges::find_if_not(field, is_tchar));
+    if (auth_scheme.empty()) [[unlikely]]
+        return std::unexpected(Refusal{kTcharProblem, 0});
+    const std::string_view after = field.substr(auth_scheme.size());
+    if (after.empty())
+        return Credentials{auth_scheme, {}};
+    if (after.front() != ' ') [[unlikely]]
+        return std::unexpected(Refusal{kCredentialsProblem,
+                                       static_cast<uint32_t>(auth_scheme.size())});
+    const size_t body = after.find_first_not_of(' ');
+    if (body == std::string_view::npos)
+        return Credentials{auth_scheme, {}};
+    return Credentials{auth_scheme, after.substr(body)};
+}
+
+// RFC 9110 11.3: "challenge = auth-scheme [ 1*SP ( token68 / #auth-param
+// ) ]", and a 401 carries "at least one challenge applicable to the
+// requested resource". RFC 9110 11.5 makes realm the one parameter every
+// scheme may use, and its value is a quoted-string.
+inline std::expected<std::string, Refusal> spell_challenge(const std::string_view auth_scheme,
+                                                           const std::string_view realm)
+{
+    if (!is_token(auth_scheme)) [[unlikely]]
+        return std::unexpected(Refusal{kTcharProblem, 0});
+    std::string spelled(auth_scheme);
+    if (realm.empty())
+        return spelled;
+    const auto quoted = spell_quoted_string(realm);
+    if (!quoted) [[unlikely]]
+        return std::unexpected(quoted.error());
+    spelled.append(" realm=");
+    spelled.append(*quoted);
+    return spelled;
 }
 
 }
