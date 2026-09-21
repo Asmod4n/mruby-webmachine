@@ -89,7 +89,16 @@ constexpr bool word_fold_answers_what_the_byte_fold_answers()
     return true;
 }
 
-static_assert(word_fold_answers_what_the_byte_fold_answers());
+mrb_value spec_word_fold_answers_what_the_byte_fold_answers(mrb_state *, mrb_value)
+{
+    constexpr bool answered = word_fold_answers_what_the_byte_fold_answers();
+    return mrb_bool_value(answered);
+}
+
+mrb_value spec_wide_block_fits_the_padding(mrb_state *, mrb_value)
+{
+    return mrb_bool_value(http::kWideBlockBytes <= http::kWidePadding);
+}
 
 mrb_value spec_equal_ignoring_case(mrb_state *mrb, mrb_value)
 {
@@ -1154,6 +1163,10 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "ascii_lowered", spec_ascii_lowered, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "equal_ignoring_case", spec_equal_ignoring_case,
                                MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "word_fold_answers_what_the_byte_fold_answers",
+                               spec_word_fold_answers_what_the_byte_fold_answers, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "wide_block_fits_the_padding",
+                               spec_wide_block_fits_the_padding, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "token?", spec_is_token, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "lowercase_token?", spec_is_lowercase_token,
                                MRB_ARGS_REQ(1));

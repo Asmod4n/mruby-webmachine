@@ -236,7 +236,19 @@ A number with no measurement behind it is not written down.
 
 No `assert` and no `static_assert` in `src/`, and none in a test
 `.cpp` either. mrbtest counts what `assert` in a `.rb` file reports,
-and a check that mrbtest does not count is a check nobody sees.
+and a check that mrbtest does not count is a check nobody sees. A
+failed `static_assert` is worse than uncounted: the compiler stops,
+mrbtest is never linked, and every other check of the suite goes
+unread.
+
+The compiler still does the work. A binding writes `constexpr bool
+answered = f();` and hands `answered` to the `.rb` file. That is a
+constant expression, so the compiler evaluates every case, refuses
+undefined behaviour on the path it walked, and refuses a function that
+stopped being constant-evaluable. A wrong value is then one red line
+among the others.
+
+`static_assert` stays where nothing else can find the bug.
 
 One `.cpp` in `test/` holds every binding the `.rb` files need, and
 one `.hpp` beside it for each module under test. The `.cpp` includes
@@ -1005,8 +1017,9 @@ that merely exists is invisible to a sanitizer and would hide an
 overrun rather than show it. `rake test` is the debug build, so the
 suite gets that for nothing.
 
-`kWidePadding` is 64, which covers AVX-512, and every wide reader
-carries `static_assert(width <= kWidePadding)`.
+`kWidePadding` is 64, which covers AVX-512. `kWideBlockBytes` is what
+the scanner of this build loads at a time, and the suite checks that
+the padding covers it.
 
 This is simdjson's answer. `SIMDJSON_PADDING = 64` in `base.h`, its
 `padded_string` allocates `length + SIMDJSON_PADDING`, and each reader

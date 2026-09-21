@@ -2284,3 +2284,17 @@ assert('a whole pct-encoded triplet is still taken') do
   end
 end
 
+
+# The word fold has to answer what the byte fold answers for every byte.
+# test/http.hpp evaluates it as a constant expression, so the compiler
+# walks all 67584 words; this line is what makes mrbtest count the answer.
+assert('the word fold answers what the byte fold answers') do
+  assert_true Webmachine::SpecHttp.word_fold_answers_what_the_byte_fold_answers
+end
+
+# kWidePadding is the slack the ring leaves behind every byte of its pool,
+# and allowed_run_length loads kWideBlockBytes at a time without shortening
+# the last load. A padding smaller than a block is a read past the wall.
+assert('the padding covers one block of the wide scanner') do
+  assert_true Webmachine::SpecHttp.wide_block_fits_the_padding
+end

@@ -522,6 +522,14 @@ inline constexpr size_t kNeonNibblesPerByte = 4;
 inline constexpr size_t kWidePadding = 64;
 
 #if defined(__AVX2__)
+inline constexpr size_t kWideBlockBytes = 32;
+#elif defined(__ARM_NEON)
+inline constexpr size_t kWideBlockBytes = 16;
+#else
+inline constexpr size_t kWideBlockBytes = 1;
+#endif
+
+#if defined(__AVX2__)
 inline uint32_t avx2_block_refusals(const char *at, const __m256i low_table,
                                     const __m256i high_table)
 {
@@ -539,13 +547,12 @@ inline size_t allowed_run_length(const std::string_view padded,
                                  [[maybe_unused]] const std::array<bool, 256> &allowed,
                                  [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
 {
-    static_assert(32 <= kWidePadding);
 #if defined(__AVX2__)
     const __m256i low_table = _mm256_broadcastsi128_si256(
         _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data())));
     const __m256i high_table = _mm256_broadcastsi128_si256(
         _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data())));
-    for (size_t at = 0; at < padded.size(); at += 32) {
+    for (size_t at = 0; at < padded.size(); at += kWideBlockBytes) {
         const uint32_t refused =
             avx2_block_refusals(std::next(padded.data(), at), low_table, high_table);
         if (refused != 0)
@@ -554,7 +561,7 @@ inline size_t allowed_run_length(const std::string_view padded,
     return padded.size();
 #elif defined(__ARM_NEON)
     const unsigned char *const from = reinterpret_cast<const unsigned char *>(padded.data());
-    for (size_t at = 0; at < padded.size(); at += 16) {
+    for (size_t at = 0; at < padded.size(); at += kWideBlockBytes) {
         const uint64_t refused = neon_block_refusals(std::next(from, at), low_bits);
         if (refused != 0)
             return std::min(at + static_cast<size_t>(std::countr_zero(refused)) /
