@@ -8,6 +8,20 @@
 extern "C" {
 #endif
 
+enum {
+    kCacheFieldStatus = 0,
+    kCacheFieldEntityTag,
+    kCacheFieldLastModified,
+    kCacheFieldContentType,
+    kCacheFieldContentLanguage,
+    kCacheFieldContentEncoding,
+    kCacheFieldExpires,
+    kCacheFieldVary,
+    kCacheFieldLocation,
+    kCacheFieldBody,
+    kCacheFieldCount,
+};
+
 typedef struct cache cache;
 typedef struct cache_reader cache_reader;
 
@@ -17,7 +31,9 @@ typedef struct {
     unsigned snapshot;
 } cache_answer;
 
-uint64_t cache_key_of(const uint8_t *key, size_t key_length);
+uint64_t cache_key_of(const uint8_t *route, size_t route_length);
+
+uint64_t cache_field_of(uint64_t of_route, uint8_t field);
 
 cache *cache_open(const char *app_name, const char *directory, unsigned readers);
 

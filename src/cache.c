@@ -54,27 +54,32 @@ __attribute__((target("+crc"))) static uint64_t crc_of_byte(const uint64_t taken
 }
 #endif
 
-uint64_t cache_key_of(const uint8_t *const key, const size_t key_length)
+uint64_t cache_key_of(const uint8_t *const route, const size_t route_length)
 {
     uint64_t low = ~(uint64_t) 0;
     uint64_t high = 0x9e3779b97f4a7c15ULL;
     size_t at = 0;
-    for (; at + 16 <= key_length; at += 16) {
+    for (; at + 16 <= route_length; at += 16) {
         uint64_t one = 0;
         uint64_t two = 0;
-        memcpy(&one, key + at, sizeof one);
-        memcpy(&two, key + at + 8, sizeof two);
+        memcpy(&one, route + at, sizeof one);
+        memcpy(&two, route + at + 8, sizeof two);
         low = crc_of_word(low, one);
         high = crc_of_word(high, two);
     }
-    for (; at + 8 <= key_length; at += 8) {
+    for (; at + 8 <= route_length; at += 8) {
         uint64_t one = 0;
-        memcpy(&one, key + at, sizeof one);
+        memcpy(&one, route + at, sizeof one);
         low = crc_of_word(low, one);
     }
-    for (; at < key_length; at++)
-        low = crc_of_byte(low, key[at]);
+    for (; at < route_length; at++)
+        low = crc_of_byte(low, route[at]);
     return (low * 0x9e3779b97f4a7c15ULL) ^ (high << 32) ^ high;
+}
+
+uint64_t cache_field_of(const uint64_t of_route, const uint8_t field)
+{
+    return (of_route ^ (field * 0x9e3779b97f4a7c15ULL)) * 0xff51afd7ed558ccdULL;
 }
 
 static bool app_name_is_a_token(const char *name)
