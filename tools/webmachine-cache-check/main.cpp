@@ -85,6 +85,13 @@ static void hand_over_a_forgetting(const int thread, const uint64_t of_route)
     assert(send(mine[thread], &header, sizeof header, 0) == (ssize_t) sizeof header);
 }
 
+static void hand_over_an_emptying(const int thread)
+{
+    cache_datagram_header header = {};
+    header.forget = kCacheForgetsEverything;
+    assert(send(mine[thread], &header, sizeof header, 0) == (ssize_t) sizeof header);
+}
+
 static uint64_t now_is()
 {
     struct timespec now = {};
@@ -92,13 +99,10 @@ static uint64_t now_is()
     return (uint64_t) now.tv_sec;
 }
 
-int main(int argc, char **argv)
-{
-    setvbuf(stdout, nullptr, _IONBF, 0);
-    const char *const file = "/tmp/wm-whole.mdb";
-    remove(file);
-    remove("/tmp/wm-whole.mdb-lock");
+static const char *const kFile = "/tmp/wm-whole.mdb";
 
+static pid_t the_writer_stands(char *const writer, char *const arm, int32_t *const taken)
+{
     int theirs[kThreads];
     for (int at = 0; at < kThreads; at++) {
         int pair[2];
@@ -115,24 +119,50 @@ int main(int argc, char **argv)
         posix_spawn_file_actions_adddup2(&actions, theirs[at], kFirstFd + at);
     posix_spawn_file_actions_addclosefrom_np(&actions, kFirstFd + kThreads);
 
-    char threads[8], map[32], readers[8], batch[8], budget[32];
+    static char threads[8], map[32], readers[8], batch[8], budget[32];
     snprintf(threads, sizeof threads, "%d", kThreads);
     snprintf(map, sizeof map, "%llu", (unsigned long long) (1024ull << 20));
     snprintf(readers, sizeof readers, "%d", 64);
     snprintf(batch, sizeof batch, "%d", 2);
     snprintf(budget, sizeof budget, "%llu", (unsigned long long) (512ull << 20));
-    char *const writer = argc > 1 ? argv[1] : const_cast<char *>("./webmachine-cache");
-    char *child[] = {writer, const_cast<char *>(file), threads, map, readers, batch, budget,
-                     argc > 2 ? argv[2] : nullptr, nullptr};
+    char *child[] = {writer, const_cast<char *>(kFile), threads, map, readers, batch, budget,
+                     arm, nullptr};
     pid_t spawned = 0;
     assert(posix_spawn(&spawned, writer, &actions, nullptr, child, environ) == 0);
     posix_spawn_file_actions_destroy(&actions);
     for (int at = 0; at < kThreads; at++)
         close(theirs[at]);
-    printf("the server spawned the writer and kept one socket per thread\n");
 
     int32_t standing = 0;
     assert(recv(mine[0], &standing, sizeof standing, 0) == (ssize_t) sizeof standing);
+    *taken = standing;
+    return spawned;
+}
+
+static void the_writer_left(const pid_t spawned)
+{
+    for (int at = 0; at < kThreads; at++)
+        close(mine[at]);
+    int left = 0;
+    waitpid(spawned, &left, 0);
+    if (!WIFEXITED(left)) {
+        fprintf(stderr, "the writer died of signal %d\n", WTERMSIG(left));
+        exit(1);
+    }
+    assert(WEXITSTATUS(left) == 0);
+}
+
+int main(int argc, char **argv)
+{
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    remove(kFile);
+    remove("/tmp/wm-whole.mdb-lock");
+
+    char *const writer = argc > 1 ? argv[1] : const_cast<char *>("./webmachine-cache");
+    char *const arm = argc > 2 ? argv[2] : nullptr;
+    int32_t standing = 0;
+    pid_t spawned = the_writer_stands(writer, arm, &standing);
+    printf("the server spawned the writer and kept one socket per thread\n");
     if (standing < 0) {
         fprintf(stderr, "the writer could not start: %s\n", strerror(-standing));
         return 1;
@@ -190,15 +220,7 @@ int main(int argc, char **argv)
     assert(heard_an_expiry);
     printf("every thread heard what went away, both the forgetting and the expiry\n");
 
-    for (int at = 0; at < kThreads; at++)
-        close(mine[at]);
-    int left = 0;
-    waitpid(spawned, &left, 0);
-    if (!WIFEXITED(left)) {
-        fprintf(stderr, "the writer died of signal %d\n", WTERMSIG(left));
-        return 1;
-    }
-    assert(WEXITSTATUS(left) == 0);
+    the_writer_left(spawned);
     printf("the writer drained its sockets and left with 0\n");
 
     cache *const c = cache_open("wm-whole", "/tmp", 64);
@@ -245,6 +267,41 @@ int main(int argc, char **argv)
     cache_sent(r, b.snapshot);
     cache_reader_closed(r);
     cache_close(c);
+
+    spawned = the_writer_stands(writer, arm, &standing);
+    assert(standing > 0);
+    const char *const third = "/articles/99?param=q&foo=bar";
+    const uint64_t three =
+        cache_key_of(reinterpret_cast<const uint8_t *>(third), strlen(third));
+    hand_over_inline(0, three, kCacheFieldEntityTag, 900, tag, sizeof tag);
+    hand_over_an_emptying(1);
+    printf("a second writer stored one more route and was told to empty everything\n");
+
+    bool heard_the_emptying = false;
+    struct timespec a_moment = {0, 200000000};
+    nanosleep(&a_moment, nullptr);
+    for (int at = 0; at < kThreads; at++) {
+        cache_gone_datagram gone = {};
+        while (recv(mine[at], &gone, sizeof gone, MSG_DONTWAIT) == (ssize_t) sizeof gone)
+            if (gone.why == kCacheEmptied)
+                heard_the_emptying = true;
+    }
+    assert(heard_the_emptying);
+    the_writer_left(spawned);
+
+    cache *const after = cache_open("wm-whole", "/tmp", 64);
+    assert(after != nullptr);
+    cache_reader *const then = cache_reader_opened(after);
+    assert(then != nullptr);
+    const uint64_t later = now_is();
+    assert(cache_asked(then, one, kCacheFieldEntityTag, later).value == nullptr);
+    assert(cache_asked(then, one, kCacheFieldStatus, later).value == nullptr);
+    assert(cache_body_asked(then, one, later).value == nullptr);
+    assert(cache_asked(then, three, kCacheFieldEntityTag, later).value == nullptr);
+    printf("emptying takes everything, the route it never heard of as much as the new one\n");
+    cache_reader_closed(then);
+    cache_close(after);
+
     printf("ok\n");
     return 0;
 }

@@ -8,7 +8,7 @@ extern "C" {
 
 enum { kCacheBodyIsInline = 0, kCacheBodyIsInAFile = 1 };
 
-enum { kCacheStores = 0, kCacheForgets = 1 };
+enum { kCacheStores = 0, kCacheForgets = 1, kCacheForgetsEverything = 2 };
 
 typedef struct {
     uint64_t route;
@@ -19,7 +19,7 @@ typedef struct {
     uint8_t unused;
 } cache_datagram_header;
 
-enum { kCacheExpired = 0, kCacheInvalidated = 1 };
+enum { kCacheExpired = 0, kCacheInvalidated = 1, kCacheEmptied = 2 };
 
 typedef struct {
     uint64_t route;

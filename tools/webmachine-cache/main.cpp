@@ -225,6 +225,23 @@ static void forgotten(struct writing *const of_file, const uint64_t route)
         committed(of_file);
 }
 
+static void emptied(struct writing *const of_file)
+{
+    if (!putting(of_file))
+        return;
+    const int fields = mdb_drop(of_file->putting, of_file->fields, 0);
+    if (fields != 0)
+        complain("mdb_drop fields", fields);
+    const int bodies = mdb_drop(of_file->putting, of_file->bodies, 0);
+    if (bodies != 0)
+        complain("mdb_drop bodies", bodies);
+    const int due = mdb_drop(of_file->putting, of_file->due, 0);
+    if (due != 0)
+        complain("mdb_drop due", due);
+    said_it_is_gone(of_file, 0, kCacheFieldCount, kCacheEmptied);
+    committed(of_file);
+}
+
 static bool still_due(struct writing *const of_file, const uint64_t route, const uint8_t field,
                       const uint64_t now)
 {
@@ -316,6 +333,13 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
     if (header.field >= kCacheFieldCount) {
         if (file >= 0)
             close(file);
+        return;
+    }
+
+    if (header.forget == kCacheForgetsEverything) {
+        if (file >= 0)
+            close(file);
+        emptied(of_file);
         return;
     }
 
