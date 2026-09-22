@@ -30,7 +30,6 @@ typedef struct cache_reader cache_reader;
 typedef struct {
     const uint8_t *value;
     size_t length;
-    unsigned snapshot;
 } cache_answer;
 
 uint64_t cache_key_of(const uint8_t *route, size_t route_length);
@@ -48,9 +47,7 @@ cache_answer cache_asked(cache_reader *of_thread, uint64_t of_route, uint8_t fie
 
 cache_answer cache_body_asked(cache_reader *of_thread, uint64_t of_route, uint64_t now);
 
-void cache_sent(cache_reader *of_thread, unsigned snapshot);
-
-bool cache_changed(cache_reader *of_thread);
+void cache_sent(cache_reader *of_thread);
 
 #ifdef __cplusplus
 }

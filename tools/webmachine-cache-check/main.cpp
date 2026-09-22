@@ -260,9 +260,9 @@ int main(int argc, char **argv)
                .value == nullptr);
     printf("a route the dev did not declare is a miss\n");
 
-    cache_sent(r, a.snapshot);
-    cache_sent(r, s.snapshot);
-    cache_sent(r, b.snapshot);
+    cache_sent(r);
+    cache_sent(r);
+    cache_sent(r);
     cache_reader_closed(r);
     cache_close(c);
 
@@ -326,12 +326,15 @@ int main(int argc, char **argv)
     cache_answer kept = cache_asked(only, three, kCacheFieldEntityTag, by_now);
     assert(kept.value != nullptr && kept.length == sizeof tag);
     printf("with no writer anywhere, the library drops a value and a body itself\n");
-    cache_sent(only, kept.snapshot);
 
     assert(cache_forget_everything(alone));
-    assert(cache_changed(only));
+    assert(cache_asked(only, three, kCacheFieldEntityTag, by_now).value != nullptr);
+    printf("the snapshot in hand still answers, which is what a snapshot is for\n");
+    cache_sent(only);
+    cache_sent(only);
+    cache_sent(only);
     assert(cache_asked(only, three, kCacheFieldEntityTag, by_now).value == nullptr);
-    printf("and empties the whole of it, which the reader sees on its next snapshot\n");
+    printf("and once the last send is done the reader renews and sees the empty cache\n");
     cache_reader_closed(only);
     cache_close(without);
     cache_forgetting_closed(alone);

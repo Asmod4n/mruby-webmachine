@@ -27,11 +27,8 @@ struct cache_reader {
     MDB_dbi fields;
     MDB_dbi bodies;
     MDB_txn *reading;
-    MDB_txn *draining;
     MDB_cursor *walking;
-    unsigned snapshot;
-    unsigned sending;
-    unsigned draining_sending;
+    unsigned in_flight;
 };
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -202,8 +199,6 @@ void cache_reader_closed(cache_reader *of_thread)
         return;
     if (of_thread->walking != NULL)
         mdb_cursor_close(of_thread->walking);
-    if (of_thread->draining != NULL)
-        mdb_txn_abort(of_thread->draining);
     if (of_thread->reading != NULL)
         mdb_txn_abort(of_thread->reading);
     free(of_thread);
@@ -212,7 +207,7 @@ void cache_reader_closed(cache_reader *of_thread)
 cache_answer cache_asked(cache_reader *of_thread, const uint64_t of_route, const uint8_t field,
                          const uint64_t now)
 {
-    const cache_answer nothing = {NULL, 0, 0};
+    const cache_answer nothing = {NULL, 0};
     if (of_thread == NULL || of_thread->walking == NULL)
         return nothing;
     uint8_t wanted = field;
@@ -227,16 +222,15 @@ cache_answer cache_asked(cache_reader *of_thread, const uint64_t of_route, const
     memcpy(&until, bytes + 1, sizeof until);
     if (until <= now)
         return nothing;
-    of_thread->sending++;
-    const cache_answer answer = {bytes + kFieldPrefix, found.mv_size - kFieldPrefix,
-                                 of_thread->snapshot};
+    of_thread->in_flight++;
+    const cache_answer answer = {bytes + kFieldPrefix, found.mv_size - kFieldPrefix};
     return answer;
 }
 
 cache_answer cache_body_asked(cache_reader *of_thread, const uint64_t of_route,
                               const uint64_t now)
 {
-    const cache_answer nothing = {NULL, 0, 0};
+    const cache_answer nothing = {NULL, 0};
     if (of_thread == NULL || of_thread->reading == NULL)
         return nothing;
     MDB_val asked = {sizeof of_route, (void *) &of_route};
@@ -250,56 +244,27 @@ cache_answer cache_body_asked(cache_reader *of_thread, const uint64_t of_route,
     memcpy(&until, bytes, sizeof until);
     if (until <= now)
         return nothing;
-    of_thread->sending++;
-    const cache_answer answer = {bytes + kBodyPrefix, found.mv_size - kBodyPrefix,
-                                 of_thread->snapshot};
+    of_thread->in_flight++;
+    const cache_answer answer = {bytes + kBodyPrefix, found.mv_size - kBodyPrefix};
     return answer;
 }
 
-void cache_sent(cache_reader *of_thread, const unsigned snapshot)
+void cache_sent(cache_reader *of_thread)
 {
-    if (of_thread == NULL)
+    if (of_thread == NULL || of_thread->in_flight == 0)
         return;
-    if (snapshot == of_thread->snapshot) {
-        if (of_thread->sending > 0)
-            of_thread->sending--;
+    if (--of_thread->in_flight != 0)
         return;
-    }
-    if (of_thread->draining_sending > 0)
-        of_thread->draining_sending--;
-    if (of_thread->draining_sending == 0 && of_thread->draining != NULL) {
-        mdb_txn_abort(of_thread->draining);
-        of_thread->draining = NULL;
-    }
-}
-
-bool cache_changed(cache_reader *of_thread)
-{
-    if (of_thread == NULL)
-        return false;
     if (of_thread->walking != NULL) {
         mdb_cursor_close(of_thread->walking);
         of_thread->walking = NULL;
     }
-    if (of_thread->draining != NULL) {
-        if (of_thread->draining_sending > 0)
-            return false;
-        mdb_txn_abort(of_thread->draining);
-        of_thread->draining = NULL;
-    }
-    if (of_thread->sending > 0) {
-        of_thread->draining = of_thread->reading;
-        of_thread->draining_sending = of_thread->sending;
-        of_thread->reading = NULL;
-    } else {
+    mdb_txn_reset(of_thread->reading);
+    if (mdb_txn_renew(of_thread->reading) != 0) {
         mdb_txn_abort(of_thread->reading);
         of_thread->reading = NULL;
+        return;
     }
-    of_thread->sending = 0;
-    of_thread->snapshot++;
-    if (mdb_txn_begin(of_thread->environment, NULL, MDB_RDONLY, &of_thread->reading) != 0)
-        return false;
     if (mdb_cursor_open(of_thread->reading, of_thread->fields, &of_thread->walking) != 0)
-        return false;
-    return true;
+        of_thread->walking = NULL;
 }
