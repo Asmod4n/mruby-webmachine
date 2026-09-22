@@ -85,10 +85,25 @@ class Ring
             return -EMFILE;
         connections_ = open_files - kListeners;
 
-        const int begun = io_uring_queue_init(entries, &ring_, 0);
-        if (begun < 0)
-            return begun;
+        constexpr unsigned kAsked = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
+                                    IORING_SETUP_COOP_TASKRUN;
+        const unsigned floor = entries < 1024 ? entries : 1024;
+        int begun = -EINVAL;
+        for (unsigned wanted = entries;; wanted /= 2) {
+            io_uring_params asking = {};
+            asking.flags = kAsked;
+            begun = io_uring_queue_init_params(wanted, &ring_, &asking);
+            if (begun == 0) {
+                entries_ = asking.sq_entries;
+                break;
+            }
+            if (wanted <= floor)
+                return begun;
+        }
         standing_ = true;
+        const int by_index = io_uring_register_ring_fd(&ring_);
+        if (by_index < 0 && by_index != -EINVAL)
+            return by_index;
 
         const int sparse = io_uring_register_files_sparse(&ring_, connections_ + kListeners);
         if (sparse != 0)
@@ -185,6 +200,11 @@ class Ring
         io_uring_submit(&ring_);
         listeners_++;
         return 0;
+    }
+
+    unsigned entries_taken() const
+    {
+        return entries_;
     }
 
     uint16_t port_taken(const uint32_t which) const
@@ -319,6 +339,7 @@ class Ring
     bool standing_ = false;
     io_uring_buf_ring *buffers_ = nullptr;
     uint8_t *room_ = nullptr;
+    unsigned entries_ = 0;
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
     uint16_t port_[kListeners] = {};
