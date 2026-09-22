@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <netinet/in.h>
 #include <sys/un.h>
 #include <sys/mman.h>
@@ -45,6 +46,11 @@ static_assert(slot_of(marked(Doing::kReceiving, 4095)) == 4095,
               "and which slot it was being done to");
 static_assert(marked(Doing::kAccepting, 0) != marked(Doing::kReceiving, 0),
               "two things done to one slot are two marks");
+
+struct Answered {
+    std::string_view sent;
+    size_t taken;
+};
 
 class QueueIsFull : public std::runtime_error
 {
@@ -411,11 +417,20 @@ class Ring
             replenish_ += static_cast<uint32_t>((took_bytes + kBufferBytes - 1) / kBufferBytes);
             if (from + took_bytes > pool)
                 return armed + closes(slot);
-            const uint8_t *const taken = room_ + from;
             Owed &owed = owed_[slot];
             uint8_t *const into = answers_ + static_cast<size_t>(slot) * kAnswerBytes;
-            owed.filled += static_cast<uint32_t>(
-                answering(taken, took_bytes, into + owed.filled, kAnswerBytes - owed.filled));
+            std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
+            while (!left.empty() && owed.filled < kAnswerBytes) {
+                const Answered said = answering(left);
+                if (said.taken == 0)
+                    break;
+                const size_t room = kAnswerBytes - owed.filled;
+                if (said.sent.size() > room)
+                    break;
+                memcpy(into + owed.filled, said.sent.data(), said.sent.size());
+                owed.filled += static_cast<uint32_t>(said.sent.size());
+                left.remove_prefix(said.taken);
+            }
             armed += sends(slot);
             if ((cqe->flags & IORING_CQE_F_MORE) == 0)
                 armed += receives(slot);

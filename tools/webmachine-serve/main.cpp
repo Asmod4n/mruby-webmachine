@@ -5,7 +5,7 @@
 
 #include <slipstream_syscall.h>
 
-#include "../../src/head.hpp"
+#include "../../src/http1.hpp"
 #include "../../src/ring.hpp"
 
 static const char kAnswer[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
@@ -41,33 +41,17 @@ int main(int argc, char **argv)
     bool enough = false;
     try {
         ring.serves(
-        [&](const uint8_t *const asked, const size_t asked_length, uint8_t *const into,
-            const size_t room) -> size_t {
-            if (asked_length >= 4 && memcmp(asked, "STOP", 4) == 0)
+        [&](const std::string_view asked) -> wm::Answered {
+            if (asked.starts_with("STOP"))
                 enough = true;
-            std::string_view left(reinterpret_cast<const char *>(asked), asked_length);
-            size_t written = 0;
-            for (;;) {
-                wm::Head head;
-                const wm::Reading read = wm::head_of(left, head);
-                if (read == wm::Reading::kWantsMore)
-                    break;
-                if (read == wm::Reading::kRefused) {
-                    if (room - written < sizeof kRefused - 1)
-                        break;
-                    memcpy(into + written, kRefused, sizeof kRefused - 1);
-                    written += sizeof kRefused - 1;
-                    break;
-                }
-                if (room - written < sizeof kAnswer - 1)
-                    break;
-                memcpy(into + written, kAnswer, sizeof kAnswer - 1);
-                written += sizeof kAnswer - 1;
-                left.remove_prefix(head.bytes);
-                if (left.empty())
-                    break;
-            }
-            return written;
+            const size_t bytes = http1::bytes_before_the_body(asked);
+            if (bytes == 0)
+                return {{}, 0};
+            const std::expected<http1::Request, http::Refusal> request =
+                http1::parse_request(asked);
+            if (!request) [[unlikely]]
+                return {std::string_view(kRefused, sizeof kRefused - 1), bytes};
+            return {std::string_view(kAnswer, sizeof kAnswer - 1), request->bytes};
         },
             enough);
     } catch (const wm::QueueIsFull &full) {

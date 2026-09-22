@@ -3,7 +3,7 @@
 #include <cstring>
 #include <string>
 
-#include "../src/head.hpp"
+#include "../src/http1.hpp"
 
 namespace
 {
@@ -40,54 +40,44 @@ const std::string &a_browser_request()
     return asked;
 }
 
-void end_of_head_found(benchmark::State &state)
+void bytes_before_the_body_of_one(benchmark::State &state)
 {
     const std::string &asked = one_request();
     for (auto _ : state)
-        benchmark::DoNotOptimize(wm::end_of_head(asked, 0));
+        benchmark::DoNotOptimize(http1::bytes_before_the_body(asked));
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-void head_of_one_request(benchmark::State &state)
+void parse_request_of_one(benchmark::State &state)
 {
     const std::string &asked = one_request();
-    for (auto _ : state) {
-        wm::Head head;
-        benchmark::DoNotOptimize(wm::head_of(asked, head));
-        benchmark::DoNotOptimize(head);
-    }
+    for (auto _ : state)
+        benchmark::DoNotOptimize(http1::parse_request(asked));
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-void head_of_a_browser_request(benchmark::State &state)
+void parse_request_of_a_browser(benchmark::State &state)
 {
     const std::string &asked = a_browser_request();
-    for (auto _ : state) {
-        wm::Head head;
-        benchmark::DoNotOptimize(wm::head_of(asked, head));
-        benchmark::DoNotOptimize(head);
-    }
+    for (auto _ : state)
+        benchmark::DoNotOptimize(http1::parse_request(asked));
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-void split_one_field(benchmark::State &state)
+void parse_one_field_line(benchmark::State &state)
 {
     const std::string_view line = "User-Agent: htgen";
-    for (auto _ : state) {
-        wm::Field field;
-        benchmark::DoNotOptimize(wm::split_at_colon(line, field));
-        benchmark::DoNotOptimize(field);
-    }
+    for (auto _ : state)
+        benchmark::DoNotOptimize(http1::parse_field_line(line));
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-void value_of_the_last_field(benchmark::State &state)
+void field_value_of_the_last(benchmark::State &state)
 {
     const std::string &asked = a_browser_request();
-    wm::Head head;
-    wm::head_of(asked, head);
+    const http1::Request request = *http1::parse_request(asked);
     for (auto _ : state)
-        benchmark::DoNotOptimize(wm::value_of(head, "Sec-Fetch-User"));
+        benchmark::DoNotOptimize(http1::field_value_of(request, "Sec-Fetch-User"));
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
@@ -99,16 +89,14 @@ void the_whole_answer_loop(benchmark::State &state)
     for (auto _ : state) {
         std::string_view left(asked);
         size_t written = 0;
-        for (;;) {
-            wm::Head head;
-            const wm::Reading read = wm::head_of(left, head);
-            if (read != wm::Reading::kRead)
+        while (!left.empty()) {
+            const std::expected<http1::Request, http::Refusal> request =
+                http1::parse_request(left);
+            if (!request)
                 break;
             std::memcpy(into + written, kAnswer, sizeof kAnswer - 1);
             written += sizeof kAnswer - 1;
-            left.remove_prefix(head.bytes);
-            if (left.empty())
-                break;
+            left.remove_prefix(request->bytes);
         }
         benchmark::DoNotOptimize(written);
         benchmark::DoNotOptimize(into);
@@ -116,11 +104,11 @@ void the_whole_answer_loop(benchmark::State &state)
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
-BENCHMARK(end_of_head_found);
-BENCHMARK(head_of_one_request);
-BENCHMARK(head_of_a_browser_request);
-BENCHMARK(split_one_field);
-BENCHMARK(value_of_the_last_field);
+BENCHMARK(bytes_before_the_body_of_one);
+BENCHMARK(parse_request_of_one);
+BENCHMARK(parse_request_of_a_browser);
+BENCHMARK(parse_one_field_line);
+BENCHMARK(field_value_of_the_last);
 BENCHMARK(the_whole_answer_loop);
 
 }
