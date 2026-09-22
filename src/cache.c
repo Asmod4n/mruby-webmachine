@@ -3,6 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <nmmintrin.h>
+#elif defined(__aarch64__)
+#include <arm_acle.h>
+#else
+#error "cache_key_of has no CRC-32C for this architecture yet"
+#endif
+
 #include <lmdb.h>
 
 struct cache {
@@ -19,6 +27,55 @@ struct cache_reader {
     unsigned sending;
     unsigned draining_sending;
 };
+
+#if defined(__x86_64__) || defined(__i386__)
+__attribute__((target("sse4.2"))) static uint64_t crc_of_word(const uint64_t taken,
+                                                              const uint64_t word)
+{
+    return _mm_crc32_u64(taken, word);
+}
+
+__attribute__((target("sse4.2"))) static uint64_t crc_of_byte(const uint64_t taken,
+                                                              const uint8_t byte)
+{
+    return _mm_crc32_u8((uint32_t) taken, byte);
+}
+#elif defined(__aarch64__)
+__attribute__((target("+crc"))) static uint64_t crc_of_word(const uint64_t taken,
+                                                            const uint64_t word)
+{
+    return __crc32cd((uint32_t) taken, word);
+}
+
+__attribute__((target("+crc"))) static uint64_t crc_of_byte(const uint64_t taken,
+                                                            const uint8_t byte)
+{
+    return __crc32cb((uint32_t) taken, byte);
+}
+#endif
+
+uint64_t cache_key_of(const uint8_t *const key, const size_t key_length)
+{
+    uint64_t low = ~(uint64_t) 0;
+    uint64_t high = 0x9e3779b97f4a7c15ULL;
+    size_t at = 0;
+    for (; at + 16 <= key_length; at += 16) {
+        uint64_t one = 0;
+        uint64_t two = 0;
+        memcpy(&one, key + at, sizeof one);
+        memcpy(&two, key + at + 8, sizeof two);
+        low = crc_of_word(low, one);
+        high = crc_of_word(high, two);
+    }
+    for (; at + 8 <= key_length; at += 8) {
+        uint64_t one = 0;
+        memcpy(&one, key + at, sizeof one);
+        low = crc_of_word(low, one);
+    }
+    for (; at < key_length; at++)
+        low = crc_of_byte(low, key[at]);
+    return (low * 0x9e3779b97f4a7c15ULL) ^ (high << 32) ^ high;
+}
 
 static bool app_name_is_a_token(const char *name)
 {
@@ -130,12 +187,12 @@ void cache_reader_closed(cache_reader *of_thread)
     free(of_thread);
 }
 
-cache_answer cache_asked(cache_reader *of_thread, const char *key, const size_t key_length)
+cache_answer cache_asked(cache_reader *of_thread, const uint64_t key)
 {
     const cache_answer nothing = {NULL, 0, 0};
-    if (of_thread == NULL || of_thread->reading == NULL || key == NULL || key_length == 0)
+    if (of_thread == NULL || of_thread->reading == NULL)
         return nothing;
-    MDB_val asked = {key_length, (void *) key};
+    MDB_val asked = {sizeof key, (void *) &key};
     MDB_val found = {0, NULL};
     if (mdb_get(of_thread->reading, of_thread->database, &asked, &found) != 0)
         return nothing;

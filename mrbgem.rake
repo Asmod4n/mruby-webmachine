@@ -7,6 +7,8 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-uri-parser'
   spec.add_dependency 'mruby-lmdb'
 
+  spec.bins = %w[webmachine-cache webmachine-cache-check]
+
   %w[
     mruby-array-ext
     mruby-class-ext

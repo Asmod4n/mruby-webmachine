@@ -8,6 +8,16 @@ end
 desc 'build and run every test'
 task test: MRUBY_DIR do
   sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{TEST_CONFIG} rake all test"
+  Rake::Task['cache'].invoke
+end
+
+desc 'walk one cache entry from the server to the reader'
+task cache: MRUBY_DIR do
+  bin = File.join(__dir__, 'mruby', 'build', 'debug', 'bin')
+  writer = File.join(bin, 'webmachine-cache')
+  check = File.join(bin, 'webmachine-cache-check')
+  [writer, check].each { |one| raise "#{one} is not built" unless File.exist?(one) }
+  sh "#{check} #{writer}"
 end
 
 require 'digest'
