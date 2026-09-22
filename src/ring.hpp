@@ -115,6 +115,8 @@ class Ring
         const uint32_t slot = connections_ + listeners_;
 
         io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_socket_direct(sqe, AF_INET, SOCK_STREAM, 0, slot, 0);
         int answer = one_at_a_time(sqe);
         if (answer < 0)
@@ -122,6 +124,8 @@ class Ring
 
         const int on = 1;
         sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_SETSOCKOPT, static_cast<int>(slot),
                                SOL_SOCKET, SO_REUSEADDR, const_cast<int *>(&on), sizeof on);
         sqe->flags |= IOSQE_FIXED_FILE;
@@ -134,6 +138,8 @@ class Ring
         where.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         where.sin_port = htons(port);
         sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_bind(sqe, static_cast<int>(slot),
                            reinterpret_cast<sockaddr *>(&where), sizeof where);
         sqe->flags |= IOSQE_FIXED_FILE;
@@ -142,6 +148,8 @@ class Ring
             return answer;
 
         sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_listen(sqe, static_cast<int>(slot), 4096);
         sqe->flags |= IOSQE_FIXED_FILE;
         answer = one_at_a_time(sqe);
@@ -151,6 +159,8 @@ class Ring
         sockaddr_in took = {};
         socklen_t took_length = sizeof took;
         sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_GETSOCKNAME, static_cast<int>(slot), 0, 0,
                                &took, static_cast<int>(took_length));
         sqe->flags |= IOSQE_FIXED_FILE;
@@ -158,12 +168,19 @@ class Ring
         port_[listeners_] = answer >= 0 ? ntohs(took.sin_port) : port;
 
         sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
         io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr, nullptr, 0);
         sqe->flags |= IOSQE_FIXED_FILE;
         io_uring_sqe_set_data64(sqe, marked(Doing::kAccepting, slot));
         io_uring_submit(&ring_);
         listeners_++;
         return 0;
+    }
+
+    uint64_t times_the_queue_was_full() const
+    {
+        return refused_;
     }
 
     uint16_t port_taken(const uint32_t which) const
@@ -200,9 +217,23 @@ class Ring
         return answer;
     }
 
+    io_uring_sqe *room_for_one_more()
+    {
+        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
+        if (sqe != nullptr)
+            return sqe;
+        io_uring_submit(&ring_);
+        sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            refused_++;
+        return sqe;
+    }
+
     void receives(const uint32_t slot)
     {
-        io_uring_sqe *const sqe = io_uring_get_sqe(&ring_);
+        io_uring_sqe *const sqe = room_for_one_more();
+        if (sqe == nullptr)
+            return;
         io_uring_prep_recv_multishot(sqe, static_cast<int>(slot), nullptr, 0, 0);
         sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
         sqe->buf_group = kBufferGroup;
@@ -211,7 +242,9 @@ class Ring
 
     void closes(const uint32_t slot)
     {
-        io_uring_sqe *const sqe = io_uring_get_sqe(&ring_);
+        io_uring_sqe *const sqe = room_for_one_more();
+        if (sqe == nullptr)
+            return;
         io_uring_prep_close_direct(sqe, slot);
         io_uring_sqe_set_data64(sqe, marked(Doing::kClosing, slot));
     }
@@ -225,7 +258,9 @@ class Ring
             if (cqe->res >= 0)
                 receives(static_cast<uint32_t>(cqe->res));
             if ((cqe->flags & IORING_CQE_F_MORE) == 0) {
-                io_uring_sqe *const sqe = io_uring_get_sqe(&ring_);
+                io_uring_sqe *const sqe = room_for_one_more();
+                if (sqe == nullptr)
+                    return;
                 io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr,
                                                       nullptr, 0);
                 sqe->flags |= IOSQE_FIXED_FILE;
@@ -250,7 +285,11 @@ class Ring
                                   io_uring_buf_ring_mask(kBufferCount), 0);
             io_uring_buf_ring_advance(buffers_, 1);
             if (answer != nullptr && length > 0) {
-                io_uring_sqe *const sqe = io_uring_get_sqe(&ring_);
+                io_uring_sqe *const sqe = room_for_one_more();
+                if (sqe == nullptr) {
+                    closes(slot);
+                    return;
+                }
                 io_uring_prep_send(sqe, static_cast<int>(slot), answer, length, MSG_NOSIGNAL);
                 sqe->flags |= IOSQE_FIXED_FILE;
                 io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
@@ -276,6 +315,7 @@ class Ring
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
     uint16_t port_[kListeners] = {};
+    uint64_t refused_ = 0;
 };
 
 } // namespace wm
