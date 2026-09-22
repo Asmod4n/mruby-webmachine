@@ -143,8 +143,8 @@ static void said_it_is_gone(struct writing *const of_file, const uint64_t route,
         one->datagram.route = route;
         one->datagram.field = field;
         one->datagram.why = why;
-        io_uring_prep_send(sqe, at, &one->datagram, sizeof one->datagram, MSG_NOSIGNAL);
-        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_prep_send(sqe, kFirstFd + at, &one->datagram, sizeof one->datagram,
+                           MSG_NOSIGNAL);
         io_uring_sqe_set_data(sqe, one);
     }
     io_uring_submit(of_file->ring);
@@ -370,13 +370,13 @@ static uint64_t seconds_now()
     return (uint64_t) now.tv_sec;
 }
 
-static void armed(struct io_uring *const ring, const int which, struct msghdr *const shape)
+static void armed(struct io_uring *const ring, const int connection, struct msghdr *const shape)
 {
     struct io_uring_sqe *const sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recvmsg_multishot(sqe, which, shape, 0);
-    sqe->flags |= IOSQE_BUFFER_SELECT | IOSQE_FIXED_FILE;
+    io_uring_prep_recvmsg_multishot(sqe, kFirstFd + connection, shape, 0);
+    sqe->flags |= IOSQE_BUFFER_SELECT;
     sqe->buf_group = kBufferGroup;
-    io_uring_sqe_set_data64(sqe, (uint64_t) which);
+    io_uring_sqe_set_data64(sqe, (uint64_t) connection);
 }
 
 int main(int argc, char **argv)
@@ -427,17 +427,6 @@ int main(int argc, char **argv)
         return left_with(begun);
     }
     of_file.ring = &ring;
-    int *const theirs = static_cast<int *>(malloc(sizeof(int) * (size_t) connections));
-    if (theirs == nullptr)
-        return left_with(ENOMEM);
-    for (int at = 0; at < connections; at++)
-        theirs[at] = kFirstFd + at;
-    const int registered = io_uring_register_files(&ring, theirs, (unsigned) connections);
-    free(theirs);
-    if (registered < 0) {
-        fprintf(stderr, "webmachine-cache: io_uring_register_files: %s\n", strerror(-registered));
-        return left_with(registered);
-    }
     fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions, io through %s\n",
             buffer_count, buffer_bytes, buffer_count * 2,
             slipstream_syscall_uses_engine() ? "the engine" : "the kernel");
