@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <netinet/in.h>
 #include <sys/un.h>
@@ -57,6 +58,7 @@ inline constexpr uint16_t kBufferGroup = 1;
 inline constexpr uint32_t kBufferCount = 4096;
 inline constexpr uint32_t kBufferBytes = 2048;
 inline constexpr uint32_t kListeners = 4;
+inline constexpr uint32_t kAnswerBytes = 16384;
 
 class Ring
 {
@@ -71,6 +73,9 @@ class Ring
             io_uring_free_buf_ring(&ring_, buffers_, kBufferCount, kBufferGroup);
         if (room_ != nullptr)
             munmap(room_, static_cast<size_t>(kBufferCount) * kBufferBytes);
+        if (answers_ != nullptr)
+            munmap(answers_, static_cast<size_t>(connections_) * kAnswerBytes);
+        free(owed_);
         if (standing_)
             io_uring_queue_exit(&ring_);
     }
@@ -120,6 +125,16 @@ class Ring
         if (mapped == MAP_FAILED)
             return -errno;
         room_ = static_cast<uint8_t *>(mapped);
+
+        void *const answering = mmap(nullptr, static_cast<size_t>(connections_) * kAnswerBytes,
+                                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (answering == MAP_FAILED)
+            return -errno;
+        answers_ = static_cast<uint8_t *>(answering);
+        owed_ = static_cast<Owed *>(calloc(connections_, sizeof *owed_));
+        if (owed_ == nullptr)
+            return -ENOMEM;
+        bundles_ = (ring_.features & IORING_FEAT_RECVSEND_BUNDLE) != 0;
 
         int trouble = 0;
         buffers_ = io_uring_setup_buf_ring(&ring_, kBufferCount, kBufferGroup, 0, &trouble);
@@ -317,6 +332,21 @@ class Ring
         return sqe;
     }
 
+    unsigned sends(const uint32_t slot)
+    {
+        Owed &owed = owed_[slot];
+        if (owed.sending || owed.sent == owed.filled)
+            return 0;
+        io_uring_sqe *const sqe = room_for_one_more();
+        io_uring_prep_send(sqe, static_cast<int>(slot),
+                           answers_ + static_cast<size_t>(slot) * kAnswerBytes + owed.sent,
+                           owed.filled - owed.sent, MSG_NOSIGNAL | MSG_WAITALL);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
+        owed.sending = true;
+        return 1;
+    }
+
     unsigned closes(const uint32_t slot)
     {
         io_uring_sqe *const sqe = room_for_one_more();
@@ -342,8 +372,10 @@ class Ring
         const uint32_t slot = slot_of(mark);
         switch (doing_of(mark)) {
         case Doing::kAccepting:
-            if (cqe->res >= 0)
+            if (cqe->res >= 0) {
+                owed_[cqe->res] = Owed{};
                 armed += receives(static_cast<uint32_t>(cqe->res));
+            }
             if ((cqe->flags & IORING_CQE_F_MORE) == 0) {
                 io_uring_sqe *const sqe = room_for_one_more();
                 io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr,
@@ -363,28 +395,32 @@ class Ring
             }
             const uint32_t which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
             const uint8_t *const taken = room_ + static_cast<size_t>(which) * kBufferBytes;
-            size_t length = 0;
-            const uint8_t *const answer =
-                answering(taken, static_cast<size_t>(cqe->res), length);
+            Owed &owed = owed_[slot];
+            uint8_t *const into = answers_ + static_cast<size_t>(slot) * kAnswerBytes;
+            owed.filled += static_cast<uint32_t>(answering(taken, static_cast<size_t>(cqe->res),
+                                                           into + owed.filled,
+                                                           kAnswerBytes - owed.filled));
             io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes,
                                   kBufferBytes, static_cast<uint16_t>(which),
                                   io_uring_buf_ring_mask(kBufferCount), 0);
             io_uring_buf_ring_advance(buffers_, 1);
-            if (answer != nullptr && length > 0) {
-                io_uring_sqe *const sqe = room_for_one_more();
-                io_uring_prep_send(sqe, static_cast<int>(slot), answer, length, MSG_NOSIGNAL);
-                sqe->flags |= IOSQE_FIXED_FILE;
-                io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
-                armed++;
-            }
+            armed += sends(slot);
             if ((cqe->flags & IORING_CQE_F_MORE) == 0)
                 armed += receives(slot);
             return armed;
         }
-        case Doing::kSending:
-            if (cqe->res < 0)
-                armed += closes(slot);
+        case Doing::kSending: {
+            Owed &owed = owed_[slot];
+            owed.sending = false;
+            if (cqe->res <= 0)
+                return armed + closes(slot);
+            owed.sent += static_cast<uint32_t>(cqe->res);
+            if (owed.sent >= owed.filled)
+                owed.sent = owed.filled = 0;
+            else
+                armed += sends(slot);
             return armed;
+        }
         case Doing::kClosing:
         default:
             return armed;
@@ -395,6 +431,14 @@ class Ring
     bool standing_ = false;
     io_uring_buf_ring *buffers_ = nullptr;
     uint8_t *room_ = nullptr;
+    uint8_t *answers_ = nullptr;
+    struct Owed {
+        uint32_t filled;
+        uint32_t sent;
+        bool sending;
+    };
+    Owed *owed_ = nullptr;
+    bool bundles_ = false;
     unsigned entries_ = 0;
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
