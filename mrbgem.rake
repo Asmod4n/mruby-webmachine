@@ -8,7 +8,7 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-lmdb'
   spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
 
-  spec.bins = %w[webmachine-cache webmachine-cache-check]
+  spec.bins = %w[webmachine-cache webmachine-cache-check webmachine-serve]
 
   # liburing carries slipstream's seam, so its archive reaches back into
   # symbols that live in libmruby.a - which the linker has already walked
