@@ -13,7 +13,7 @@
 
 enum { kFirstFd = 3, kBufferGroup = 1 };
 
-enum : unsigned { kMostRingEntries = 32768, kMostCompletions = 65536 };
+enum : unsigned { kMostRingEntries = 32768 };
 
 static unsigned no_more_than_a_power_of_two(const unsigned wanted, const unsigned most)
 {
@@ -197,20 +197,14 @@ int main(int argc, char **argv)
     const unsigned buffer_count = no_more_than_a_power_of_two(buffers_wanted, kMostRingEntries);
     const unsigned buffer_mask = buffer_count - 1;
 
-    struct io_uring_params shape_of_ring = {};
-    shape_of_ring.flags = IORING_SETUP_CQSIZE;
-    shape_of_ring.cq_entries =
-        no_more_than_a_power_of_two(buffer_count * 2, kMostCompletions);
     struct io_uring ring;
-    const int begun = io_uring_queue_init_params(
-        no_more_than_a_power_of_two((unsigned) connections * 2, kMostRingEntries), &ring,
-        &shape_of_ring);
+    const int begun = io_uring_queue_init(buffer_count, &ring, 0);
     if (begun < 0) {
         fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
         return 1;
     }
     fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions\n", buffer_count,
-            buffer_bytes, shape_of_ring.cq_entries);
+            buffer_bytes, buffer_count * 2);
 
     int trouble = 0;
     struct io_uring_buf_ring *const buffers =
