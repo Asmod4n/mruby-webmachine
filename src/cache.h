@@ -1,5 +1,4 @@
-#ifndef WEBMACHINE_CACHE_H
-#define WEBMACHINE_CACHE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,5 +25,3 @@ cache_answer cache_asked(cache_reader *of_thread, const char *key, size_t key_le
 void cache_sent(cache_reader *of_thread, unsigned snapshot);
 
 bool cache_changed(cache_reader *of_thread);
-
-#endif
