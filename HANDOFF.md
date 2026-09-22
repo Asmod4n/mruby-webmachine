@@ -148,12 +148,31 @@ compiled with their gem init symbols renamed to sit in one binary.
   the internal `__vec_shuffle` with compile-time indices). Either it
   stays intrinsic or becomes a compare-based scan, and that is its own
   measurement in one binary before anything changes.
-- `src/cache.c`: `cache_key_of` is done (`cache::route_of`). Next in
-  line, shown to the owner and not yet answered: `app_name_is_a_token`
-  as `constexpr bool` over `std::string_view` with `http::is_tchar` -
-  confirm that name and that it is constexpr in `http.hpp` before
-  writing. Then the file path (`std::filesystem::path`), then every
-  `MDB_txn` behind a type with a destructor, then `cache_forget.c`.
+- `src/cache.c`, the owner's word for the next step is `cache.cpp`:
+  - `cache_key_of` is done (`cache::route_of`, `src/cache.hpp`).
+  - `app_name_is_a_token` is not a function any more: `http::is_token`
+    (http.hpp 580) is the same check under the RFC 9110 5.6.2 name, and
+    `http::is_tchar` (390) is constexpr. Checked, not assumed.
+  - **Shown and waiting for yes, change, or no** - the file name:
+
+        inline std::optional<std::filesystem::path>
+        file_of(std::string_view app_name, const std::filesystem::path &directory)
+        {
+            if (!http::is_token(app_name)) return std::nullopt;
+            return directory / std::filesystem::path(app_name).replace_extension(".mdb");
+        }
+
+    Same path for the same name as `cache_file_of`, because
+    `cache_forget` and the writer open that file too (`cache_file.h`).
+  - Then, one per message: `cache_open` as a type whose destructor
+    closes the environment; `cache_taken`/`cache_sent` with every
+    `MDB_txn` and `MDB_cursor` behind a type with a destructor (the
+    reset-and-renew pool of two arrays stays, as `std::vector`);
+    `cache_asked`/`cache_body_asked` reading `until` with `std::bit_cast`
+    from a `span<const std::byte, 8>` like `crc_step`, answering
+    `std::optional<std::span<const std::byte>>`; then `cache_forget.c`.
+  - The C header `cache.h` stays until the last caller is C++; the
+    Ruby binding and `ring.hpp` call it.
 - `src/cache.c` 46/52: `_mm_crc32_u64` - stays behind `crc_step`; the
   aarch64 form (`__crc32cd`) is not written yet.
 
