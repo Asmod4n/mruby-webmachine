@@ -36,13 +36,18 @@ int main(int argc, char **argv)
             slipstream_syscall_uses_engine() ? "the engine" : "the kernel");
 
     bool enough = false;
-    ring.serves(
+    try {
+        ring.serves(
         [&](const uint8_t *const asked, const size_t asked_length, size_t &length) {
             if (asked_length >= 4 && memcmp(asked, "STOP", 4) == 0)
                 enough = true;
             length = sizeof kAnswer - 1;
             return reinterpret_cast<const uint8_t *>(kAnswer);
         },
-        enough);
+            enough);
+    } catch (const wm::QueueIsFull &full) {
+        fprintf(stderr, "webmachine-serve: %s\n", full.what());
+        return 1;
+    }
     return 0;
 }

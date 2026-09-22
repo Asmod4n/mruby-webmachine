@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cerrno>
+#include <stdexcept>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,14 @@ static_assert(slot_of(marked(Doing::kReceiving, 4095)) == 4095,
               "and which slot it was being done to");
 static_assert(marked(Doing::kAccepting, 0) != marked(Doing::kReceiving, 0),
               "two things done to one slot are two marks");
+
+class QueueIsFull : public std::runtime_error
+{
+  public:
+    QueueIsFull() : std::runtime_error("the submission queue is full")
+    {
+    }
+};
 
 inline constexpr uint16_t kBufferGroup = 1;
 inline constexpr uint32_t kBufferCount = 4096;
@@ -178,11 +187,6 @@ class Ring
         return 0;
     }
 
-    uint64_t times_the_queue_was_full() const
-    {
-        return refused_;
-    }
-
     uint16_t port_taken(const uint32_t which) const
     {
         return which < kListeners ? port_[which] : 0;
@@ -191,16 +195,24 @@ class Ring
     template <class Answering> void serves(Answering answering, const bool &until)
     {
         while (!until) {
-            io_uring_cqe *cqe = nullptr;
+            io_uring_cqe *first = nullptr;
             __kernel_timespec a_second = {1, 0};
-            const int waited = io_uring_submit_and_wait_timeout(&ring_, &cqe, 1, &a_second,
-                                                                nullptr);
+            const int waited =
+                io_uring_submit_and_wait_timeout(&ring_, &first, 1, &a_second, nullptr);
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
-            if (cqe == nullptr)
-                continue;
-            took(cqe, answering);
-            io_uring_cqe_seen(&ring_, cqe);
+            unsigned head = 0;
+            unsigned seen = 0;
+            unsigned armed = 0;
+            io_uring_cqe *cqe = nullptr;
+            io_uring_for_each_cqe(&ring_, head, cqe)
+            {
+                seen++;
+                armed += took(cqe, answering);
+            }
+            io_uring_cq_advance(&ring_, seen);
+            if (armed != 0)
+                io_uring_submit(&ring_);
         }
     }
 
@@ -225,55 +237,53 @@ class Ring
         io_uring_submit(&ring_);
         sqe = io_uring_get_sqe(&ring_);
         if (sqe == nullptr)
-            refused_++;
+            throw QueueIsFull();
         return sqe;
     }
 
-    void receives(const uint32_t slot)
+    unsigned closes(const uint32_t slot)
     {
         io_uring_sqe *const sqe = room_for_one_more();
-        if (sqe == nullptr)
-            return;
+        io_uring_prep_close_direct(sqe, slot);
+        io_uring_sqe_set_data64(sqe, marked(Doing::kClosing, slot));
+        return 1;
+    }
+
+    unsigned receives(const uint32_t slot)
+    {
+        io_uring_sqe *const sqe = room_for_one_more();
         io_uring_prep_recv_multishot(sqe, static_cast<int>(slot), nullptr, 0, 0);
         sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
         sqe->buf_group = kBufferGroup;
         io_uring_sqe_set_data64(sqe, marked(Doing::kReceiving, slot));
+        return 1;
     }
 
-    void closes(const uint32_t slot)
+    template <class Answering> unsigned took(io_uring_cqe *const cqe, Answering &answering)
     {
-        io_uring_sqe *const sqe = room_for_one_more();
-        if (sqe == nullptr)
-            return;
-        io_uring_prep_close_direct(sqe, slot);
-        io_uring_sqe_set_data64(sqe, marked(Doing::kClosing, slot));
-    }
-
-    template <class Answering> void took(io_uring_cqe *const cqe, Answering &answering)
-    {
+        unsigned armed = 0;
         const uint64_t mark = io_uring_cqe_get_data64(cqe);
         const uint32_t slot = slot_of(mark);
         switch (doing_of(mark)) {
         case Doing::kAccepting:
             if (cqe->res >= 0)
-                receives(static_cast<uint32_t>(cqe->res));
+                armed += receives(static_cast<uint32_t>(cqe->res));
             if ((cqe->flags & IORING_CQE_F_MORE) == 0) {
                 io_uring_sqe *const sqe = room_for_one_more();
-                if (sqe == nullptr)
-                    return;
                 io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr,
                                                       nullptr, 0);
                 sqe->flags |= IOSQE_FIXED_FILE;
                 io_uring_sqe_set_data64(sqe, mark);
+                armed++;
             }
-            return;
+            return armed;
         case Doing::kReceiving: {
             if (cqe->res <= 0) {
                 if (cqe->res == -ENOBUFS)
-                    receives(slot);
+                    armed += receives(slot);
                 else
-                    closes(slot);
-                return;
+                    armed += closes(slot);
+                return armed;
             }
             const uint32_t which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
             const uint8_t *const taken = room_ + static_cast<size_t>(which) * kBufferBytes;
@@ -286,25 +296,22 @@ class Ring
             io_uring_buf_ring_advance(buffers_, 1);
             if (answer != nullptr && length > 0) {
                 io_uring_sqe *const sqe = room_for_one_more();
-                if (sqe == nullptr) {
-                    closes(slot);
-                    return;
-                }
                 io_uring_prep_send(sqe, static_cast<int>(slot), answer, length, MSG_NOSIGNAL);
                 sqe->flags |= IOSQE_FIXED_FILE;
                 io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
+                armed++;
             }
             if ((cqe->flags & IORING_CQE_F_MORE) == 0)
-                receives(slot);
-            return;
+                armed += receives(slot);
+            return armed;
         }
         case Doing::kSending:
             if (cqe->res < 0)
-                closes(slot);
-            return;
+                armed += closes(slot);
+            return armed;
         case Doing::kClosing:
         default:
-            return;
+            return armed;
         }
     }
 
@@ -315,7 +322,6 @@ class Ring
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
     uint16_t port_[kListeners] = {};
-    uint64_t refused_ = 0;
 };
 
 } // namespace wm
