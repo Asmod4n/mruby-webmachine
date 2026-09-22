@@ -10,7 +10,7 @@ typedef struct {
     uint32_t packet;
     uint32_t freshness_lifetime;
     uint32_t key_length;
-} cache_packet;
+} cache_packet_header;
 
-static_assert(sizeof(cache_packet) == 32, "a cache packet is 32 bytes");
-static_assert(_Alignof(cache_packet) == 8, "a cache packet aligns to eight");
+static_assert(sizeof(cache_packet_header) == 32, "a cache packet header is 32 bytes");
+static_assert(_Alignof(cache_packet_header) == 8, "a cache packet header aligns to eight");
