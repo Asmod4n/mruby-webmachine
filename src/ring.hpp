@@ -146,6 +146,7 @@ class Ring
                                   kBufferBytes, static_cast<uint16_t>(at), mask,
                                   static_cast<int>(at));
         io_uring_buf_ring_advance(buffers_, kBufferCount);
+        buf_tail_ = kBufferCount;
         return 0;
     }
 
@@ -297,6 +298,7 @@ class Ring
                 took(cqe, answering);
                 io_uring_cqe_seen(&ring_, cqe);
             }
+            given_back();
         }
     }
 
@@ -323,6 +325,22 @@ class Ring
         if (sqe == nullptr)
             throw QueueIsFull();
         return sqe;
+    }
+
+    void given_back()
+    {
+        if (replenish_ == 0)
+            return;
+        const int mask = io_uring_buf_ring_mask(kBufferCount);
+        for (uint32_t at = 0; at < replenish_; at++) {
+            const uint32_t which = (buf_tail_ + at) & static_cast<uint32_t>(mask);
+            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes,
+                                  kBufferBytes, static_cast<uint16_t>(which), mask,
+                                  static_cast<int>(at));
+        }
+        io_uring_buf_ring_advance(buffers_, static_cast<int>(replenish_));
+        buf_tail_ += replenish_;
+        replenish_ = 0;
     }
 
     unsigned sends(const uint32_t slot)
@@ -387,16 +405,17 @@ class Ring
                 return armed;
             }
             const uint32_t which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-            const uint8_t *const taken = room_ + static_cast<size_t>(which) * kBufferBytes;
+            const size_t took_bytes = static_cast<size_t>(cqe->res);
+            const size_t from = static_cast<size_t>(which) * kBufferBytes;
+            const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
+            replenish_ += static_cast<uint32_t>((took_bytes + kBufferBytes - 1) / kBufferBytes);
+            if (from + took_bytes > pool)
+                return armed + closes(slot);
+            const uint8_t *const taken = room_ + from;
             Owed &owed = owed_[slot];
             uint8_t *const into = answers_ + static_cast<size_t>(slot) * kAnswerBytes;
-            owed.filled += static_cast<uint32_t>(answering(taken, static_cast<size_t>(cqe->res),
-                                                           into + owed.filled,
-                                                           kAnswerBytes - owed.filled));
-            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes,
-                                  kBufferBytes, static_cast<uint16_t>(which),
-                                  io_uring_buf_ring_mask(kBufferCount), 0);
-            io_uring_buf_ring_advance(buffers_, 1);
+            owed.filled += static_cast<uint32_t>(
+                answering(taken, took_bytes, into + owed.filled, kAnswerBytes - owed.filled));
             armed += sends(slot);
             if ((cqe->flags & IORING_CQE_F_MORE) == 0)
                 armed += receives(slot);
@@ -425,6 +444,8 @@ class Ring
     io_uring_buf_ring *buffers_ = nullptr;
     uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
+    uint32_t buf_tail_ = 0;
+    uint32_t replenish_ = 0;
     struct Owed {
         uint32_t filled;
         uint32_t sent;

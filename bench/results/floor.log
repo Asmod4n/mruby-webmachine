@@ -54,3 +54,13 @@ rps: 568725
 median rps: 568725 over 1 run(s), range 0.0% of the median
 both ends pegged - the scheduler decided the split
 
+harness: floor htgen -c960 -d5s reps=1 transport=unix path=/ arm=kernel memlock=8192 cflags=-O3 -march=x86-64-v3 -std=c++23 6.18.44-fc-v37 x86_64
+rps: 550415
+median rps: 550415 over 1 run(s), range 0.0% of the median
+both ends pegged - the scheduler decided the split
+
+harness: floor htgen -c960 -d5s reps=1 transport=unix path=/ arm=kernel memlock=8192 cflags=-O3 -march=x86-64-v3 -std=c++23 6.18.44-fc-v37 x86_64
+rps: 520154
+median rps: 520154 over 1 run(s), range 0.0% of the median
+both ends pegged - the scheduler decided the split
+
