@@ -8,12 +8,15 @@ extern "C" {
 
 enum { kCacheBodyIsInline = 0, kCacheBodyIsInAFile = 1 };
 
+enum { kCacheStores = 0, kCacheForgets = 1 };
+
 typedef struct {
     uint64_t route;
     uint32_t freshness_lifetime;
     uint8_t field;
     uint8_t body;
-    uint8_t unused[2];
+    uint8_t forget;
+    uint8_t unused;
 } cache_datagram_header;
 
 #ifdef __cplusplus

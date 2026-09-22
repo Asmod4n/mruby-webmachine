@@ -16,6 +16,8 @@
 
 enum { kFirstFd = 3, kBufferGroup = 1 };
 
+static constexpr uint64_t kTheTimeout = UINT64_MAX;
+
 enum : unsigned { kMostRingEntries = 32768 };
 
 static unsigned no_more_than_a_power_of_two(const unsigned wanted, const unsigned most)
@@ -30,6 +32,7 @@ struct writing {
     MDB_env *environment;
     MDB_dbi fields;
     MDB_dbi bodies;
+    MDB_dbi due;
     MDB_txn *putting;
     MDB_cursor *walking;
     unsigned put;
@@ -59,7 +62,7 @@ static bool opened(struct writing *const of_file, const char *const file, const 
     if (made != 0)
         return complain("mdb_env_create", made), false;
     mdb_env_set_mapsize(of_file->environment, map_bytes);
-    mdb_env_set_maxdbs(of_file->environment, 2);
+    mdb_env_set_maxdbs(of_file->environment, 3);
     mdb_env_set_maxreaders(of_file->environment, readers);
     const int status = mdb_env_open(of_file->environment, file, MDB_NOSUBDIR, 0600);
     if (status != 0)
@@ -83,6 +86,10 @@ static bool putting(struct writing *const of_file)
                                  &of_file->bodies);
     if (too != 0)
         return complain("mdb_dbi_open bodies", too), false;
+    const int owed = mdb_dbi_open(of_file->putting, "due", MDB_INTEGERKEY | MDB_DUPSORT | MDB_CREATE,
+                                  &of_file->due);
+    if (owed != 0)
+        return complain("mdb_dbi_open due", owed), false;
     const int walking = mdb_cursor_open(of_file->putting, of_file->fields, &of_file->walking);
     if (walking != 0)
         return complain("mdb_cursor_open", walking), false;
@@ -110,6 +117,19 @@ static uint64_t until_of(const cache_datagram_header header)
     return (uint64_t) now.tv_sec + header.freshness_lifetime;
 }
 
+static void owed_at(struct writing *const of_file, const uint64_t until, const uint64_t route,
+                    const uint8_t field)
+{
+    uint8_t room[sizeof route + 1];
+    memcpy(room, &route, sizeof route);
+    room[sizeof route] = field;
+    MDB_val key = {sizeof until, const_cast<uint64_t *>(&until)};
+    MDB_val data = {sizeof room, room};
+    const int status = mdb_put(of_file->putting, of_file->due, &key, &data, 0);
+    if (status != 0 && status != MDB_KEYEXIST)
+        complain("mdb_put due", status);
+}
+
 static void stored_as_a_field(struct writing *const of_file, const cache_datagram_header header,
                               const uint8_t *const value, const size_t value_length)
 {
@@ -131,6 +151,7 @@ static void stored_as_a_field(struct writing *const of_file, const cache_datagra
         complain("mdb_cursor_put", status);
         return;
     }
+    owed_at(of_file, until, header.route, header.field);
     if (++of_file->put >= of_file->batch)
         committed(of_file);
 }
@@ -149,8 +170,91 @@ static void stored_as_a_body(struct writing *const of_file, const cache_datagram
     uint8_t *const room = static_cast<uint8_t *>(data.mv_data);
     memcpy(room, &until, sizeof until);
     memcpy(room + sizeof until, value, value_length);
+    owed_at(of_file, until, header.route, kCacheFieldBody);
     if (++of_file->put >= of_file->batch)
         committed(of_file);
+}
+
+static void forgotten(struct writing *const of_file, const uint64_t route)
+{
+    if (!putting(of_file))
+        return;
+    MDB_val key = {sizeof route, const_cast<uint64_t *>(&route)};
+    const int fields = mdb_del(of_file->putting, of_file->fields, &key, nullptr);
+    if (fields != 0 && fields != MDB_NOTFOUND)
+        complain("mdb_del fields", fields);
+    MDB_val too = {sizeof route, const_cast<uint64_t *>(&route)};
+    const int bodies = mdb_del(of_file->putting, of_file->bodies, &too, nullptr);
+    if (bodies != 0 && bodies != MDB_NOTFOUND)
+        complain("mdb_del bodies", bodies);
+    if (++of_file->put >= of_file->batch)
+        committed(of_file);
+}
+
+static bool still_due(struct writing *const of_file, const uint64_t route, const uint8_t field,
+                      const uint64_t now)
+{
+    MDB_val key = {sizeof route, const_cast<uint64_t *>(&route)};
+    MDB_val found = {0, nullptr};
+    uint64_t until = 0;
+    if (field == kCacheFieldBody) {
+        if (mdb_get(of_file->putting, of_file->bodies, &key, &found) != 0)
+            return false;
+        if (found.mv_size < sizeof until)
+            return true;
+        memcpy(&until, found.mv_data, sizeof until);
+        return until <= now;
+    }
+    uint8_t wanted = field;
+    MDB_val standing = {sizeof wanted, &wanted};
+    MDB_cursor *reading = nullptr;
+    if (mdb_cursor_open(of_file->putting, of_file->fields, &reading) != 0)
+        return false;
+    bool due = false;
+    if (mdb_cursor_get(reading, &key, &standing, MDB_GET_BOTH_RANGE) == 0 &&
+        standing.mv_size >= 1 + sizeof until &&
+        static_cast<const uint8_t *>(standing.mv_data)[0] == field) {
+        memcpy(&until, static_cast<const uint8_t *>(standing.mv_data) + 1, sizeof until);
+        due = until <= now;
+        if (due)
+            mdb_cursor_del(reading, 0);
+    }
+    mdb_cursor_close(reading);
+    return due;
+}
+
+static void swept(struct writing *const of_file, const uint64_t now)
+{
+    if (!putting(of_file))
+        return;
+    MDB_cursor *owed = nullptr;
+    if (mdb_cursor_open(of_file->putting, of_file->due, &owed) != 0)
+        return;
+    MDB_val key = {0, nullptr};
+    MDB_val data = {0, nullptr};
+    int standing = mdb_cursor_get(owed, &key, &data, MDB_FIRST);
+    while (standing == 0) {
+        uint64_t until = 0;
+        memcpy(&until, key.mv_data, sizeof until);
+        if (until > now)
+            break;
+        uint64_t route = 0;
+        uint8_t field = 0;
+        memcpy(&route, data.mv_data, sizeof route);
+        memcpy(&field, static_cast<const uint8_t *>(data.mv_data) + sizeof route, 1);
+        if (field == kCacheFieldBody && still_due(of_file, route, field, now)) {
+            MDB_val one = {sizeof route, &route};
+            mdb_del(of_file->putting, of_file->bodies, &one, nullptr);
+        } else if (field != kCacheFieldBody) {
+            still_due(of_file, route, field, now);
+        }
+        mdb_cursor_del(owed, 0);
+        standing = mdb_cursor_get(owed, &key, &data, MDB_GET_CURRENT);
+        if (standing != 0)
+            standing = mdb_cursor_get(owed, &key, &data, MDB_FIRST);
+    }
+    mdb_cursor_close(owed);
+    committed(of_file);
 }
 
 static void stored(struct writing *const of_file, const cache_datagram_header header,
@@ -177,6 +281,13 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
     if (header.field >= kCacheFieldCount) {
         if (file >= 0)
             close(file);
+        return;
+    }
+
+    if (header.forget == kCacheForgets) {
+        if (file >= 0)
+            close(file);
+        forgotten(of_file, header.route);
         return;
     }
 
@@ -215,6 +326,21 @@ static int file_beside(struct io_uring_recvmsg_out *const said, struct msghdr *c
         }
     }
     return -1;
+}
+
+static uint64_t seconds_now()
+{
+    struct timespec now = {};
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (uint64_t) now.tv_sec;
+}
+
+static void timing_out(struct io_uring *const ring)
+{
+    static struct __kernel_timespec every = {1, 0};
+    struct io_uring_sqe *const sqe = io_uring_get_sqe(ring);
+    io_uring_prep_timeout(sqe, &every, 0, 0);
+    io_uring_sqe_set_data64(sqe, kTheTimeout);
 }
 
 static void armed(struct io_uring *const ring, const int fd, struct msghdr *const shape)
@@ -296,9 +422,12 @@ int main(int argc, char **argv)
     shape.msg_controllen = CMSG_SPACE(sizeof(int));
     for (int at = 0; at < connections; at++)
         armed(&ring, kFirstFd + at, &shape);
+    timing_out(&ring);
     io_uring_submit(&ring);
     said_to_the_parent((int32_t) given);
 
+    bool the_timeout_stands = true;
+    unsigned swept_after = 0;
     int open_connections = connections;
     while (open_connections > 0) {
         struct io_uring_cqe *cqe = nullptr;
@@ -308,6 +437,21 @@ int main(int argc, char **argv)
                 continue;
             fprintf(stderr, "webmachine-cache: io_uring_wait_cqe: %s\n", strerror(-waited));
             break;
+        }
+        if (io_uring_cqe_get_data64(cqe) == kTheTimeout) {
+            if (cqe->res == -ETIME) {
+                swept(&of_file, seconds_now());
+                timing_out(&ring);
+                io_uring_submit(&ring);
+            } else if (the_timeout_stands) {
+                the_timeout_stands = false;
+                fprintf(stderr,
+                        "webmachine-cache: this ring has no timeout (%s), so the sweep rides "
+                        "the commits\n",
+                        strerror(-cqe->res));
+            }
+            io_uring_cqe_seen(&ring, cqe);
+            continue;
         }
         const int fd = (int) io_uring_cqe_get_data64(cqe);
         const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
@@ -350,6 +494,10 @@ int main(int argc, char **argv)
             io_uring_submit(&ring);
         }
         io_uring_cqe_seen(&ring, cqe);
+        if (!the_timeout_stands && of_file.put == 0 && swept_after != 0)
+            swept(&of_file, seconds_now()), swept_after = 0;
+        else if (of_file.put != 0)
+            swept_after = of_file.put;
     }
 
     const bool ended = committed(&of_file);

@@ -77,6 +77,14 @@ static void hand_over_in_a_file(const int thread, const uint64_t of_route, const
     close(file);
 }
 
+static void hand_over_a_forgetting(const int thread, const uint64_t of_route)
+{
+    cache_datagram_header header = {};
+    header.route = of_route;
+    header.forget = kCacheForgets;
+    assert(send(mine[thread], &header, sizeof header, 0) == (ssize_t) sizeof header);
+}
+
 static uint64_t now_is()
 {
     struct timespec now = {};
@@ -151,8 +159,19 @@ int main(int argc, char **argv)
     hand_over_inline(1, one, kCacheFieldContentType, 0,
                      reinterpret_cast<const uint8_t *>("text/html"), 9);
     hand_over_in_a_file(2, one, kCacheFieldBody, 900, large, sizeof large);
-    printf("one route, three fields inline and a body of %zu bytes in a sealed memfd\n",
+    const char *const other = "/articles/7?param=abc&foo=bar";
+    const uint64_t two =
+        cache_key_of(reinterpret_cast<const uint8_t *>(other), strlen(other));
+    hand_over_inline(0, two, kCacheFieldEntityTag, 900, tag, sizeof tag);
+    hand_over_in_a_file(0, two, kCacheFieldBody, 900, large, sizeof large);
+    hand_over_a_forgetting(0, two);
+    printf("one route, three fields inline and a body of %zu bytes in a sealed memfd,\n"
+           "and a second route stored whole and then forgotten\n",
            sizeof large);
+
+    struct timespec long_enough = {2, 0};
+    nanosleep(&long_enough, nullptr);
+    printf("the writer's sweep ran at least once while the sockets stood open\n");
 
     for (int at = 0; at < kThreads; at++)
         close(mine[at]);
@@ -192,6 +211,10 @@ int main(int argc, char **argv)
     assert(b.length == sizeof large);
     assert(memcmp(b.value, large, sizeof large) == 0);
     printf("the body that came as a descriptor is whole, %zu bytes\n", b.length);
+
+    assert(cache_asked(r, two, kCacheFieldEntityTag, now).value == nullptr);
+    assert(cache_body_asked(r, two, now).value == nullptr);
+    printf("the forgotten route has neither fields nor a body left\n");
 
     const char *const missing = "/articles/42?utm_source=mail";
     assert(cache_asked(r, cache_key_of(reinterpret_cast<const uint8_t *>(missing),
