@@ -173,6 +173,23 @@ int main(int argc, char **argv)
     nanosleep(&long_enough, nullptr);
     printf("the writer's sweep ran at least once while the sockets stood open\n");
 
+    bool heard_the_invalidation = false;
+    bool heard_an_expiry = false;
+    for (int at = 0; at < kThreads; at++) {
+        cache_gone_datagram gone = {};
+        while (recv(mine[at], &gone, sizeof gone, MSG_DONTWAIT) == (ssize_t) sizeof gone) {
+            if (gone.route == two && gone.field == kCacheFieldCount &&
+                gone.why == kCacheInvalidated)
+                heard_the_invalidation = true;
+            if (gone.route == one && gone.field == kCacheFieldContentType &&
+                gone.why == kCacheExpired)
+                heard_an_expiry = true;
+        }
+    }
+    assert(heard_the_invalidation);
+    assert(heard_an_expiry);
+    printf("every thread heard what went away, both the forgetting and the expiry\n");
+
     for (int at = 0; at < kThreads; at++)
         close(mine[at]);
     int left = 0;

@@ -33,6 +33,8 @@ struct writing {
     MDB_dbi fields;
     MDB_dbi bodies;
     MDB_dbi due;
+    int connections;
+    unsigned long dropped;
     MDB_txn *putting;
     MDB_cursor *walking;
     unsigned put;
@@ -117,6 +119,19 @@ static uint64_t until_of(const cache_datagram_header header)
     return (uint64_t) now.tv_sec + header.freshness_lifetime;
 }
 
+static void said_it_is_gone(struct writing *const of_file, const uint64_t route,
+                           const uint8_t field, const uint8_t why)
+{
+    cache_gone_datagram gone = {};
+    gone.route = route;
+    gone.field = field;
+    gone.why = why;
+    for (int at = 0; at < of_file->connections; at++)
+        if (send(kFirstFd + at, &gone, sizeof gone, MSG_DONTWAIT | MSG_NOSIGNAL) !=
+            (ssize_t) sizeof gone)
+            of_file->dropped++;
+}
+
 static void owed_at(struct writing *const of_file, const uint64_t until, const uint64_t route,
                     const uint8_t field)
 {
@@ -187,6 +202,7 @@ static void forgotten(struct writing *const of_file, const uint64_t route)
     const int bodies = mdb_del(of_file->putting, of_file->bodies, &too, nullptr);
     if (bodies != 0 && bodies != MDB_NOTFOUND)
         complain("mdb_del bodies", bodies);
+    said_it_is_gone(of_file, route, kCacheFieldCount, kCacheInvalidated);
     if (++of_file->put >= of_file->batch)
         committed(of_file);
 }
@@ -245,8 +261,9 @@ static void swept(struct writing *const of_file, const uint64_t now)
         if (field == kCacheFieldBody && still_due(of_file, route, field, now)) {
             MDB_val one = {sizeof route, &route};
             mdb_del(of_file->putting, of_file->bodies, &one, nullptr);
-        } else if (field != kCacheFieldBody) {
-            still_due(of_file, route, field, now);
+            said_it_is_gone(of_file, route, field, kCacheExpired);
+        } else if (field != kCacheFieldBody && still_due(of_file, route, field, now)) {
+            said_it_is_gone(of_file, route, field, kCacheExpired);
         }
         mdb_cursor_del(owed, 0);
         standing = mdb_cursor_get(owed, &key, &data, MDB_GET_CURRENT);
@@ -373,6 +390,7 @@ int main(int argc, char **argv)
     }
 
     struct writing of_file = {};
+    of_file.connections = connections;
     if (!opened(&of_file, file, map_bytes, readers, batch))
         return left_with(EIO);
 
@@ -500,6 +518,8 @@ int main(int argc, char **argv)
             swept_after = of_file.put;
     }
 
+    if (of_file.dropped != 0)
+        fprintf(stderr, "webmachine-cache: %lu gone datagrams were dropped\n", of_file.dropped);
     const bool ended = committed(&of_file);
     mdb_env_close(of_file.environment);
     io_uring_free_buf_ring(&ring, buffers, buffer_count, kBufferGroup);
