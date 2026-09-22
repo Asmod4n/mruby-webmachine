@@ -84,6 +84,7 @@ static void hand_over_in_a_file(const int thread, const char *const declared,
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, nullptr, _IONBF, 0);
     const char *const file = "/tmp/wm-whole.mdb";
     remove(file);
     remove("/tmp/wm-whole.mdb-lock");

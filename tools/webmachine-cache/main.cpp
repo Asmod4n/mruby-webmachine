@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,11 +6,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <liburing.h>
 #include <lmdb.h>
 
 #include "../../src/cache_datagram.h"
 
-enum { kFirstFd = 3 };
+enum { kFirstFd = 3, kBufferGroup = 1, kBuffers = 16 };
 
 struct writing {
     MDB_env *environment;
@@ -48,8 +48,8 @@ static bool putting(struct writing *const of_file)
     const int begun = mdb_txn_begin(of_file->environment, nullptr, 0, &of_file->putting);
     if (begun != 0)
         return complain("mdb_txn_begin", begun), false;
-    const int opening = mdb_dbi_open(of_file->putting, nullptr, MDB_INTEGERKEY,
-                                     &of_file->database);
+    const int opening =
+        mdb_dbi_open(of_file->putting, nullptr, MDB_INTEGERKEY, &of_file->database);
     if (opening != 0)
         return complain("mdb_dbi_open", opening), false;
     return true;
@@ -81,19 +81,6 @@ static void stored(struct writing *const of_file, const cache_datagram_header he
     }
     if (++of_file->put >= of_file->batch)
         committed(of_file);
-}
-
-static int file_beside(struct msghdr *const carrying)
-{
-    for (struct cmsghdr *one = CMSG_FIRSTHDR(carrying); one != nullptr;
-         one = CMSG_NXTHDR(carrying, one)) {
-        if (one->cmsg_level == SOL_SOCKET && one->cmsg_type == SCM_RIGHTS) {
-            int found = -1;
-            memcpy(&found, CMSG_DATA(one), sizeof found);
-            return found;
-        }
-    }
-    return -1;
 }
 
 static void took(struct writing *const of_file, const uint8_t *const datagram,
@@ -140,6 +127,28 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
     munmap(mapping, (size_t) length);
 }
 
+static int file_beside(struct io_uring_recvmsg_out *const said, struct msghdr *const shape)
+{
+    for (struct cmsghdr *one = io_uring_recvmsg_cmsg_firsthdr(said, shape); one != nullptr;
+         one = io_uring_recvmsg_cmsg_nexthdr(said, shape, one)) {
+        if (one->cmsg_level == SOL_SOCKET && one->cmsg_type == SCM_RIGHTS) {
+            int found = -1;
+            memcpy(&found, CMSG_DATA(one), sizeof found);
+            return found;
+        }
+    }
+    return -1;
+}
+
+static void armed(struct io_uring *const ring, const int fd, struct msghdr *const shape)
+{
+    struct io_uring_sqe *const sqe = io_uring_get_sqe(ring);
+    io_uring_prep_recvmsg_multishot(sqe, fd, shape, 0);
+    sqe->flags |= IOSQE_BUFFER_SELECT;
+    sqe->buf_group = kBufferGroup;
+    io_uring_sqe_set_data64(sqe, (uint64_t) fd);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 6) {
@@ -161,57 +170,99 @@ int main(int argc, char **argv)
     if (!opened(&of_file, file, map_bytes, readers, batch))
         return 1;
 
-    struct pollfd *const watching =
-        static_cast<struct pollfd *>(calloc((size_t) connections, sizeof *watching));
-    int largest = 0;
-    socklen_t asked = sizeof largest;
-    getsockopt(kFirstFd, SOL_SOCKET, SO_RCVBUF, &largest, &asked);
-    const size_t room_bytes = largest > 0 ? (size_t) largest : (size_t) 1 << 18;
-    uint8_t *const room = static_cast<uint8_t *>(malloc(room_bytes));
-    if (watching == nullptr || room == nullptr)
+    int given = 0;
+    socklen_t asked = sizeof given;
+    getsockopt(kFirstFd, SOL_SOCKET, SO_RCVBUF, &given, &asked);
+    const size_t buffer_bytes =
+        (given > 0 ? (size_t) given : (size_t) 1 << 18) + sizeof(struct io_uring_recvmsg_out) +
+        CMSG_SPACE(sizeof(int)) + 64;
+
+    struct io_uring ring;
+    const int begun = io_uring_queue_init((unsigned) connections * 4, &ring, 0);
+    if (begun < 0) {
+        fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
         return 1;
-    for (int at = 0; at < connections; at++) {
-        watching[at].fd = kFirstFd + at;
-        watching[at].events = POLLIN;
     }
+
+    int trouble = 0;
+    struct io_uring_buf_ring *const buffers =
+        io_uring_setup_buf_ring(&ring, kBuffers, kBufferGroup, 0, &trouble);
+    if (buffers == nullptr) {
+        fprintf(stderr, "webmachine-cache: io_uring_setup_buf_ring: %s\n", strerror(-trouble));
+        return 1;
+    }
+    uint8_t *const room = static_cast<uint8_t *>(malloc(buffer_bytes * kBuffers));
+    if (room == nullptr)
+        return 1;
+    for (unsigned at = 0; at < kBuffers; at++)
+        io_uring_buf_ring_add(buffers, room + at * buffer_bytes, (unsigned) buffer_bytes, at,
+                              io_uring_buf_ring_mask(kBuffers), (int) at);
+    io_uring_buf_ring_advance(buffers, kBuffers);
+
+    struct msghdr shape = {};
+    shape.msg_namelen = 0;
+    shape.msg_controllen = CMSG_SPACE(sizeof(int));
+    for (int at = 0; at < connections; at++)
+        armed(&ring, kFirstFd + at, &shape);
+    io_uring_submit(&ring);
 
     int open_connections = connections;
     while (open_connections > 0) {
-        if (poll(watching, (nfds_t) connections, -1) < 0) {
-            if (errno == EINTR)
+        struct io_uring_cqe *cqe = nullptr;
+        const int waited = io_uring_wait_cqe(&ring, &cqe);
+        if (waited < 0) {
+            if (waited == -EINTR)
                 continue;
-            perror("webmachine-cache: poll");
+            fprintf(stderr, "webmachine-cache: io_uring_wait_cqe: %s\n", strerror(-waited));
             break;
         }
-        for (int at = 0; at < connections; at++) {
-            if (watching[at].fd < 0 || (watching[at].revents & (POLLIN | POLLHUP)) == 0)
-                continue;
-            struct iovec one = {room, room_bytes};
-            union {
-                char room[CMSG_SPACE(sizeof(int))];
-                struct cmsghdr align;
-            } beside = {};
-            struct msghdr carrying = {};
-            carrying.msg_iov = &one;
-            carrying.msg_iovlen = 1;
-            carrying.msg_control = beside.room;
-            carrying.msg_controllen = sizeof beside.room;
-            const ssize_t got = recvmsg(watching[at].fd, &carrying, 0);
-            if (got > 0) {
-                took(&of_file, room, (size_t) got, file_beside(&carrying));
-                continue;
-            }
-            if (got < 0 && errno == EINTR)
-                continue;
-            close(watching[at].fd);
-            watching[at].fd = -1;
-            open_connections--;
+        const int fd = (int) io_uring_cqe_get_data64(cqe);
+        const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
+        if ((cqe->flags & IORING_CQE_F_BUFFER) == 0) {
+            if (cqe->res == -ENOBUFS || !more)
+                armed(&ring, fd, &shape), io_uring_submit(&ring);
+            io_uring_cqe_seen(&ring, cqe);
+            continue;
         }
+        const unsigned which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+        uint8_t *const one = room + which * buffer_bytes;
+        bool ended_here = false;
+        if (cqe->res > 0) {
+            struct io_uring_recvmsg_out *const said =
+                io_uring_recvmsg_validate(one, cqe->res, &shape);
+            if (said == nullptr) {
+                ended_here = true;
+            } else {
+                const unsigned length =
+                    io_uring_recvmsg_payload_length(said, cqe->res, &shape);
+                if (length == 0) {
+                    ended_here = true;
+                } else {
+                    const void *const payload = io_uring_recvmsg_payload(said, &shape);
+                    took(&of_file, static_cast<const uint8_t *>(payload), length,
+                         file_beside(said, &shape));
+                }
+            }
+        } else {
+            ended_here = cqe->res != -ENOBUFS;
+        }
+        io_uring_buf_ring_add(buffers, one, (unsigned) buffer_bytes, which,
+                              io_uring_buf_ring_mask(kBuffers), 0);
+        io_uring_buf_ring_advance(buffers, 1);
+        if (ended_here) {
+            close(fd);
+            open_connections--;
+        } else if (!more) {
+            armed(&ring, fd, &shape);
+            io_uring_submit(&ring);
+        }
+        io_uring_cqe_seen(&ring, cqe);
     }
 
     const bool ended = committed(&of_file);
     mdb_env_close(of_file.environment);
-    free(watching);
+    io_uring_free_buf_ring(&ring, buffers, kBuffers, kBufferGroup);
+    io_uring_queue_exit(&ring);
     free(room);
     return ended ? 0 : 1;
 }

@@ -6,8 +6,14 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-uri-parser'
   spec.add_dependency 'mruby-lmdb'
+  spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
 
   spec.bins = %w[webmachine-cache webmachine-cache-check]
+
+  # liburing carries slipstream's seam, so its archive reaches back into
+  # symbols that live in libmruby.a - which the linker has already walked
+  # by the time it reaches liburing. Named once more, it can answer.
+  spec.linker.flags_after_libraries << build.libfile("#{build.build_dir}/lib/libmruby")
 
   %w[
     mruby-array-ext
