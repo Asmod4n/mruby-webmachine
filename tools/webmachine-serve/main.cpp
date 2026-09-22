@@ -13,9 +13,10 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2) {
-        fprintf(stderr, "usage: webmachine-serve <port> [engine]\n");
+        fprintf(stderr, "usage: webmachine-serve <port|unix path> [engine]\n");
         return 2;
     }
+    const bool on_a_path = strchr(argv[1], '/') != nullptr;
     const uint16_t port = (uint16_t) strtoul(argv[1], nullptr, 10);
     if (argc > 2 && strcmp(argv[2], "engine") == 0)
         slipstream_syscall_set_engine(1);
@@ -26,12 +27,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "webmachine-serve: stood_up: %s\n", strerror(-stood));
         return 1;
     }
-    const int listening = ring.listens_on(port);
+    const int listening = on_a_path ? ring.listens_on(argv[1]) : ring.listens_on(port);
     if (listening < 0) {
         fprintf(stderr, "webmachine-serve: listens_on: %s\n", strerror(-listening));
         return 1;
     }
-    printf("%u\n", (unsigned) ring.port_taken(0));
+    printf("%s\n", on_a_path ? argv[1] : argv[1]);
     fprintf(stderr, "webmachine-serve: io through %s\n",
             slipstream_syscall_uses_engine() ? "the engine" : "the kernel");
 

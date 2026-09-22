@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cerrno>
+#include <unistd.h>
 #include <stdexcept>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
+#include <sys/un.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 
@@ -129,6 +131,60 @@ class Ring
                                   kBufferBytes, static_cast<uint16_t>(at), mask,
                                   static_cast<int>(at));
         io_uring_buf_ring_advance(buffers_, kBufferCount);
+        return 0;
+    }
+
+    int listens_on(const char *const path)
+    {
+        if (listeners_ >= kListeners)
+            return -ENOSPC;
+        if (path == nullptr || *path == '\0')
+            return -EINVAL;
+        const uint32_t slot = connections_ + listeners_;
+
+        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
+        io_uring_prep_socket_direct(sqe, AF_UNIX, SOCK_STREAM, 0, slot, 0);
+        int answer = one_at_a_time(sqe);
+        if (answer < 0)
+            return answer;
+
+        sockaddr_un where = {};
+        where.sun_family = AF_UNIX;
+        const size_t room = sizeof where.sun_path - 1;
+        const size_t length = strlen(path);
+        if (length > room)
+            return -ENAMETOOLONG;
+        memcpy(where.sun_path, path, length);
+        unlink(path);
+        sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
+        io_uring_prep_bind(sqe, static_cast<int>(slot), reinterpret_cast<sockaddr *>(&where),
+                           sizeof where);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        answer = one_at_a_time(sqe);
+        if (answer < 0)
+            return answer;
+
+        sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
+        io_uring_prep_listen(sqe, static_cast<int>(slot), 4096);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        answer = one_at_a_time(sqe);
+        if (answer < 0)
+            return answer;
+
+        sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            return -EBUSY;
+        io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr, nullptr, 0);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_sqe_set_data64(sqe, marked(Doing::kAccepting, slot));
+        io_uring_submit(&ring_);
+        listeners_++;
         return 0;
     }
 
