@@ -223,46 +223,46 @@ int main(int argc, char **argv)
     cache_reader *const r = cache_reader_opened(c);
     assert(r != nullptr);
     const uint64_t now = now_is();
+    cache_held *const of_request = cache_taken(r);
+    assert(of_request != nullptr);
 
-    cache_answer a = cache_asked(r, one, kCacheFieldEntityTag, now);
+    cache_answer a = cache_asked(of_request, one, kCacheFieldEntityTag, now);
     assert(a.value != nullptr);
     assert(a.length == sizeof tag);
     assert(memcmp(a.value, tag, sizeof tag) == 0);
     printf("the reader finds a field out of the index\n");
 
-    cache_answer s = cache_asked(r, one, kCacheFieldStatus, now);
+    cache_answer s = cache_asked(of_request, one, kCacheFieldStatus, now);
     assert(s.value != nullptr && s.length == 3 && memcmp(s.value, "200", 3) == 0);
     printf("and its neighbour on the same route, without descending again\n");
 
-    assert(cache_asked(r, one, kCacheFieldContentType, now).value == nullptr);
+    assert(cache_asked(of_request, one, kCacheFieldContentType, now).value == nullptr);
     printf("a field whose lifetime has run out is a miss, not its neighbour\n");
 
-    assert(cache_asked(r, one, kCacheFieldLastModified, now).value == nullptr);
+    assert(cache_asked(of_request, one, kCacheFieldLastModified, now).value == nullptr);
     printf("a field that was never stored is a miss, not the next one along\n");
 
-    assert(cache_asked(r, one, kCacheFieldVary, now).value == nullptr);
+    assert(cache_asked(of_request, one, kCacheFieldVary, now).value == nullptr);
     printf("one value can be dropped on its own, and only it\n");
 
-    cache_answer b = cache_body_asked(r, one, now);
+    cache_answer b = cache_body_asked(of_request, one, now);
     assert(b.value != nullptr);
     assert(b.length == sizeof large);
     assert(memcmp(b.value, large, sizeof large) == 0);
     printf("the body that came as a descriptor is whole, %zu bytes\n", b.length);
 
-    assert(cache_asked(r, two, kCacheFieldEntityTag, now).value == nullptr);
-    assert(cache_body_asked(r, two, now).value == nullptr);
+    assert(cache_asked(of_request, two, kCacheFieldEntityTag, now).value == nullptr);
+    assert(cache_body_asked(of_request, two, now).value == nullptr);
     printf("the forgotten route has neither fields nor a body left\n");
 
     const char *const missing = "/articles/42?utm_source=mail";
-    assert(cache_asked(r, cache_key_of(reinterpret_cast<const uint8_t *>(missing),
+    assert(cache_asked(of_request, cache_key_of(reinterpret_cast<const uint8_t *>(missing),
                                        strlen(missing)),
                        kCacheFieldEntityTag, now)
                .value == nullptr);
     printf("a route the dev did not declare is a miss\n");
 
-    cache_sent(r);
-    cache_sent(r);
-    cache_sent(r);
+    cache_sent(r, of_request);
     cache_reader_closed(r);
     cache_close(c);
 
@@ -292,11 +292,14 @@ int main(int argc, char **argv)
     cache_reader *const then = cache_reader_opened(after);
     assert(then != nullptr);
     const uint64_t later = now_is();
-    assert(cache_asked(then, one, kCacheFieldEntityTag, later).value == nullptr);
-    assert(cache_asked(then, one, kCacheFieldStatus, later).value == nullptr);
-    assert(cache_body_asked(then, one, later).value == nullptr);
-    assert(cache_asked(then, three, kCacheFieldEntityTag, later).value == nullptr);
+    cache_held *const of_a_later_one = cache_taken(then);
+    assert(of_a_later_one != nullptr);
+    assert(cache_asked(of_a_later_one, one, kCacheFieldEntityTag, later).value == nullptr);
+    assert(cache_asked(of_a_later_one, one, kCacheFieldStatus, later).value == nullptr);
+    assert(cache_body_asked(of_a_later_one, one, later).value == nullptr);
+    assert(cache_asked(of_a_later_one, three, kCacheFieldEntityTag, later).value == nullptr);
     printf("emptying takes everything, the route it never heard of as much as the new one\n");
+    cache_sent(then, of_a_later_one);
     cache_reader_closed(then);
     cache_close(after);
 
@@ -321,23 +324,53 @@ int main(int argc, char **argv)
     cache_reader *const only = cache_reader_opened(without);
     assert(only != nullptr);
     const uint64_t by_now = now_is();
-    assert(cache_asked(only, three, kCacheFieldStatus, by_now).value == nullptr);
-    assert(cache_body_asked(only, three, by_now).value == nullptr);
-    cache_answer kept = cache_asked(only, three, kCacheFieldEntityTag, by_now);
+    cache_held *of_one_more = cache_taken(only);
+    assert(of_one_more != nullptr);
+    assert(cache_asked(of_one_more, three, kCacheFieldStatus, by_now).value == nullptr);
+    assert(cache_body_asked(of_one_more, three, by_now).value == nullptr);
+    cache_answer kept = cache_asked(of_one_more, three, kCacheFieldEntityTag, by_now);
     assert(kept.value != nullptr && kept.length == sizeof tag);
     printf("with no writer anywhere, the library drops a value and a body itself\n");
 
     assert(cache_forget_everything(alone));
-    assert(cache_asked(only, three, kCacheFieldEntityTag, by_now).value != nullptr);
+    assert(cache_asked(of_one_more, three, kCacheFieldEntityTag, by_now).value != nullptr);
     printf("the snapshot in hand still answers, which is what a snapshot is for\n");
-    cache_sent(only);
-    cache_sent(only);
-    cache_sent(only);
-    assert(cache_asked(only, three, kCacheFieldEntityTag, by_now).value == nullptr);
+    cache_sent(only, of_one_more);
+    of_one_more = cache_taken(only);
+    assert(of_one_more != nullptr);
+    assert(cache_asked(of_one_more, three, kCacheFieldEntityTag, by_now).value == nullptr);
     printf("and once the last send is done the reader renews and sees the empty cache\n");
     cache_reader_closed(only);
     cache_close(without);
     cache_forgetting_closed(alone);
+
+    enum { kAtOnce = 1500 };
+    cache *const many = cache_open("wm-whole", "/tmp", kAtOnce + 64);
+    assert(many != nullptr);
+    cache_reader *const busy = cache_reader_opened(many);
+    assert(busy != nullptr);
+    static cache_held *holding[kAtOnce];
+    for (int at = 0; at < kAtOnce; at++) {
+        holding[at] = cache_taken(busy);
+        assert(holding[at] != nullptr);
+        for (int before = 0; before < at; before++)
+            assert(holding[before] != holding[at]);
+    }
+    printf("%d requests in flight at once hold %d snapshots, no two the same\n", kAtOnce,
+           kAtOnce);
+
+    for (int at = 0; at < kAtOnce; at++)
+        cache_sent(busy, holding[at]);
+    bool one_came_back = false;
+    cache_held *const again = cache_taken(busy);
+    for (int at = 0; at < kAtOnce; at++)
+        if (holding[at] == again)
+            one_came_back = true;
+    assert(one_came_back);
+    cache_sent(busy, again);
+    printf("and once they are sent the pool hands the same ones out again\n");
+    cache_reader_closed(busy);
+    cache_close(many);
 
     printf("ok\n");
     return 0;

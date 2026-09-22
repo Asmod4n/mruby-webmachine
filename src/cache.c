@@ -22,13 +22,21 @@ struct cache {
     MDB_dbi bodies;
 };
 
+struct cache_held {
+    cache_reader *of_thread;
+    MDB_txn *reading;
+    MDB_cursor *walking;
+};
+
 struct cache_reader {
     MDB_env *environment;
     MDB_dbi fields;
     MDB_dbi bodies;
-    MDB_txn *reading;
-    MDB_cursor *walking;
-    unsigned in_flight;
+    cache_held **every;
+    size_t made;
+    size_t room;
+    cache_held **ready;
+    size_t ready_count;
 };
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -181,39 +189,78 @@ cache_reader *cache_reader_opened(cache *of_app)
     of_thread->environment = of_app->environment;
     of_thread->fields = of_app->fields;
     of_thread->bodies = of_app->bodies;
-    if (mdb_txn_begin(of_thread->environment, NULL, MDB_RDONLY, &of_thread->reading) != 0) {
-        free(of_thread);
-        return NULL;
-    }
-    if (mdb_cursor_open(of_thread->reading, of_thread->fields, &of_thread->walking) != 0) {
-        mdb_txn_abort(of_thread->reading);
-        free(of_thread);
-        return NULL;
-    }
     return of_thread;
+}
+
+static bool made_room_for_one_more(cache_reader *const of_thread)
+{
+    if (of_thread->made < of_thread->room)
+        return true;
+    const size_t wanted = of_thread->room == 0 ? 16 : of_thread->room * 2;
+    cache_held **const every = realloc(of_thread->every, wanted * sizeof *every);
+    if (every == NULL)
+        return false;
+    of_thread->every = every;
+    cache_held **const ready = realloc(of_thread->ready, wanted * sizeof *ready);
+    if (ready == NULL)
+        return false;
+    of_thread->ready = ready;
+    of_thread->room = wanted;
+    return true;
+}
+
+cache_held *cache_taken(cache_reader *of_thread)
+{
+    if (of_thread == NULL)
+        return NULL;
+    if (of_thread->ready_count > 0)
+        return of_thread->ready[--of_thread->ready_count];
+    if (!made_room_for_one_more(of_thread))
+        return NULL;
+    cache_held *const one = calloc(1, sizeof *one);
+    if (one == NULL)
+        return NULL;
+    one->of_thread = of_thread;
+    if (mdb_txn_begin(of_thread->environment, NULL, MDB_RDONLY, &one->reading) != 0) {
+        free(one);
+        return NULL;
+    }
+    if (mdb_cursor_open(one->reading, of_thread->fields, &one->walking) != 0) {
+        mdb_txn_abort(one->reading);
+        free(one);
+        return NULL;
+    }
+    of_thread->every[of_thread->made++] = one;
+    return one;
 }
 
 void cache_reader_closed(cache_reader *of_thread)
 {
     if (of_thread == NULL)
         return;
-    if (of_thread->walking != NULL)
-        mdb_cursor_close(of_thread->walking);
-    if (of_thread->reading != NULL)
-        mdb_txn_abort(of_thread->reading);
+    for (size_t at = 0; at < of_thread->made; at++) {
+        cache_held *const one = of_thread->every[at];
+        if (one->walking != NULL)
+            mdb_cursor_close(one->walking);
+        if (one->reading != NULL)
+            mdb_txn_abort(one->reading);
+        free(one);
+    }
+    free(of_thread->every);
+    free(of_thread->ready);
     free(of_thread);
 }
 
-cache_answer cache_asked(cache_reader *of_thread, const uint64_t of_route, const uint8_t field,
+cache_answer cache_asked(cache_held *of_request, const uint64_t of_route, const uint8_t field,
                          const uint64_t now)
 {
     const cache_answer nothing = {NULL, 0};
-    if (of_thread == NULL || of_thread->walking == NULL)
+    if (of_request == NULL || of_request->walking == NULL)
         return nothing;
     uint8_t wanted = field;
     MDB_val asked = {sizeof of_route, (void *) &of_route};
     MDB_val found = {sizeof wanted, &wanted};
-    if (mdb_cursor_get(of_thread->walking, &asked, &found, MDB_GET_BOTH_RANGE) != 0)
+    if (mdb_cursor_get(of_request->walking, &asked, &found, MDB_GET_BOTH_RANGE) != 0)
         return nothing;
     const uint8_t *const bytes = found.mv_data;
     if (found.mv_size < kFieldPrefix || bytes[0] != field)
@@ -222,20 +269,18 @@ cache_answer cache_asked(cache_reader *of_thread, const uint64_t of_route, const
     memcpy(&until, bytes + 1, sizeof until);
     if (until <= now)
         return nothing;
-    of_thread->in_flight++;
     const cache_answer answer = {bytes + kFieldPrefix, found.mv_size - kFieldPrefix};
     return answer;
 }
 
-cache_answer cache_body_asked(cache_reader *of_thread, const uint64_t of_route,
-                              const uint64_t now)
+cache_answer cache_body_asked(cache_held *of_request, const uint64_t of_route, const uint64_t now)
 {
     const cache_answer nothing = {NULL, 0};
-    if (of_thread == NULL || of_thread->reading == NULL)
+    if (of_request == NULL || of_request->reading == NULL)
         return nothing;
     MDB_val asked = {sizeof of_route, (void *) &of_route};
     MDB_val found = {0, NULL};
-    if (mdb_get(of_thread->reading, of_thread->bodies, &asked, &found) != 0)
+    if (mdb_get(of_request->reading, of_request->of_thread->bodies, &asked, &found) != 0)
         return nothing;
     const uint8_t *const bytes = found.mv_data;
     if (found.mv_size < kBodyPrefix)
@@ -244,27 +289,22 @@ cache_answer cache_body_asked(cache_reader *of_thread, const uint64_t of_route,
     memcpy(&until, bytes, sizeof until);
     if (until <= now)
         return nothing;
-    of_thread->in_flight++;
     const cache_answer answer = {bytes + kBodyPrefix, found.mv_size - kBodyPrefix};
     return answer;
 }
 
-void cache_sent(cache_reader *of_thread)
+void cache_sent(cache_reader *of_thread, cache_held *of_request)
 {
-    if (of_thread == NULL || of_thread->in_flight == 0)
+    if (of_thread == NULL || of_request == NULL)
         return;
-    if (--of_thread->in_flight != 0)
-        return;
-    if (of_thread->walking != NULL) {
-        mdb_cursor_close(of_thread->walking);
-        of_thread->walking = NULL;
+    if (of_request->walking != NULL) {
+        mdb_cursor_close(of_request->walking);
+        of_request->walking = NULL;
     }
-    mdb_txn_reset(of_thread->reading);
-    if (mdb_txn_renew(of_thread->reading) != 0) {
-        mdb_txn_abort(of_thread->reading);
-        of_thread->reading = NULL;
+    mdb_txn_reset(of_request->reading);
+    if (mdb_txn_renew(of_request->reading) != 0)
         return;
-    }
-    if (mdb_cursor_open(of_thread->reading, of_thread->fields, &of_thread->walking) != 0)
-        of_thread->walking = NULL;
+    if (mdb_cursor_open(of_request->reading, of_thread->fields, &of_request->walking) != 0)
+        return;
+    of_thread->ready[of_thread->ready_count++] = of_request;
 }

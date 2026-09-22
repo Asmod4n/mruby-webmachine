@@ -168,6 +168,49 @@ void cache_asked_by_hashing_then_key(benchmark::State &state)
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 
+void cache_asked_on_a_renewed_snapshot(benchmark::State &state)
+{
+    Filled &held = filled_with(static_cast<size_t>(state.range(0)), Shape::kHashedKey);
+    size_t at = 0;
+    for (auto _ : state) {
+        const size_t number = held.hashed.at(at);
+        if (++at == held.hashed.size())
+            at = 0;
+        MDB_val asked{sizeof number, const_cast<size_t *>(&number)};
+        MDB_val found{0, nullptr};
+        if (mdb_get(held.reading, held.database, &asked, &found) != 0) [[unlikely]]
+            std::abort();
+        benchmark::DoNotOptimize(found.mv_data);
+        mdb_txn_reset(held.reading);
+        if (mdb_txn_renew(held.reading) != 0) [[unlikely]]
+            std::abort();
+    }
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
+}
+
+void cache_asked_on_a_fresh_transaction(benchmark::State &state)
+{
+    Filled &held = filled_with(static_cast<size_t>(state.range(0)), Shape::kHashedKey);
+    size_t at = 0;
+    for (auto _ : state) {
+        const size_t number = held.hashed.at(at);
+        if (++at == held.hashed.size())
+            at = 0;
+        MDB_txn *one = nullptr;
+        if (mdb_txn_begin(held.environment, nullptr, MDB_RDONLY, &one) != 0) [[unlikely]]
+            std::abort();
+        MDB_val asked{sizeof number, const_cast<size_t *>(&number)};
+        MDB_val found{0, nullptr};
+        if (mdb_get(one, held.database, &asked, &found) != 0) [[unlikely]]
+            std::abort();
+        benchmark::DoNotOptimize(found.mv_data);
+        mdb_txn_abort(one);
+    }
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
+}
+
+BENCHMARK(cache_asked_on_a_renewed_snapshot)->Arg(1000)->Arg(100000)->Arg(1000000);
+BENCHMARK(cache_asked_on_a_fresh_transaction)->Arg(1000)->Arg(100000)->Arg(1000000);
 BENCHMARK(cache_asked_by_whole_key)->Arg(1000)->Arg(100000)->Arg(1000000);
 BENCHMARK(cache_asked_by_hashed_key)->Arg(1000)->Arg(100000)->Arg(1000000);
 BENCHMARK(cache_asked_by_hashing_then_key)->Arg(1000)->Arg(100000)->Arg(1000000);

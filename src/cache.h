@@ -26,6 +26,7 @@ enum { kCacheFieldMost = 502 };
 
 typedef struct cache cache;
 typedef struct cache_reader cache_reader;
+typedef struct cache_held cache_held;
 
 typedef struct {
     const uint8_t *value;
@@ -42,12 +43,13 @@ cache_reader *cache_reader_opened(cache *of_app);
 
 void cache_reader_closed(cache_reader *of_thread);
 
-cache_answer cache_asked(cache_reader *of_thread, uint64_t of_route, uint8_t field,
-                         uint64_t now);
+cache_held *cache_taken(cache_reader *of_thread);
 
-cache_answer cache_body_asked(cache_reader *of_thread, uint64_t of_route, uint64_t now);
+cache_answer cache_asked(cache_held *of_request, uint64_t of_route, uint8_t field, uint64_t now);
 
-void cache_sent(cache_reader *of_thread);
+cache_answer cache_body_asked(cache_held *of_request, uint64_t of_route, uint64_t now);
+
+void cache_sent(cache_reader *of_thread, cache_held *of_request);
 
 #ifdef __cplusplus
 }
