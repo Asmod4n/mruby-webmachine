@@ -10,3 +10,13 @@ harness: floor htgen -c100 -d8s transport=unix path=/ arm=kernel memlock=8192 cf
 responses=4192651 bad=0 seconds=8.000 rps=524073 bytes=167706040 MB/s=19.99 conns=100 threads=1 streams=1 pipeline=1 method=GET proto=h1 tls=0 bundles=1 bufs=2048/4096 enobufs=0 rearms=0 tx_bytes=146744885 tx_MB/s=17.49
 server: 90% of one core   client: 97% of one core   other: 12% of one core
 
+harness: floor htgen -c100 -d5s reps=3 transport=unix path=/ arm=kernel memlock=8192 cflags=-O3 -march=x86-64-v3 -std=c++23 6.18.44-fc-v37 x86_64
+rps: 529652 538343 509267
+median rps: 529652 over 3 run(s), range % of the median
+both ends pegged - the scheduler decided the split
+
+harness: floor htgen -c100 -d5s reps=3 transport=unix path=/ arm=kernel memlock=8192 cflags=-O3 -march=x86-64-v3 -std=c++23 6.18.44-fc-v37 x86_64
+rps: 507778 517117 516356
+median rps: 516356 over 3 run(s), range 1.8% of the median
+both ends pegged - the scheduler decided the split
+
