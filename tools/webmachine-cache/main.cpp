@@ -16,8 +16,6 @@
 
 enum { kFirstFd = 3, kBufferGroup = 1 };
 
-static constexpr uint64_t kTheTimeout = UINT64_MAX;
-
 enum : unsigned { kMostRingEntries = 32768 };
 
 static unsigned no_more_than_a_power_of_two(const unsigned wanted, const unsigned most)
@@ -33,6 +31,7 @@ struct writing {
     MDB_dbi fields;
     MDB_dbi bodies;
     MDB_dbi due;
+    struct io_uring *ring;
     int connections;
     unsigned long dropped;
     MDB_txn *putting;
@@ -119,17 +118,36 @@ static uint64_t until_of(const cache_datagram_header header)
     return (uint64_t) now.tv_sec + header.freshness_lifetime;
 }
 
+struct going {
+    cache_gone_datagram datagram;
+};
+
 static void said_it_is_gone(struct writing *const of_file, const uint64_t route,
-                           const uint8_t field, const uint8_t why)
+                            const uint8_t field, const uint8_t why)
 {
-    cache_gone_datagram gone = {};
-    gone.route = route;
-    gone.field = field;
-    gone.why = why;
-    for (int at = 0; at < of_file->connections; at++)
-        if (send(kFirstFd + at, &gone, sizeof gone, MSG_DONTWAIT | MSG_NOSIGNAL) !=
-            (ssize_t) sizeof gone)
+    for (int at = 0; at < of_file->connections; at++) {
+        struct io_uring_sqe *sqe = io_uring_get_sqe(of_file->ring);
+        if (sqe == nullptr) {
+            io_uring_submit(of_file->ring);
+            sqe = io_uring_get_sqe(of_file->ring);
+        }
+        if (sqe == nullptr) {
             of_file->dropped++;
+            continue;
+        }
+        struct going *const one = static_cast<struct going *>(calloc(1, sizeof *one));
+        if (one == nullptr) {
+            of_file->dropped++;
+            continue;
+        }
+        one->datagram.route = route;
+        one->datagram.field = field;
+        one->datagram.why = why;
+        io_uring_prep_send(sqe, at, &one->datagram, sizeof one->datagram, MSG_NOSIGNAL);
+        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_sqe_set_data(sqe, one);
+    }
+    io_uring_submit(of_file->ring);
 }
 
 static void owed_at(struct writing *const of_file, const uint64_t until, const uint64_t route,
@@ -352,21 +370,13 @@ static uint64_t seconds_now()
     return (uint64_t) now.tv_sec;
 }
 
-static void timing_out(struct io_uring *const ring)
-{
-    static struct __kernel_timespec every = {1, 0};
-    struct io_uring_sqe *const sqe = io_uring_get_sqe(ring);
-    io_uring_prep_timeout(sqe, &every, 0, 0);
-    io_uring_sqe_set_data64(sqe, kTheTimeout);
-}
-
-static void armed(struct io_uring *const ring, const int fd, struct msghdr *const shape)
+static void armed(struct io_uring *const ring, const int which, struct msghdr *const shape)
 {
     struct io_uring_sqe *const sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recvmsg_multishot(sqe, fd, shape, 0);
-    sqe->flags |= IOSQE_BUFFER_SELECT;
+    io_uring_prep_recvmsg_multishot(sqe, which, shape, 0);
+    sqe->flags |= IOSQE_BUFFER_SELECT | IOSQE_FIXED_FILE;
     sqe->buf_group = kBufferGroup;
-    io_uring_sqe_set_data64(sqe, (uint64_t) fd);
+    io_uring_sqe_set_data64(sqe, (uint64_t) which);
 }
 
 int main(int argc, char **argv)
@@ -416,6 +426,18 @@ int main(int argc, char **argv)
         fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
         return left_with(begun);
     }
+    of_file.ring = &ring;
+    int *const theirs = static_cast<int *>(malloc(sizeof(int) * (size_t) connections));
+    if (theirs == nullptr)
+        return left_with(ENOMEM);
+    for (int at = 0; at < connections; at++)
+        theirs[at] = kFirstFd + at;
+    const int registered = io_uring_register_files(&ring, theirs, (unsigned) connections);
+    free(theirs);
+    if (registered < 0) {
+        fprintf(stderr, "webmachine-cache: io_uring_register_files: %s\n", strerror(-registered));
+        return left_with(registered);
+    }
     fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions, io through %s\n",
             buffer_count, buffer_bytes, buffer_count * 2,
             slipstream_syscall_uses_engine() ? "the engine" : "the kernel");
@@ -439,43 +461,39 @@ int main(int argc, char **argv)
     shape.msg_namelen = 0;
     shape.msg_controllen = CMSG_SPACE(sizeof(int));
     for (int at = 0; at < connections; at++)
-        armed(&ring, kFirstFd + at, &shape);
-    timing_out(&ring);
+        armed(&ring, at, &shape);
     io_uring_submit(&ring);
     said_to_the_parent((int32_t) given);
 
-    bool the_timeout_stands = true;
-    unsigned swept_after = 0;
     int open_connections = connections;
     while (open_connections > 0) {
         struct io_uring_cqe *cqe = nullptr;
-        const int waited = io_uring_wait_cqe(&ring, &cqe);
-        if (waited < 0) {
+        struct __kernel_timespec a_second = {1, 0};
+        const int waited = io_uring_submit_and_wait_timeout(&ring, &cqe, 1, &a_second, nullptr);
+        if (waited < 0 && waited != -ETIME) {
             if (waited == -EINTR)
                 continue;
-            fprintf(stderr, "webmachine-cache: io_uring_wait_cqe: %s\n", strerror(-waited));
+            fprintf(stderr, "webmachine-cache: io_uring_submit_and_wait_timeout: %s\n",
+                    strerror(-waited));
             break;
         }
-        if (io_uring_cqe_get_data64(cqe) == kTheTimeout) {
-            if (cqe->res == -ETIME) {
-                swept(&of_file, seconds_now());
-                timing_out(&ring);
-                io_uring_submit(&ring);
-            } else if (the_timeout_stands) {
-                the_timeout_stands = false;
-                fprintf(stderr,
-                        "webmachine-cache: this ring has no timeout (%s), so the sweep rides "
-                        "the commits\n",
-                        strerror(-cqe->res));
-            }
+        if (cqe == nullptr) {
+            swept(&of_file, seconds_now());
+            continue;
+        }
+        if (io_uring_cqe_get_data64(cqe) >= (uint64_t) connections) {
+            struct going *const one = static_cast<struct going *>(io_uring_cqe_get_data(cqe));
+            if (cqe->res != (int) sizeof one->datagram)
+                of_file.dropped++;
+            free(one);
             io_uring_cqe_seen(&ring, cqe);
             continue;
         }
-        const int fd = (int) io_uring_cqe_get_data64(cqe);
+        const int connection = (int) io_uring_cqe_get_data64(cqe);
         const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
         if ((cqe->flags & IORING_CQE_F_BUFFER) == 0) {
             if (cqe->res == -ENOBUFS || !more)
-                armed(&ring, fd, &shape), io_uring_submit(&ring);
+                armed(&ring, connection, &shape), io_uring_submit(&ring);
             io_uring_cqe_seen(&ring, cqe);
             continue;
         }
@@ -505,17 +523,13 @@ int main(int argc, char **argv)
                               (int) buffer_mask, 0);
         io_uring_buf_ring_advance(buffers, 1);
         if (ended_here) {
-            close(fd);
+            close(kFirstFd + connection);
             open_connections--;
         } else if (!more) {
-            armed(&ring, fd, &shape);
+            armed(&ring, connection, &shape);
             io_uring_submit(&ring);
         }
         io_uring_cqe_seen(&ring, cqe);
-        if (!the_timeout_stands && of_file.put == 0 && swept_after != 0)
-            swept(&of_file, seconds_now()), swept_after = 0;
-        else if (of_file.put != 0)
-            swept_after = of_file.put;
     }
 
     if (of_file.dropped != 0)
