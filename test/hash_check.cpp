@@ -31,21 +31,81 @@ static uint64_t by_murmur3(std::string_view t){
  k1*=c1;k1=rot(k1,31);k1*=c2;h1^=k1;k2*=c2;k2=rot(k2,33);k2*=c1;h2^=k2;
  h1^=t.size();h2^=t.size();h1+=h2;h2+=h1;h1=fold(h1);h2=fold(h2);h1+=h2;return h1;}
 
-int main(){
-  const size_t N=1000000;
-  std::vector<std::string> k; k.reserve(N);
-  char room[64];
-  for(size_t i=0;i<N;i++){int n=std::snprintf(room,sizeof room,"GET /articles/%zu?param=xyz&foo=bar",i);k.emplace_back(room,(size_t)n);}
-  struct { const char *name; uint64_t (*fn)(std::string_view); } arms[] = {
-    {"fnv", by_fnv},{"crc32c", by_crc32c},{"two_crc32c", by_two_crc32c},{"multiply_fold", by_multiply_fold},{"siphash13", by_siphash13},{"murmur3", by_murmur3}};
-  for(auto &a:arms){
-    std::vector<uint64_t> v; v.reserve(N);
-    uint64_t low_bits_set=0;
-    for(auto &s:k){uint64_t h=a.fn(s); v.push_back(h); low_bits_set|=h;}
-    std::sort(v.begin(),v.end());
-    size_t dup=0; for(size_t i=1;i<v.size();i++) if(v[i]==v[i-1]) dup++;
-    int bits=0; for(int b=0;b<64;b++) if(low_bits_set>>b&1) bits++;
-    std::printf("%-14s collisions %7zu   bits ever set %2d\n", a.name, dup, bits);
-  }
-  return 0;
+
+#include <random>
+#include <limits.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static const char kPathBytes[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    "-._~!$&'()*+,;=:@/%";
+
+struct Arm { const char *name; uint64_t (*fn)(std::string_view); };
+static const Arm kArms[] = {
+    {"fnv", by_fnv}, {"crc32c", by_crc32c}, {"two_crc32c", by_two_crc32c},
+    {"multiply_fold", by_multiply_fold}, {"siphash13", by_siphash13}, {"murmur3", by_murmur3}};
+
+static void report(const char *what, size_t samples,
+                   std::vector<std::vector<uint64_t>> &seen)
+{
+    std::printf("\n%s, %zu samples\n", what, samples);
+    for (size_t a = 0; a < sizeof kArms / sizeof kArms[0]; a++) {
+        std::vector<uint64_t> &v = seen[a];
+        uint64_t ever = 0;
+        for (uint64_t one : v) ever |= one;
+        std::sort(v.begin(), v.end());
+        size_t dup = 0;
+        for (size_t i = 1; i < v.size(); i++) if (v[i] == v[i - 1]) dup++;
+        int bits = 0;
+        for (int b = 0; b < 64; b++) if (ever >> b & 1) bits++;
+        std::printf("  %-14s collisions %8zu   bits ever set %2d\n", kArms[a].name, dup, bits);
+    }
+}
+
+int main()
+{
+    const size_t kArmCount = sizeof kArms / sizeof kArms[0];
+    const size_t kLongest = PATH_MAX + 4096;
+
+    {
+        const size_t samples = 1000000;
+        std::vector<std::vector<uint64_t>> seen(kArmCount);
+        for (auto &one : seen) one.reserve(samples);
+        std::mt19937_64 noise(20260922);
+        std::vector<char> room(kLongest);
+        for (size_t at = 0; at < samples; at++) {
+            const size_t length = 16 + noise() % (kLongest - 15);
+            for (size_t b = 0; b < length; b++)
+                room[b] = kPathBytes[noise() % (sizeof kPathBytes - 1)];
+            const std::string_view text(room.data(), length);
+            for (size_t a = 0; a < kArmCount; a++) seen[a].push_back(kArms[a].fn(text));
+        }
+        report("bytes RFC 3986 3.3 allows in a path, lengths 16 to PATH_MAX + 4096", samples,
+               seen);
+    }
+
+    {
+        std::vector<std::vector<uint64_t>> seen(kArmCount);
+        const size_t alphabet = sizeof kPathBytes - 1;
+        char room[3];
+        size_t samples = 0;
+        room[0] = '/';
+        for (size_t first = 0; first < alphabet; first++) {
+            room[1] = kPathBytes[first];
+            const std::string_view two(room, 2);
+            for (size_t a = 0; a < kArmCount; a++) seen[a].push_back(kArms[a].fn(two));
+            samples++;
+            for (size_t second = 0; second < alphabet; second++) {
+                room[2] = kPathBytes[second];
+                const std::string_view three(room, 3);
+                for (size_t a = 0; a < kArmCount; a++) seen[a].push_back(kArms[a].fn(three));
+                samples++;
+            }
+        }
+        report("every path of one and two bytes after the slash", samples, seen);
+    }
+    return 0;
 }
