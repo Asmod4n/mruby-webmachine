@@ -45,7 +45,12 @@
 #
 #   CONNS=100 bench/floor.sh
 #   CONNS=100 REPS=15 bench/floor.sh
+#   NICE=-15 runs the server at that nice level, which is what the
+#   archive's rows carry. It changes who the scheduler prefers on a box
+#   where both ends are pegged, so it belongs in the harness line.
+#
 #   CONNS=100 SYSCALLS=1 LATENCY=1 bench/floor.sh
+#   CONNS=1536 DURATION=10 NICE=-15 bench/floor.sh
 #   CONNS=100 TRANSPORT=tcp PORT=8123 bench/floor.sh
 #   CONNS=100 DURATION=20 bench/floor.sh
 set -u
@@ -62,6 +67,8 @@ TRANSPORT="${TRANSPORT:-unix}"
 PORT="${PORT:-8123}"
 PATH_ASKED="${REQPATH:-/}"
 SERVER="${SERVER:-$here/mruby/build/release/bin/webmachine-serve}"
+NICE_ASK=()
+[ -n "${NICE:-}" ] && NICE_ASK=(nice -n "$NICE")
 ARM="${ARM:-}"
 
 HTGEN="${HTGEN:-$(command -v htgen 2>/dev/null)}"
@@ -144,11 +151,11 @@ machine_busy() {
 }
 
 if [ "$TRANSPORT" = unix ]; then
-  "$SERVER" "$SOCK" $ARM >"$WORK/srv.out" 2>&1 &
+  "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$SERVER" "$SOCK" $ARM >"$WORK/srv.out" 2>&1 &
   SRV=$!
   WHERE=(--sock "$SOCK")
 else
-  "$SERVER" "$PORT" $ARM >"$WORK/srv.out" 2>&1 &
+  "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$SERVER" "$PORT" $ARM >"$WORK/srv.out" 2>&1 &
   SRV=$!
   WHERE=(--host 127.0.0.1 --port "$PORT")
 fi
@@ -161,7 +168,7 @@ kill -0 "$SRV" 2>/dev/null || { echo "the server did not come up:" >&2; cat "$WO
 
 CFLAGS_LINE=$(grep -o "'-[^']*'" "$here/build_config_release.rb" | tr -d "'" | sort -u |
   tr '\n' ' ' | sed 's/ $//')
-echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
 
 RPS=()
 BOTH_PEGGED=0
@@ -228,7 +235,7 @@ fi
 
 mkdir -p "$here/bench/results"
 {
-  echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+  echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
   printf 'rps:'
   printf ' %s' "${RPS[@]}"
   printf '\n'

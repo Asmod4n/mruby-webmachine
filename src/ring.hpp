@@ -55,8 +55,8 @@ class QueueIsFull : public std::runtime_error
 };
 
 inline constexpr uint16_t kBufferGroup = 1;
-inline constexpr uint32_t kBufferCount = 4096;
-inline constexpr uint32_t kBufferBytes = 2048;
+inline constexpr uint32_t kBufferCount = 2048;
+inline constexpr uint32_t kBufferBytes = 4096;
 inline constexpr uint32_t kListeners = 4;
 inline constexpr uint32_t kAnswerBytes = 16384;
 
