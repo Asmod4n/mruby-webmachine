@@ -109,7 +109,7 @@ static pid_t the_writer_stands(char *const writer, char *const arm, int32_t *con
 
     static char threads[8], map[32], readers[8], batch[8], budget[32];
     snprintf(threads, sizeof threads, "%d", kThreads);
-    snprintf(map, sizeof map, "%llu", (unsigned long long) (1024ull << 20));
+    snprintf(map, sizeof map, "0");
     snprintf(readers, sizeof readers, "%d", 64);
     snprintf(batch, sizeof batch, "%d", 2);
     snprintf(budget, sizeof budget, "%llu", (unsigned long long) (512ull << 20));

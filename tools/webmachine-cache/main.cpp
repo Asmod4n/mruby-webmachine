@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -54,6 +55,27 @@ static int left_with(const int trouble)
 static void complain(const char *const what, const int status)
 {
     fprintf(stderr, "webmachine-cache: %s: %s\n", what, mdb_strerror(status));
+}
+
+/* Half of what the filesystem has left. lmdb's map is a ceiling, not an
+ * allocation - the file grows into it - so the number only has to be
+ * one this disk could honour, and half of free is a ceiling that leaves
+ * the other half to everyone else. */
+static size_t half_of_what_is_free(const char *const file)
+{
+    struct statvfs of_disk;
+    if (statvfs(file, &of_disk) != 0) {
+        char *const last = strrchr(const_cast<char *>(file), '/');
+        if (last == nullptr || statvfs(".", &of_disk) != 0)
+            return 0;
+        *last = '\0';
+        const int again = statvfs(file, &of_disk);
+        *last = '/';
+        if (again != 0)
+            return 0;
+    }
+    const uint64_t free_bytes = (uint64_t) of_disk.f_bavail * (uint64_t) of_disk.f_frsize;
+    return (size_t) (free_bytes / 2);
 }
 
 static bool opened(struct writing *const of_file, const char *const file, const size_t map_bytes,
@@ -438,17 +460,20 @@ int main(int argc, char **argv)
 {
     if (argc != 7 && argc != 8) {
         fprintf(stderr, "usage: webmachine-cache <file> <connections> <map bytes> <readers> "
-                        "<batch> <buffer bytes> [engine]\n");
+                        "<batch> <buffer bytes> [engine]\n"
+                        "  map bytes 0 takes half of what the filesystem has free\n");
         return 2;
     }
     const char *const file = argv[1];
     const int connections = atoi(argv[2]);
-    const size_t map_bytes = strtoull(argv[3], nullptr, 10);
+    size_t map_bytes = strtoull(argv[3], nullptr, 10);
     const unsigned readers = (unsigned) strtoul(argv[4], nullptr, 10);
     const unsigned batch = (unsigned) strtoul(argv[5], nullptr, 10);
     const size_t buffer_budget = strtoull(argv[6], nullptr, 10);
     if (argc == 8 && strcmp(argv[7], "engine") == 0)
         slipstream_syscall_set_engine(1);
+    if (map_bytes == 0)
+        map_bytes = half_of_what_is_free(file);
     if (connections <= 0 || map_bytes == 0 || readers == 0 || batch == 0 || buffer_budget == 0) {
         fprintf(stderr, "webmachine-cache: every argument counts, and none may be zero\n");
         return 2;
