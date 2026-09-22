@@ -11,7 +11,17 @@
 
 #include "../../src/cache_datagram.h"
 
-enum { kFirstFd = 3, kBufferGroup = 1, kBuffers = 16 };
+enum { kFirstFd = 3, kBufferGroup = 1 };
+
+enum : unsigned { kMostRingEntries = 32768, kMostCompletions = 65536 };
+
+static unsigned no_more_than_a_power_of_two(const unsigned wanted, const unsigned most)
+{
+    unsigned taken = 1;
+    while (taken * 2 <= wanted && taken * 2 <= most)
+        taken *= 2;
+    return taken;
+}
 
 struct writing {
     MDB_env *environment;
@@ -151,9 +161,9 @@ static void armed(struct io_uring *const ring, const int fd, struct msghdr *cons
 
 int main(int argc, char **argv)
 {
-    if (argc != 6) {
-        fprintf(stderr,
-                "usage: webmachine-cache <file> <connections> <map bytes> <readers> <batch>\n");
+    if (argc != 7) {
+        fprintf(stderr, "usage: webmachine-cache <file> <connections> <map bytes> <readers> "
+                        "<batch> <buffer bytes>\n");
         return 2;
     }
     const char *const file = argv[1];
@@ -161,7 +171,8 @@ int main(int argc, char **argv)
     const size_t map_bytes = strtoull(argv[3], nullptr, 10);
     const unsigned readers = (unsigned) strtoul(argv[4], nullptr, 10);
     const unsigned batch = (unsigned) strtoul(argv[5], nullptr, 10);
-    if (connections <= 0 || map_bytes == 0 || readers == 0 || batch == 0) {
+    const size_t buffer_budget = strtoull(argv[6], nullptr, 10);
+    if (connections <= 0 || map_bytes == 0 || readers == 0 || batch == 0 || buffer_budget == 0) {
         fprintf(stderr, "webmachine-cache: every argument counts, and none may be zero\n");
         return 2;
     }
@@ -177,27 +188,44 @@ int main(int argc, char **argv)
         (given > 0 ? (size_t) given : (size_t) 1 << 18) + sizeof(struct io_uring_recvmsg_out) +
         CMSG_SPACE(sizeof(int)) + 64;
 
+    const unsigned buffers_wanted = (unsigned) (buffer_budget / buffer_bytes);
+    if (buffers_wanted < 2) {
+        fprintf(stderr, "webmachine-cache: %zu bytes of buffer holds fewer than two of %zu\n",
+                buffer_budget, buffer_bytes);
+        return 2;
+    }
+    const unsigned buffer_count = no_more_than_a_power_of_two(buffers_wanted, kMostRingEntries);
+    const unsigned buffer_mask = buffer_count - 1;
+
+    struct io_uring_params shape_of_ring = {};
+    shape_of_ring.flags = IORING_SETUP_CQSIZE;
+    shape_of_ring.cq_entries =
+        no_more_than_a_power_of_two(buffer_count * 2, kMostCompletions);
     struct io_uring ring;
-    const int begun = io_uring_queue_init((unsigned) connections * 4, &ring, 0);
+    const int begun = io_uring_queue_init_params(
+        no_more_than_a_power_of_two((unsigned) connections * 2, kMostRingEntries), &ring,
+        &shape_of_ring);
     if (begun < 0) {
         fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
         return 1;
     }
+    fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions\n", buffer_count,
+            buffer_bytes, shape_of_ring.cq_entries);
 
     int trouble = 0;
     struct io_uring_buf_ring *const buffers =
-        io_uring_setup_buf_ring(&ring, kBuffers, kBufferGroup, 0, &trouble);
+        io_uring_setup_buf_ring(&ring, buffer_count, kBufferGroup, 0, &trouble);
     if (buffers == nullptr) {
         fprintf(stderr, "webmachine-cache: io_uring_setup_buf_ring: %s\n", strerror(-trouble));
         return 1;
     }
-    uint8_t *const room = static_cast<uint8_t *>(malloc(buffer_bytes * kBuffers));
+    uint8_t *const room = static_cast<uint8_t *>(malloc(buffer_bytes * buffer_count));
     if (room == nullptr)
         return 1;
-    for (unsigned at = 0; at < kBuffers; at++)
+    for (unsigned at = 0; at < buffer_count; at++)
         io_uring_buf_ring_add(buffers, room + at * buffer_bytes, (unsigned) buffer_bytes, at,
-                              io_uring_buf_ring_mask(kBuffers), (int) at);
-    io_uring_buf_ring_advance(buffers, kBuffers);
+                              (int) buffer_mask, (int) at);
+    io_uring_buf_ring_advance(buffers, buffer_count);
 
     struct msghdr shape = {};
     shape.msg_namelen = 0;
@@ -247,7 +275,7 @@ int main(int argc, char **argv)
             ended_here = cqe->res != -ENOBUFS;
         }
         io_uring_buf_ring_add(buffers, one, (unsigned) buffer_bytes, which,
-                              io_uring_buf_ring_mask(kBuffers), 0);
+                              (int) buffer_mask, 0);
         io_uring_buf_ring_advance(buffers, 1);
         if (ended_here) {
             close(fd);
@@ -261,7 +289,7 @@ int main(int argc, char **argv)
 
     const bool ended = committed(&of_file);
     mdb_env_close(of_file.environment);
-    io_uring_free_buf_ring(&ring, buffers, kBuffers, kBufferGroup);
+    io_uring_free_buf_ring(&ring, buffers, buffer_count, kBufferGroup);
     io_uring_queue_exit(&ring);
     free(room);
     return ended ? 0 : 1;

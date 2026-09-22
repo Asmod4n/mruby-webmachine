@@ -111,13 +111,15 @@ int main(int argc, char **argv)
         posix_spawn_file_actions_adddup2(&actions, theirs[at], kFirstFd + at);
     posix_spawn_file_actions_addclosefrom_np(&actions, kFirstFd + kThreads);
 
-    char threads[8], map[32], readers[8], batch[8];
+    char threads[8], map[32], readers[8], batch[8], budget[32];
     snprintf(threads, sizeof threads, "%d", kThreads);
     snprintf(map, sizeof map, "%llu", (unsigned long long) (1024ull << 20));
     snprintf(readers, sizeof readers, "%d", 64);
     snprintf(batch, sizeof batch, "%d", 2);
+    snprintf(budget, sizeof budget, "%llu", (unsigned long long) (512ull << 20));
     char *const writer = argc > 1 ? argv[1] : const_cast<char *>("./webmachine-cache");
-    char *child[] = {writer, const_cast<char *>(file), threads, map, readers, batch, nullptr};
+    char *child[] = {writer,  const_cast<char *>(file), threads, map,
+                     readers, batch,                   budget,  nullptr};
     pid_t spawned = 0;
     assert(posix_spawn(&spawned, writer, &actions, nullptr, child, environ) == 0);
     posix_spawn_file_actions_destroy(&actions);
