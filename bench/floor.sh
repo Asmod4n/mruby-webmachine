@@ -33,8 +33,19 @@
 #   case is named in the output rather than refused, because refusing
 #   it would refuse every run this box can do.
 #
+#   SYSCALLS=1 counts the server's syscalls with perf and divides the
+#   responses by them. It is opt-in because counting needs perf, a
+#   mounted tracefs and a paranoid setting most machines do not have
+#   lying around, and a probe that warns on every run is noise for
+#   anyone not asking the question. Off, the line is not printed.
+#
+#   LATENCY=1 asks htgen for the distribution beside the rate. Read it
+#   at the concurrency you mean, never at the one that gives the best
+#   rate: at the rate's plateau the number is the queue.
+#
 #   CONNS=100 bench/floor.sh
 #   CONNS=100 REPS=15 bench/floor.sh
+#   CONNS=100 SYSCALLS=1 LATENCY=1 bench/floor.sh
 #   CONNS=100 TRANSPORT=tcp PORT=8123 bench/floor.sh
 #   CONNS=100 DURATION=20 bench/floor.sh
 set -u
@@ -71,6 +82,44 @@ HZ=$(getconf CLK_TCK)
 WORK=$(mktemp -d)
 SOCK="$WORK/wm.sock"
 trap 'kill "${SRV:-0}" 2>/dev/null; rm -rf "$WORK"' EXIT
+
+# Opt-in, and it says why it cannot when it cannot: tracepoints are
+# gated separately from cpu events, so perf record can work while this
+# counter stays empty. A column of silent '-' hides that.
+SYSC_PERF=""
+if [ "${SYSCALLS:-0}" = 1 ]; then
+  SYSC_PERF="${PERF:-}"
+  if [ -z "$SYSC_PERF" ]; then
+    if perf stat -e raw_syscalls:sys_enter -x, -- /bin/true 2>&1 >/dev/null | grep -q '^[0-9]'
+    then SYSC_PERF=perf
+    else SYSC_PERF=$(ls /usr/lib/linux-tools-*/perf 2>/dev/null | head -1); fi
+  fi
+  SYSC_PROBE=$("${SYSC_PERF:-perf}" stat -e raw_syscalls:sys_enter -x, -- /bin/true 2>&1 >/dev/null)
+  if ! echo "$SYSC_PROBE" | grep -q '^[0-9]'; then
+    echo "req/syscall: unavailable - ${SYSC_PERF:-perf} cannot count raw_syscalls:sys_enter. Its own words:" >&2
+    echo "$SYSC_PROBE" | head -3 | sed 's/^/    /' >&2
+    echo "  Usual causes: kernel.perf_event_paranoid > -1 without CAP_PERFMON, or /sys/kernel/tracing not mounted." >&2
+    SYSC_PERF=""
+  fi
+fi
+SYSC_PID=
+SYSC_OUT="$WORK/sysc"
+# The wait must run in the shell that backgrounded perf: a $( ) subshell
+# is not its parent, so its wait returns at once while the file is still
+# being written. Same split as the client watcher above.
+sysc_begin() {
+  [ -n "$SYSC_PERF" ] || return 0
+  "$SYSC_PERF" stat -e raw_syscalls:sys_enter -x, -p "$1" -o "$SYSC_OUT" \
+    -- sleep "$2" >/dev/null 2>&1 &
+  SYSC_PID=$!
+}
+sysc_read() {
+  awk -F, '$3 == "raw_syscalls:sys_enter" && $1 ~ /^[0-9]/ { print $1 }' "$SYSC_OUT" 2>/dev/null
+}
+
+LATENCY_ASK=()
+[ "${LATENCY:-0}" = 1 ] && LATENCY_ASK=(--latency)
+
 
 ticks_of() {
   awk '{ print $14, $15 }' "/proc/$1/stat" 2>/dev/null || echo "0 0"
@@ -119,8 +168,9 @@ BOTH_PEGGED=0
 for rep in $(seq 1 "$REPS"); do
   M0=$(machine_busy)
   read -r SU0 SS0 <<<"$(ticks_of "$SRV")"
+  sysc_begin "$SRV" "$DURATION"
   "$HTGEN" "${WHERE[@]}" --conns "$CONNS" --seconds "$DURATION" --path "$PATH_ASKED" \
-    >"$WORK/cli.out" 2>&1 &
+    "${LATENCY_ASK[@]+"${LATENCY_ASK[@]}"}" >"$WORK/cli.out" 2>&1 &
   CLI=$!
   read -r CU0 CS0 <<<"$(ticks_of "$CLI")"
   watch_the_client "$CLI" "$WORK/cli.ticks" &
@@ -155,6 +205,15 @@ for rep in $(seq 1 "$REPS"); do
 
   cat "$WORK/cli.out"
   echo "server: ${SCPU}% of one core   client: ${CCPU}% of one core   other: ${OTHER}% of one core"
+  if [ -n "$SYSC_PERF" ]; then
+    [ -n "$SYSC_PID" ] && wait "$SYSC_PID" 2>/dev/null
+    SYSC_PID=
+    NSYSC=$(sysc_read)
+    NDONE=$(grep -o 'responses=[0-9]*' "$WORK/cli.out" | cut -d= -f2)
+    if [ -n "$NSYSC" ] && [ "$NSYSC" -gt 0 ] && [ -n "$NDONE" ]; then
+      awk -v d="$NDONE" -v n="$NSYSC" 'BEGIN { printf "req/syscall: %.1f (%d requests / %d server syscalls)\n", d / n, d, n }'
+    fi
+  fi
   RPS+=("$(grep -o 'rps=[0-9]*' "$WORK/cli.out" | cut -d= -f2)")
 done
 

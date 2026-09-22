@@ -292,18 +292,11 @@ class Ring
                 io_uring_submit_and_wait_timeout(&ring_, &first, 1, &a_second, nullptr);
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
-            unsigned head = 0;
-            unsigned seen = 0;
-            unsigned armed = 0;
             io_uring_cqe *cqe = nullptr;
-            io_uring_for_each_cqe(&ring_, head, cqe)
-            {
-                seen++;
-                armed += took(cqe, answering);
+            while (io_uring_peek_cqe(&ring_, &cqe) == 0 && cqe != nullptr) {
+                took(cqe, answering);
+                io_uring_cqe_seen(&ring_, cqe);
             }
-            io_uring_cq_advance(&ring_, seen);
-            if (armed != 0)
-                io_uring_submit(&ring_);
         }
     }
 
