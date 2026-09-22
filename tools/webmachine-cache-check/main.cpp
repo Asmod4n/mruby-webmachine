@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../../src/cache.h"
@@ -19,48 +20,42 @@ enum { kThreads = 3, kFirstFd = 3 };
 static int mine[kThreads];
 static size_t inline_limit = 0;
 
-static void hand_over_inline(const int thread, const char *const declared,
-                             const uint8_t *const body, const uint32_t body_length)
+static void hand_over_inline(const int thread, const uint64_t of_route, const uint8_t field,
+                             const uint32_t freshness_lifetime, const uint8_t *const value,
+                             const size_t value_length)
 {
     cache_datagram_header header = {};
-    header.key = cache_key_of(reinterpret_cast<const uint8_t *>(declared), strlen(declared));
-    header.key_length = (uint32_t) strlen(declared);
-    header.freshness_lifetime = 900;
+    header.route = of_route;
+    header.field = field;
+    header.freshness_lifetime = freshness_lifetime;
     header.body = kCacheBodyIsInline;
 
-    const size_t length = sizeof header + sizeof body_length + header.key_length + body_length;
+    const size_t length = sizeof header + value_length;
     uint8_t *const room = static_cast<uint8_t *>(malloc(length));
-    size_t at = 0;
-    memcpy(room + at, &header, sizeof header);
-    at += sizeof header;
-    memcpy(room + at, &body_length, sizeof body_length);
-    at += sizeof body_length;
-    memcpy(room + at, declared, header.key_length);
-    at += header.key_length;
-    memcpy(room + at, body, body_length);
+    memcpy(room, &header, sizeof header);
+    memcpy(room + sizeof header, value, value_length);
     assert(send(mine[thread], room, length, 0) == (ssize_t) length);
     free(room);
 }
 
-static void hand_over_in_a_file(const int thread, const char *const declared,
-                                const uint8_t *const body, const uint32_t body_length)
+static void hand_over_in_a_file(const int thread, const uint64_t of_route, const uint8_t field,
+                                const uint32_t freshness_lifetime, const uint8_t *const value,
+                                const size_t value_length)
 {
     cache_datagram_header header = {};
-    header.key = cache_key_of(reinterpret_cast<const uint8_t *>(declared), strlen(declared));
-    header.key_length = (uint32_t) strlen(declared);
-    header.freshness_lifetime = 900;
+    header.route = of_route;
+    header.field = field;
+    header.freshness_lifetime = freshness_lifetime;
     header.body = kCacheBodyIsInAFile;
 
-    const size_t length = header.key_length + body_length;
     const int file = memfd_create("cache-entry", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     assert(file >= 0);
-    assert(ftruncate(file, (off_t) length) == 0);
-    uint8_t *const mapping =
-        static_cast<uint8_t *>(mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_SHARED, file, 0));
+    assert(ftruncate(file, (off_t) value_length) == 0);
+    uint8_t *const mapping = static_cast<uint8_t *>(
+        mmap(nullptr, value_length, PROT_READ | PROT_WRITE, MAP_SHARED, file, 0));
     assert(mapping != MAP_FAILED);
-    memcpy(mapping, declared, header.key_length);
-    memcpy(mapping + header.key_length, body, body_length);
-    assert(munmap(mapping, length) == 0);
+    memcpy(mapping, value, value_length);
+    assert(munmap(mapping, value_length) == 0);
     assert(fcntl(file, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE) == 0);
 
     struct iovec one = {&header, sizeof header};
@@ -80,6 +75,13 @@ static void hand_over_in_a_file(const int thread, const char *const declared,
     memcpy(CMSG_DATA(rights), &file, sizeof file);
     assert(sendmsg(mine[thread], &carrying, 0) == (ssize_t) sizeof header);
     close(file);
+}
+
+static uint64_t now_is()
+{
+    struct timespec now = {};
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (uint64_t) now.tv_sec;
 }
 
 int main(int argc, char **argv)
@@ -127,28 +129,39 @@ int main(int argc, char **argv)
         fprintf(stderr, "the writer could not start: %s\n", strerror(-standing));
         return 1;
     }
-    inline_limit = (size_t) standing - sizeof(cache_datagram_header) - sizeof(uint32_t) - 256;
+    inline_limit = (size_t) standing - sizeof(cache_datagram_header) - 256;
     printf("the writer stands and takes %d bytes, so %zu of body goes inline\n", standing,
            inline_limit);
 
-    static uint8_t small[64];
-    memset(small, 'a', sizeof small);
+    static uint8_t tag[32];
+    memset(tag, 'a', sizeof tag);
     static uint8_t large[3u << 20];
     for (size_t at = 0; at < sizeof large; at++)
         large[at] = (uint8_t) ('0' + at % 10);
 
-    const char *const one = "GET /articles/42?param=xyz&foo=bar";
-    const char *const two = "GET /articles/7?param=abc&foo=bar";
-    assert(sizeof small <= inline_limit);
+    const char *const declared = "/articles/42?param=xyz&foo=bar";
+    const uint64_t one =
+        cache_key_of(reinterpret_cast<const uint8_t *>(declared), strlen(declared));
+    assert(sizeof tag <= inline_limit);
     assert(sizeof large > inline_limit);
-    hand_over_inline(0, one, small, sizeof small);
-    hand_over_in_a_file(1, two, large, sizeof large);
-    printf("one entry inline, one in a sealed memfd of %zu bytes\n", sizeof large);
+
+    hand_over_inline(0, one, kCacheFieldEntityTag, 900, tag, sizeof tag);
+    hand_over_inline(0, one, kCacheFieldStatus, 900,
+                     reinterpret_cast<const uint8_t *>("200"), 3);
+    hand_over_inline(1, one, kCacheFieldContentType, 0,
+                     reinterpret_cast<const uint8_t *>("text/html"), 9);
+    hand_over_in_a_file(2, one, kCacheFieldBody, 900, large, sizeof large);
+    printf("one route, three fields inline and a body of %zu bytes in a sealed memfd\n",
+           sizeof large);
 
     for (int at = 0; at < kThreads; at++)
         close(mine[at]);
     int left = 0;
     waitpid(spawned, &left, 0);
+    if (!WIFEXITED(left)) {
+        fprintf(stderr, "the writer died of signal %d\n", WTERMSIG(left));
+        return 1;
+    }
     assert(WEXITSTATUS(left) == 0);
     printf("the writer drained its sockets and left with 0\n");
 
@@ -156,30 +169,39 @@ int main(int argc, char **argv)
     assert(c != nullptr);
     cache_reader *const r = cache_reader_opened(c);
     assert(r != nullptr);
+    const uint64_t now = now_is();
 
-    cache_answer a =
-        cache_asked(r, cache_key_of(reinterpret_cast<const uint8_t *>(one), strlen(one)));
+    cache_answer a = cache_asked(r, one, kCacheFieldEntityTag, now);
     assert(a.value != nullptr);
-    assert(a.length == strlen(one) + sizeof small);
-    assert(memcmp(a.value, one, strlen(one)) == 0);
-    assert(memcmp(a.value + strlen(one), small, sizeof small) == 0);
-    printf("the reader finds the inline entry, key first, then the answer\n");
+    assert(a.length == sizeof tag);
+    assert(memcmp(a.value, tag, sizeof tag) == 0);
+    printf("the reader finds a field out of the index\n");
 
-    cache_answer b =
-        cache_asked(r, cache_key_of(reinterpret_cast<const uint8_t *>(two), strlen(two)));
+    cache_answer s = cache_asked(r, one, kCacheFieldStatus, now);
+    assert(s.value != nullptr && s.length == 3 && memcmp(s.value, "200", 3) == 0);
+    printf("and its neighbour on the same route, without descending again\n");
+
+    assert(cache_asked(r, one, kCacheFieldContentType, now).value == nullptr);
+    printf("a field whose lifetime has run out is a miss, not its neighbour\n");
+
+    assert(cache_asked(r, one, kCacheFieldLastModified, now).value == nullptr);
+    printf("a field that was never stored is a miss, not the next one along\n");
+
+    cache_answer b = cache_body_asked(r, one, now);
     assert(b.value != nullptr);
-    assert(b.length == strlen(two) + sizeof large);
-    assert(memcmp(b.value, two, strlen(two)) == 0);
-    assert(memcmp(b.value + strlen(two), large, sizeof large) == 0);
-    printf("the entry that came as a descriptor is whole, %zu bytes\n", b.length);
+    assert(b.length == sizeof large);
+    assert(memcmp(b.value, large, sizeof large) == 0);
+    printf("the body that came as a descriptor is whole, %zu bytes\n", b.length);
 
-    const char *const missing = "GET /articles/42?utm_source=mail";
+    const char *const missing = "/articles/42?utm_source=mail";
     assert(cache_asked(r, cache_key_of(reinterpret_cast<const uint8_t *>(missing),
-                                       strlen(missing)))
+                                       strlen(missing)),
+                       kCacheFieldEntityTag, now)
                .value == nullptr);
-    printf("a key the dev did not declare is a miss\n");
+    printf("a route the dev did not declare is a miss\n");
 
     cache_sent(r, a.snapshot);
+    cache_sent(r, s.snapshot);
     cache_sent(r, b.snapshot);
     cache_reader_closed(r);
     cache_close(c);

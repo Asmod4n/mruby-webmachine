@@ -13,16 +13,21 @@
 
 #include <lmdb.h>
 
+enum { kFieldPrefix = 1 + sizeof(uint64_t), kBodyPrefix = sizeof(uint64_t) };
+
 struct cache {
     MDB_env *environment;
-    MDB_dbi database;
+    MDB_dbi fields;
+    MDB_dbi bodies;
 };
 
 struct cache_reader {
     MDB_env *environment;
-    MDB_dbi database;
+    MDB_dbi fields;
+    MDB_dbi bodies;
     MDB_txn *reading;
     MDB_txn *draining;
+    MDB_cursor *walking;
     unsigned snapshot;
     unsigned sending;
     unsigned draining_sending;
@@ -77,11 +82,6 @@ uint64_t cache_key_of(const uint8_t *const route, const size_t route_length)
     return (low * 0x9e3779b97f4a7c15ULL) ^ (high << 32) ^ high;
 }
 
-uint64_t cache_field_of(const uint64_t of_route, const uint8_t field)
-{
-    return (of_route ^ (field * 0x9e3779b97f4a7c15ULL)) * 0xff51afd7ed558ccdULL;
-}
-
 static bool app_name_is_a_token(const char *name)
 {
     static const char marks[] = "!#$%&'*+-.^_`|~";
@@ -133,7 +133,8 @@ cache *cache_open(const char *app_name, const char *directory, const unsigned re
         free(of_app);
         return NULL;
     }
-    if (mdb_env_set_maxreaders(of_app->environment, readers) != 0 ||
+    if (mdb_env_set_maxdbs(of_app->environment, 2) != 0 ||
+        mdb_env_set_maxreaders(of_app->environment, readers) != 0 ||
         mdb_env_open(of_app->environment, file, MDB_RDONLY | MDB_NOSUBDIR | MDB_NOTLS, 0600) != 0) {
         mdb_env_close(of_app->environment);
         free(file);
@@ -147,13 +148,18 @@ cache *cache_open(const char *app_name, const char *directory, const unsigned re
         free(of_app);
         return NULL;
     }
-    if (mdb_dbi_open(opening, NULL, MDB_INTEGERKEY, &of_app->database) != 0) {
+    if (mdb_dbi_open(opening, "fields", MDB_INTEGERKEY | MDB_DUPSORT, &of_app->fields) != 0 ||
+        mdb_dbi_open(opening, "bodies", MDB_INTEGERKEY, &of_app->bodies) != 0) {
         mdb_txn_abort(opening);
         mdb_env_close(of_app->environment);
         free(of_app);
         return NULL;
     }
-    mdb_txn_abort(opening);
+    if (mdb_txn_commit(opening) != 0) {
+        mdb_env_close(of_app->environment);
+        free(of_app);
+        return NULL;
+    }
     return of_app;
 }
 
@@ -173,8 +179,14 @@ cache_reader *cache_reader_opened(cache *of_app)
     if (of_thread == NULL)
         return NULL;
     of_thread->environment = of_app->environment;
-    of_thread->database = of_app->database;
+    of_thread->fields = of_app->fields;
+    of_thread->bodies = of_app->bodies;
     if (mdb_txn_begin(of_thread->environment, NULL, MDB_RDONLY, &of_thread->reading) != 0) {
+        free(of_thread);
+        return NULL;
+    }
+    if (mdb_cursor_open(of_thread->reading, of_thread->fields, &of_thread->walking) != 0) {
+        mdb_txn_abort(of_thread->reading);
         free(of_thread);
         return NULL;
     }
@@ -185,6 +197,8 @@ void cache_reader_closed(cache_reader *of_thread)
 {
     if (of_thread == NULL)
         return;
+    if (of_thread->walking != NULL)
+        mdb_cursor_close(of_thread->walking);
     if (of_thread->draining != NULL)
         mdb_txn_abort(of_thread->draining);
     if (of_thread->reading != NULL)
@@ -192,17 +206,50 @@ void cache_reader_closed(cache_reader *of_thread)
     free(of_thread);
 }
 
-cache_answer cache_asked(cache_reader *of_thread, const uint64_t key)
+cache_answer cache_asked(cache_reader *of_thread, const uint64_t of_route, const uint8_t field,
+                         const uint64_t now)
+{
+    const cache_answer nothing = {NULL, 0, 0};
+    if (of_thread == NULL || of_thread->walking == NULL)
+        return nothing;
+    uint8_t wanted = field;
+    MDB_val asked = {sizeof of_route, (void *) &of_route};
+    MDB_val found = {sizeof wanted, &wanted};
+    if (mdb_cursor_get(of_thread->walking, &asked, &found, MDB_GET_BOTH_RANGE) != 0)
+        return nothing;
+    const uint8_t *const bytes = found.mv_data;
+    if (found.mv_size < kFieldPrefix || bytes[0] != field)
+        return nothing;
+    uint64_t until = 0;
+    memcpy(&until, bytes + 1, sizeof until);
+    if (until <= now)
+        return nothing;
+    of_thread->sending++;
+    const cache_answer answer = {bytes + kFieldPrefix, found.mv_size - kFieldPrefix,
+                                 of_thread->snapshot};
+    return answer;
+}
+
+cache_answer cache_body_asked(cache_reader *of_thread, const uint64_t of_route,
+                              const uint64_t now)
 {
     const cache_answer nothing = {NULL, 0, 0};
     if (of_thread == NULL || of_thread->reading == NULL)
         return nothing;
-    MDB_val asked = {sizeof key, (void *) &key};
+    MDB_val asked = {sizeof of_route, (void *) &of_route};
     MDB_val found = {0, NULL};
-    if (mdb_get(of_thread->reading, of_thread->database, &asked, &found) != 0)
+    if (mdb_get(of_thread->reading, of_thread->bodies, &asked, &found) != 0)
+        return nothing;
+    const uint8_t *const bytes = found.mv_data;
+    if (found.mv_size < kBodyPrefix)
+        return nothing;
+    uint64_t until = 0;
+    memcpy(&until, bytes, sizeof until);
+    if (until <= now)
         return nothing;
     of_thread->sending++;
-    const cache_answer answer = {found.mv_data, found.mv_size, of_thread->snapshot};
+    const cache_answer answer = {bytes + kBodyPrefix, found.mv_size - kBodyPrefix,
+                                 of_thread->snapshot};
     return answer;
 }
 
@@ -227,6 +274,10 @@ bool cache_changed(cache_reader *of_thread)
 {
     if (of_thread == NULL)
         return false;
+    if (of_thread->walking != NULL) {
+        mdb_cursor_close(of_thread->walking);
+        of_thread->walking = NULL;
+    }
     if (of_thread->draining != NULL) {
         if (of_thread->draining_sending > 0)
             return false;
@@ -244,6 +295,8 @@ bool cache_changed(cache_reader *of_thread)
     of_thread->sending = 0;
     of_thread->snapshot++;
     if (mdb_txn_begin(of_thread->environment, NULL, MDB_RDONLY, &of_thread->reading) != 0)
+        return false;
+    if (mdb_cursor_open(of_thread->reading, of_thread->fields, &of_thread->walking) != 0)
         return false;
     return true;
 }

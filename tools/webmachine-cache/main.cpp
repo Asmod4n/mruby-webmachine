@@ -4,12 +4,14 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <liburing.h>
 #include <lmdb.h>
 #include <slipstream_syscall.h>
 
+#include "../../src/cache.h"
 #include "../../src/cache_datagram.h"
 
 enum { kFirstFd = 3, kBufferGroup = 1 };
@@ -26,8 +28,10 @@ static unsigned no_more_than_a_power_of_two(const unsigned wanted, const unsigne
 
 struct writing {
     MDB_env *environment;
-    MDB_dbi database;
+    MDB_dbi fields;
+    MDB_dbi bodies;
     MDB_txn *putting;
+    MDB_cursor *walking;
     unsigned put;
     unsigned batch;
 };
@@ -55,6 +59,7 @@ static bool opened(struct writing *const of_file, const char *const file, const 
     if (made != 0)
         return complain("mdb_env_create", made), false;
     mdb_env_set_mapsize(of_file->environment, map_bytes);
+    mdb_env_set_maxdbs(of_file->environment, 2);
     mdb_env_set_maxreaders(of_file->environment, readers);
     const int status = mdb_env_open(of_file->environment, file, MDB_NOSUBDIR, 0600);
     if (status != 0)
@@ -70,10 +75,17 @@ static bool putting(struct writing *const of_file)
     const int begun = mdb_txn_begin(of_file->environment, nullptr, 0, &of_file->putting);
     if (begun != 0)
         return complain("mdb_txn_begin", begun), false;
-    const int opening =
-        mdb_dbi_open(of_file->putting, nullptr, MDB_INTEGERKEY, &of_file->database);
+    const int opening = mdb_dbi_open(of_file->putting, "fields",
+                                     MDB_INTEGERKEY | MDB_DUPSORT | MDB_CREATE, &of_file->fields);
     if (opening != 0)
-        return complain("mdb_dbi_open", opening), false;
+        return complain("mdb_dbi_open fields", opening), false;
+    const int too = mdb_dbi_open(of_file->putting, "bodies", MDB_INTEGERKEY | MDB_CREATE,
+                                 &of_file->bodies);
+    if (too != 0)
+        return complain("mdb_dbi_open bodies", too), false;
+    const int walking = mdb_cursor_open(of_file->putting, of_file->fields, &of_file->walking);
+    if (walking != 0)
+        return complain("mdb_cursor_open", walking), false;
     return true;
 }
 
@@ -81,6 +93,8 @@ static bool committed(struct writing *const of_file)
 {
     if (of_file->putting == nullptr)
         return true;
+    mdb_cursor_close(of_file->walking);
+    of_file->walking = nullptr;
     const int status = mdb_txn_commit(of_file->putting);
     of_file->putting = nullptr;
     of_file->put = 0;
@@ -89,20 +103,65 @@ static bool committed(struct writing *const of_file)
     return true;
 }
 
+static uint64_t until_of(const cache_datagram_header header)
+{
+    struct timespec now = {};
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (uint64_t) now.tv_sec + header.freshness_lifetime;
+}
+
+static void stored_as_a_field(struct writing *const of_file, const cache_datagram_header header,
+                              const uint8_t *const value, const size_t value_length)
+{
+    const uint64_t until = until_of(header);
+    MDB_val key = {sizeof header.route, const_cast<uint64_t *>(&header.route)};
+    uint8_t wanted = header.field;
+    MDB_val standing = {sizeof wanted, &wanted};
+    if (mdb_cursor_get(of_file->walking, &key, &standing, MDB_GET_BOTH_RANGE) == 0 &&
+        standing.mv_size >= 1 && static_cast<const uint8_t *>(standing.mv_data)[0] == header.field)
+        mdb_cursor_del(of_file->walking, 0);
+
+    uint8_t room[1 + sizeof until + kCacheFieldMost];
+    room[0] = header.field;
+    memcpy(room + 1, &until, sizeof until);
+    memcpy(room + 1 + sizeof until, value, value_length);
+    MDB_val data = {1 + sizeof until + value_length, room};
+    const int status = mdb_cursor_put(of_file->walking, &key, &data, 0);
+    if (status != 0) {
+        complain("mdb_cursor_put", status);
+        return;
+    }
+    if (++of_file->put >= of_file->batch)
+        committed(of_file);
+}
+
+static void stored_as_a_body(struct writing *const of_file, const cache_datagram_header header,
+                             const uint8_t *const value, const size_t value_length)
+{
+    const uint64_t until = until_of(header);
+    MDB_val key = {sizeof header.route, const_cast<uint64_t *>(&header.route)};
+    MDB_val data = {sizeof until + value_length, nullptr};
+    const int status = mdb_put(of_file->putting, of_file->bodies, &key, &data, MDB_RESERVE);
+    if (status != 0) {
+        complain("mdb_put", status);
+        return;
+    }
+    uint8_t *const room = static_cast<uint8_t *>(data.mv_data);
+    memcpy(room, &until, sizeof until);
+    memcpy(room + sizeof until, value, value_length);
+    if (++of_file->put >= of_file->batch)
+        committed(of_file);
+}
+
 static void stored(struct writing *const of_file, const cache_datagram_header header,
                    const uint8_t *const value, const size_t value_length)
 {
     if (!putting(of_file))
         return;
-    MDB_val key = {sizeof header.key, const_cast<uint64_t *>(&header.key)};
-    MDB_val data = {value_length, const_cast<uint8_t *>(value)};
-    const int status = mdb_put(of_file->putting, of_file->database, &key, &data, 0);
-    if (status != 0) {
-        complain("mdb_put", status);
-        return;
-    }
-    if (++of_file->put >= of_file->batch)
-        committed(of_file);
+    if (header.field == kCacheFieldBody || value_length > kCacheFieldMost)
+        stored_as_a_body(of_file, header, value, value_length);
+    else
+        stored_as_a_field(of_file, header, value, value_length);
 }
 
 static void took(struct writing *const of_file, const uint8_t *const datagram,
@@ -115,27 +174,23 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
     }
     cache_datagram_header header;
     memcpy(&header, datagram, sizeof header);
-    const uint8_t *const after = datagram + sizeof header;
-    const size_t after_length = datagram_length - sizeof header;
+    if (header.field >= kCacheFieldCount) {
+        if (file >= 0)
+            close(file);
+        return;
+    }
 
     if (header.body == kCacheBodyIsInline) {
         if (file >= 0)
             close(file);
-        if (after_length < sizeof(uint32_t))
-            return;
-        uint32_t body_length = 0;
-        memcpy(&body_length, after, sizeof body_length);
-        if (after_length != sizeof body_length + header.key_length + body_length)
-            return;
-        stored(of_file, header, after + sizeof body_length,
-               (size_t) header.key_length + body_length);
+        stored(of_file, header, datagram + sizeof header, datagram_length - sizeof header);
         return;
     }
 
     if (file < 0)
         return;
     const off_t length = lseek(file, 0, SEEK_END);
-    if (length <= 0 || (size_t) length < header.key_length) {
+    if (length <= 0) {
         close(file);
         return;
     }

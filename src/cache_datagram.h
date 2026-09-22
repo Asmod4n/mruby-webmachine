@@ -9,17 +9,18 @@ extern "C" {
 enum { kCacheBodyIsInline = 0, kCacheBodyIsInAFile = 1 };
 
 typedef struct {
-    uint64_t key;
+    uint64_t route;
     uint32_t freshness_lifetime;
-    uint32_t key_length;
-    uint32_t body;
+    uint8_t field;
+    uint8_t body;
+    uint8_t unused[2];
 } cache_datagram_header;
 
 #ifdef __cplusplus
-static_assert(sizeof(cache_datagram_header) == 24, "a cache datagram header is 24 bytes");
+static_assert(sizeof(cache_datagram_header) == 16, "a cache datagram header is 16 bytes");
 static_assert(alignof(cache_datagram_header) == 8, "a cache datagram header aligns to eight");
 #else
-_Static_assert(sizeof(cache_datagram_header) == 24, "a cache datagram header is 24 bytes");
+_Static_assert(sizeof(cache_datagram_header) == 16, "a cache datagram header is 16 bytes");
 _Static_assert(__alignof__(cache_datagram_header) == 8,
                "a cache datagram header aligns to eight");
 #endif
