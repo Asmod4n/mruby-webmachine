@@ -242,6 +242,29 @@ static void emptied(struct writing *const of_file)
     committed(of_file);
 }
 
+static void forgotten_one(struct writing *const of_file, const uint64_t route,
+                          const uint8_t field)
+{
+    if (!putting(of_file))
+        return;
+    MDB_val key = {sizeof route, const_cast<uint64_t *>(&route)};
+    if (field == kCacheFieldBody) {
+        const int gone = mdb_del(of_file->putting, of_file->bodies, &key, nullptr);
+        if (gone != 0 && gone != MDB_NOTFOUND)
+            complain("mdb_del bodies", gone);
+    } else {
+        uint8_t wanted = field;
+        MDB_val standing = {sizeof wanted, &wanted};
+        if (mdb_cursor_get(of_file->walking, &key, &standing, MDB_GET_BOTH_RANGE) == 0 &&
+            standing.mv_size >= 1 &&
+            static_cast<const uint8_t *>(standing.mv_data)[0] == field)
+            mdb_cursor_del(of_file->walking, 0);
+    }
+    said_it_is_gone(of_file, route, field, kCacheInvalidated);
+    if (++of_file->put >= of_file->batch)
+        committed(of_file);
+}
+
 static bool still_due(struct writing *const of_file, const uint64_t route, const uint8_t field,
                       const uint64_t now)
 {
@@ -330,7 +353,8 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
     }
     cache_datagram_header header;
     memcpy(&header, datagram, sizeof header);
-    if (header.field >= kCacheFieldCount) {
+
+    if (header.forget == kCacheStores && header.field >= kCacheFieldCount) {
         if (file >= 0)
             close(file);
         return;
@@ -343,7 +367,14 @@ static void took(struct writing *const of_file, const uint8_t *const datagram,
         return;
     }
 
-    if (header.forget == kCacheForgets) {
+    if (header.forget == kCacheForgetsAValue) {
+        if (file >= 0)
+            close(file);
+        forgotten_one(of_file, header.route, header.field);
+        return;
+    }
+
+    if (header.forget == kCacheForgetsARoute) {
         if (file >= 0)
             close(file);
         forgotten(of_file, header.route);

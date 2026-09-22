@@ -1,4 +1,5 @@
 #include "cache.h"
+#include "cache_file.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -102,8 +103,10 @@ static bool app_name_is_a_token(const char *name)
     return true;
 }
 
-static char *file_of(const char *directory, const char *app_name)
+char *cache_file_of(const char *app_name, const char *directory)
 {
+    if (!app_name_is_a_token(app_name) || directory == NULL)
+        return NULL;
     const size_t directory_length = strlen(directory);
     const size_t name_length = strlen(app_name);
     char *const file = malloc(directory_length + 1 + name_length + 5);
@@ -118,9 +121,9 @@ static char *file_of(const char *directory, const char *app_name)
 
 cache *cache_open(const char *app_name, const char *directory, const unsigned readers)
 {
-    if (!app_name_is_a_token(app_name) || directory == NULL || readers == 0)
+    if (readers == 0)
         return NULL;
-    char *const file = file_of(directory, app_name);
+    char *const file = cache_file_of(app_name, directory);
     if (file == NULL)
         return NULL;
     cache *const of_app = calloc(1, sizeof *of_app);

@@ -12,6 +12,7 @@
 
 #include "../../src/cache.h"
 #include "../../src/cache_datagram.h"
+#include "../../src/cache_forget.h"
 
 extern char **environ;
 
@@ -77,20 +78,7 @@ static void hand_over_in_a_file(const int thread, const uint64_t of_route, const
     close(file);
 }
 
-static void hand_over_a_forgetting(const int thread, const uint64_t of_route)
-{
-    cache_datagram_header header = {};
-    header.route = of_route;
-    header.forget = kCacheForgets;
-    assert(send(mine[thread], &header, sizeof header, 0) == (ssize_t) sizeof header);
-}
-
-static void hand_over_an_emptying(const int thread)
-{
-    cache_datagram_header header = {};
-    header.forget = kCacheForgetsEverything;
-    assert(send(mine[thread], &header, sizeof header, 0) == (ssize_t) sizeof header);
-}
+static cache_forgetting *through_the_writer = nullptr;
 
 static uint64_t now_is()
 {
@@ -136,6 +124,9 @@ static pid_t the_writer_stands(char *const writer, char *const arm, int32_t *con
     int32_t standing = 0;
     assert(recv(mine[0], &standing, sizeof standing, 0) == (ssize_t) sizeof standing);
     *taken = standing;
+    cache_forgetting_closed(through_the_writer);
+    through_the_writer = cache_forgetting_through(mine[0]);
+    assert(through_the_writer != nullptr);
     return spawned;
 }
 
@@ -188,13 +179,17 @@ int main(int argc, char **argv)
                      reinterpret_cast<const uint8_t *>("200"), 3);
     hand_over_inline(1, one, kCacheFieldContentType, 0,
                      reinterpret_cast<const uint8_t *>("text/html"), 9);
+    hand_over_inline(1, one, kCacheFieldVary, 900,
+                     reinterpret_cast<const uint8_t *>("accept"), 6);
     hand_over_in_a_file(2, one, kCacheFieldBody, 900, large, sizeof large);
+    assert(cache_forget_value(through_the_writer, one, kCacheFieldVary));
+
     const char *const other = "/articles/7?param=abc&foo=bar";
     const uint64_t two =
         cache_key_of(reinterpret_cast<const uint8_t *>(other), strlen(other));
     hand_over_inline(0, two, kCacheFieldEntityTag, 900, tag, sizeof tag);
     hand_over_in_a_file(0, two, kCacheFieldBody, 900, large, sizeof large);
-    hand_over_a_forgetting(0, two);
+    assert(cache_forget_route(through_the_writer, two));
     printf("one route, three fields inline and a body of %zu bytes in a sealed memfd,\n"
            "and a second route stored whole and then forgotten\n",
            sizeof large);
@@ -245,6 +240,9 @@ int main(int argc, char **argv)
     assert(cache_asked(r, one, kCacheFieldLastModified, now).value == nullptr);
     printf("a field that was never stored is a miss, not the next one along\n");
 
+    assert(cache_asked(r, one, kCacheFieldVary, now).value == nullptr);
+    printf("one value can be dropped on its own, and only it\n");
+
     cache_answer b = cache_body_asked(r, one, now);
     assert(b.value != nullptr);
     assert(b.length == sizeof large);
@@ -274,7 +272,7 @@ int main(int argc, char **argv)
     const uint64_t three =
         cache_key_of(reinterpret_cast<const uint8_t *>(third), strlen(third));
     hand_over_inline(0, three, kCacheFieldEntityTag, 900, tag, sizeof tag);
-    hand_over_an_emptying(1);
+    assert(cache_forget_everything(through_the_writer));
     printf("a second writer stored one more route and was told to empty everything\n");
 
     bool heard_the_emptying = false;
@@ -301,6 +299,42 @@ int main(int argc, char **argv)
     printf("emptying takes everything, the route it never heard of as much as the new one\n");
     cache_reader_closed(then);
     cache_close(after);
+
+    spawned = the_writer_stands(writer, arm, &standing);
+    assert(standing > 0);
+    hand_over_inline(0, three, kCacheFieldEntityTag, 900, tag, sizeof tag);
+    hand_over_inline(0, three, kCacheFieldStatus, 900,
+                     reinterpret_cast<const uint8_t *>("200"), 3);
+    hand_over_in_a_file(1, three, kCacheFieldBody, 900, large, sizeof large);
+    the_writer_left(spawned);
+    cache_forgetting_closed(through_the_writer);
+    through_the_writer = nullptr;
+    printf("a third writer filled one route and left, so nothing is running now\n");
+
+    cache_forgetting *const alone = cache_forgetting_on("wm-whole", "/tmp");
+    assert(alone != nullptr);
+    assert(cache_forget_value(alone, three, kCacheFieldStatus));
+    assert(cache_forget_value(alone, three, kCacheFieldBody));
+
+    cache *const without = cache_open("wm-whole", "/tmp", 64);
+    assert(without != nullptr);
+    cache_reader *const only = cache_reader_opened(without);
+    assert(only != nullptr);
+    const uint64_t by_now = now_is();
+    assert(cache_asked(only, three, kCacheFieldStatus, by_now).value == nullptr);
+    assert(cache_body_asked(only, three, by_now).value == nullptr);
+    cache_answer kept = cache_asked(only, three, kCacheFieldEntityTag, by_now);
+    assert(kept.value != nullptr && kept.length == sizeof tag);
+    printf("with no writer anywhere, the library drops a value and a body itself\n");
+    cache_sent(only, kept.snapshot);
+
+    assert(cache_forget_everything(alone));
+    assert(cache_changed(only));
+    assert(cache_asked(only, three, kCacheFieldEntityTag, by_now).value == nullptr);
+    printf("and empties the whole of it, which the reader sees on its next snapshot\n");
+    cache_reader_closed(only);
+    cache_close(without);
+    cache_forgetting_closed(alone);
 
     printf("ok\n");
     return 0;

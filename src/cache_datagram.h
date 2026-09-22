@@ -8,7 +8,12 @@ extern "C" {
 
 enum { kCacheBodyIsInline = 0, kCacheBodyIsInAFile = 1 };
 
-enum { kCacheStores = 0, kCacheForgets = 1, kCacheForgetsEverything = 2 };
+enum {
+    kCacheStores = 0,
+    kCacheForgetsARoute = 1,
+    kCacheForgetsEverything = 2,
+    kCacheForgetsAValue = 3,
+};
 
 typedef struct {
     uint64_t route;
