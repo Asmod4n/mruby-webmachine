@@ -31,6 +31,13 @@ struct FieldToSend {
     std::string_view field_value;
 };
 
+struct Raised {
+    std::string_view callback;
+    std::string_view klass;
+    std::string_view message;
+    std::span<const std::string_view> backtrace;
+};
+
 class Resource
 {
   public:
@@ -171,13 +178,16 @@ class Resource
     virtual void finish_request(const http1::Request &) const
     {
     }
-    virtual void handle_exception(const http::Refusal) const
-    {
-    }
     virtual std::optional<bool> validate_content_checksum(const http1::Request &) const
     {
         return {};
     }
+};
+
+class ErrorResource : public Resource
+{
+  public:
+    virtual std::string_view handle_exception(const Raised &) const = 0;
 };
 
 } // namespace webmachine
