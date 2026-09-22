@@ -112,8 +112,8 @@ int main(int argc, char **argv)
     snprintf(batch, sizeof batch, "%d", 2);
     snprintf(budget, sizeof budget, "%llu", (unsigned long long) (512ull << 20));
     char *const writer = argc > 1 ? argv[1] : const_cast<char *>("./webmachine-cache");
-    char *child[] = {writer,  const_cast<char *>(file), threads, map,
-                     readers, batch,                   budget,  nullptr};
+    char *child[] = {writer, const_cast<char *>(file), threads, map, readers, batch, budget,
+                     argc > 2 ? argv[2] : nullptr, nullptr};
     pid_t spawned = 0;
     assert(posix_spawn(&spawned, writer, &actions, nullptr, child, environ) == 0);
     posix_spawn_file_actions_destroy(&actions);

@@ -18,6 +18,7 @@ task cache: MRUBY_DIR do
   check = File.join(bin, 'webmachine-cache-check')
   [writer, check].each { |one| raise "#{one} is not built" unless File.exist?(one) }
   sh "#{check} #{writer}"
+  sh "#{check} #{writer} engine"
 end
 
 require 'digest'

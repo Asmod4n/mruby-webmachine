@@ -8,6 +8,7 @@
 
 #include <liburing.h>
 #include <lmdb.h>
+#include <slipstream_syscall.h>
 
 #include "../../src/cache_datagram.h"
 
@@ -172,9 +173,9 @@ static void armed(struct io_uring *const ring, const int fd, struct msghdr *cons
 
 int main(int argc, char **argv)
 {
-    if (argc != 7) {
+    if (argc != 7 && argc != 8) {
         fprintf(stderr, "usage: webmachine-cache <file> <connections> <map bytes> <readers> "
-                        "<batch> <buffer bytes>\n");
+                        "<batch> <buffer bytes> [engine]\n");
         return 2;
     }
     const char *const file = argv[1];
@@ -183,6 +184,8 @@ int main(int argc, char **argv)
     const unsigned readers = (unsigned) strtoul(argv[4], nullptr, 10);
     const unsigned batch = (unsigned) strtoul(argv[5], nullptr, 10);
     const size_t buffer_budget = strtoull(argv[6], nullptr, 10);
+    if (argc == 8 && strcmp(argv[7], "engine") == 0)
+        slipstream_syscall_set_engine(1);
     if (connections <= 0 || map_bytes == 0 || readers == 0 || batch == 0 || buffer_budget == 0) {
         fprintf(stderr, "webmachine-cache: every argument counts, and none may be zero\n");
         return 2;
@@ -214,8 +217,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
         return left_with(begun);
     }
-    fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions\n", buffer_count,
-            buffer_bytes, buffer_count * 2);
+    fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions, io through %s\n",
+            buffer_count, buffer_bytes, buffer_count * 2,
+            slipstream_syscall_uses_engine() ? "the engine" : "the kernel");
 
     int trouble = 0;
     struct io_uring_buf_ring *const buffers =
