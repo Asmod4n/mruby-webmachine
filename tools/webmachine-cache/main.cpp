@@ -31,6 +31,17 @@ struct writing {
     unsigned batch;
 };
 
+static void said_to_the_parent(const int32_t answer)
+{
+    send(kFirstFd, &answer, sizeof answer, 0);
+}
+
+static int left_with(const int trouble)
+{
+    said_to_the_parent(trouble < 0 ? trouble : -trouble);
+    return 1;
+}
+
 static void complain(const char *const what, const int status)
 {
     fprintf(stderr, "webmachine-cache: %s: %s\n", what, mdb_strerror(status));
@@ -179,7 +190,7 @@ int main(int argc, char **argv)
 
     struct writing of_file = {};
     if (!opened(&of_file, file, map_bytes, readers, batch))
-        return 1;
+        return left_with(EIO);
 
     int given = 0;
     socklen_t asked = sizeof given;
@@ -192,7 +203,7 @@ int main(int argc, char **argv)
     if (buffers_wanted < 2) {
         fprintf(stderr, "webmachine-cache: %zu bytes of buffer holds fewer than two of %zu\n",
                 buffer_budget, buffer_bytes);
-        return 2;
+        return left_with(ERANGE);
     }
     const unsigned buffer_count = no_more_than_a_power_of_two(buffers_wanted, kMostRingEntries);
     const unsigned buffer_mask = buffer_count - 1;
@@ -201,7 +212,7 @@ int main(int argc, char **argv)
     const int begun = io_uring_queue_init(buffer_count, &ring, 0);
     if (begun < 0) {
         fprintf(stderr, "webmachine-cache: io_uring_queue_init: %s\n", strerror(-begun));
-        return 1;
+        return left_with(begun);
     }
     fprintf(stderr, "webmachine-cache: %u buffers of %zu bytes, %u completions\n", buffer_count,
             buffer_bytes, buffer_count * 2);
@@ -211,11 +222,11 @@ int main(int argc, char **argv)
         io_uring_setup_buf_ring(&ring, buffer_count, kBufferGroup, 0, &trouble);
     if (buffers == nullptr) {
         fprintf(stderr, "webmachine-cache: io_uring_setup_buf_ring: %s\n", strerror(-trouble));
-        return 1;
+        return left_with(trouble);
     }
     uint8_t *const room = static_cast<uint8_t *>(malloc(buffer_bytes * buffer_count));
     if (room == nullptr)
-        return 1;
+        return left_with(ENOMEM);
     for (unsigned at = 0; at < buffer_count; at++)
         io_uring_buf_ring_add(buffers, room + at * buffer_bytes, (unsigned) buffer_bytes, at,
                               (int) buffer_mask, (int) at);
@@ -227,6 +238,7 @@ int main(int argc, char **argv)
     for (int at = 0; at < connections; at++)
         armed(&ring, kFirstFd + at, &shape);
     io_uring_submit(&ring);
+    said_to_the_parent((int32_t) given);
 
     int open_connections = connections;
     while (open_connections > 0) {

@@ -99,12 +99,6 @@ int main(int argc, char **argv)
         close(pair[1]);
     }
 
-    int given = 0;
-    socklen_t asked = sizeof given;
-    assert(getsockopt(mine[0], SOL_SOCKET, SO_SNDBUF, &given, &asked) == 0);
-    inline_limit = (size_t) given - sizeof(cache_datagram_header) - sizeof(uint32_t) - 256;
-    printf("the socket gave %d bytes, so %zu of body goes inline\n", given, inline_limit);
-
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     for (int at = 0; at < kThreads; at++)
@@ -126,6 +120,16 @@ int main(int argc, char **argv)
     for (int at = 0; at < kThreads; at++)
         close(theirs[at]);
     printf("the server spawned the writer and kept one socket per thread\n");
+
+    int32_t standing = 0;
+    assert(recv(mine[0], &standing, sizeof standing, 0) == (ssize_t) sizeof standing);
+    if (standing < 0) {
+        fprintf(stderr, "the writer could not start: %s\n", strerror(-standing));
+        return 1;
+    }
+    inline_limit = (size_t) standing - sizeof(cache_datagram_header) - sizeof(uint32_t) - 256;
+    printf("the writer stands and takes %d bytes, so %zu of body goes inline\n", standing,
+           inline_limit);
 
     static uint8_t small[64];
     memset(small, 'a', sizeof small);
