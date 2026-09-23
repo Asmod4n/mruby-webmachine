@@ -72,6 +72,7 @@ inline constexpr uint32_t kListeners = 4;
 inline constexpr uint32_t kAnswerBytes = 16384;
 inline constexpr uint32_t kPiecesMost = 16;
 inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
+inline constexpr size_t kBufferRoomLeast = 512;
 
 class Ring
 {
@@ -170,7 +171,6 @@ class Ring
                                   kBufferBytes, static_cast<uint16_t>(at), mask,
                                   static_cast<int>(at));
         io_uring_buf_ring_advance(buffers_, kBufferCount);
-        buf_tail_ = kBufferCount;
         return 0;
     }
 
@@ -340,6 +340,8 @@ class Ring
         uint32_t helds;
         bool sending;
         bool closing;
+        uint16_t bid;
+        bool holds_bid;
         uint8_t *room;
         iovec piece[kPiecesMost];
         const void *held[kHeldMost];
@@ -372,18 +374,29 @@ class Ring
 
     void given_back()
     {
-        if (replenish_ == 0)
+        if (returned_count_ == 0)
             return;
         const int mask = io_uring_buf_ring_mask(kBufferCount);
-        for (uint32_t at = 0; at < replenish_; at++) {
-            const uint32_t which = (buf_tail_ + at) & static_cast<uint32_t>(mask);
-            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes,
-                                  kBufferBytes, static_cast<uint16_t>(which), mask,
-                                  static_cast<int>(at));
+        for (uint32_t at = 0; at < returned_count_; at++) {
+            const uint16_t which = returned_[at];
+            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes, kBufferBytes, which,
+                                  mask, static_cast<int>(at));
         }
-        io_uring_buf_ring_advance(buffers_, static_cast<int>(replenish_));
-        buf_tail_ += replenish_;
-        replenish_ = 0;
+        io_uring_buf_ring_advance(buffers_, static_cast<int>(returned_count_));
+        returned_count_ = 0;
+    }
+
+    void buffer_returned(const uint16_t which)
+    {
+        returned_[returned_count_++] = which;
+    }
+
+    void bid_given_back(Owed &owed)
+    {
+        if (!owed.holds_bid)
+            return;
+        buffer_returned(owed.bid);
+        owed.holds_bid = false;
     }
 
     unsigned sends(const uint32_t slot)
@@ -459,6 +472,7 @@ class Ring
         } else {
             all_released(owed, released);
             room_given_back(owed);
+            bid_given_back(owed);
             owed = Owed{};
         }
         io_uring_sqe *const sqe = room_for_one_more();
@@ -510,21 +524,29 @@ class Ring
             const size_t took_bytes = static_cast<size_t>(cqe->res);
             const size_t from = static_cast<size_t>(which) * kBufferBytes;
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
-            replenish_ += static_cast<uint32_t>((took_bytes + kBufferBytes - 1) / kBufferBytes);
-            if (from + took_bytes > pool)
+            if (from + took_bytes > pool) {
+                buffer_returned(static_cast<uint16_t>(which));
                 return armed + closes(slot, released);
+            }
             Owed &owed = owed_[slot];
-            if (owed.closing)
+            if (owed.closing) {
+                buffer_returned(static_cast<uint16_t>(which));
                 return armed;
-            if (owed.room == nullptr)
+            }
+            const bool in_the_buffer = owed.room == nullptr && !owed.holds_bid && !owed.sending &&
+                                       owed.first == owed.pieces && kBufferBytes - took_bytes >= kBufferRoomLeast;
+            if (!in_the_buffer && owed.room == nullptr) {
                 owed.room = room_taken();
-            if (owed.room == nullptr) [[unlikely]]
-                return armed + closes(slot, released);
-            uint8_t *const into = owed.room;
+                if (owed.room == nullptr) [[unlikely]] {
+                    buffer_returned(static_cast<uint16_t>(which));
+                    return armed + closes(slot, released);
+                }
+            }
+            uint8_t *const into = in_the_buffer ? room_ + from + took_bytes : owed.room;
+            const size_t area = in_the_buffer ? kBufferBytes - took_bytes : kAnswerBytes;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
-            while (!left.empty() && owed.filled < kAnswerBytes && owed.pieces + 2 <= kPiecesMost &&
-                   owed.helds < kHeldMost) {
-                const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), kAnswerBytes - owed.filled);
+            while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
+                const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
                 const Answered said = answering(left, room);
                 if (said.held != nullptr)
                     owed.held[owed.helds++] = said.held;
@@ -538,6 +560,12 @@ class Ring
                              said.body.size());
                 left.remove_prefix(said.taken);
             }
+            if (in_the_buffer && owed.first != owed.pieces) {
+                owed.bid = static_cast<uint16_t>(which);
+                owed.holds_bid = true;
+            } else {
+                buffer_returned(static_cast<uint16_t>(which));
+            }
             armed += sends(slot);
             if ((cqe->flags & IORING_CQE_F_MORE) == 0)
                 armed += receives(slot);
@@ -549,6 +577,7 @@ class Ring
             if (owed.closing) {
                 all_released(owed, released);
                 room_given_back(owed);
+                bid_given_back(owed);
                 owed = Owed{};
                 return armed;
             }
@@ -569,6 +598,7 @@ class Ring
             if (owed.first == owed.pieces) {
                 all_released(owed, released);
                 room_given_back(owed);
+                bid_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
             } else {
@@ -590,8 +620,8 @@ class Ring
     uint8_t **free_rooms_ = nullptr;
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
-    uint32_t buf_tail_ = 0;
-    uint32_t replenish_ = 0;
+    uint16_t returned_[kBufferCount] = {};
+    uint32_t returned_count_ = 0;
     Owed *owed_ = nullptr;
     bool bundles_ = false;
     unsigned entries_ = 0;
