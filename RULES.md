@@ -107,8 +107,7 @@ that POSIX, C or C++ already have under another name: a pointer and a
 length are a `std::span`, a `std::string_view` or an `iovec`, a time is
 a `timespec` or a `std::chrono` type. Where a SIMD form is measured
 faster, it stays, and the standard library form is its fallback: never
-a second hand-written loop beside it. This holds in every
-repository a session works in, and a speed number does not buy an
+a second hand-written loop beside it. A speed number does not buy an
 exception: a faster hand-made form goes to the owner as a question,
 with the measurement, before it is written.
 
@@ -130,11 +129,8 @@ never with `[]`.
 
 In a `constexpr` context an index outside the bounds becomes a
 compiler error, because a throw is not a constant expression. At run
-time it costs nothing where the type already proves the bound: gcc
-emits the same four instructions for
-`table.at(static_cast<unsigned char>(c))` and for
-`table[static_cast<unsigned char>(c)]`, measured with `objdump` on
-`-O3 -march=x86-64-v3`.
+time it costs nothing where the type already proves the bound, and
+`objdump` on the binary shows it.
 
 ## Kernighan and Ritchie
 
@@ -241,13 +237,13 @@ NEON at once, with the standard library form as the third branch. AVX2
 and NEON are the floor of what such code may use.
 
 The NEON form is tested under qemu: built for aarch64 by clang with
-`--target=aarch64-linux-gnu`, because no signed package gives a g++ 16
-for aarch64 on this distribution, and run with `qemu-aarch64-static -L /usr/aarch64-linux-gnu`. The same
-test that holds the x86 forms to the standard library form holds the
-NEON form to it. A NEON form that no test has run is not written. qemu
-answers whether the form is right, never how fast it is: a time read
-under qemu is not a measurement, and the NEON speed stays unmeasured
-until an aarch64 machine reads it.
+`--target=aarch64-linux-gnu` and run with
+`qemu-aarch64-static -L /usr/aarch64-linux-gnu`. The same test that
+holds the x86 forms to the standard library form holds the NEON form to
+it. A NEON form that no test has run is not written. qemu answers
+whether the form is right, never how fast it is: a time read under
+qemu is not a measurement, and the NEON speed stays unmeasured until an
+aarch64 machine reads it.
 
 AVX-512 is allowed on top of that where the machine has it (`avx512f`,
 `avx512bw`, `avx512vl`) and the measurement says it is faster. The
@@ -258,22 +254,22 @@ form stay below it as its fallbacks.
 
 A comparison runs in each permutation of:
 
-- the compiler: g++ and clang, each the newest release;
-- the level: `-Os` and `-O2`; `-O3` lost too often to stay a column;
+- the compiler: g++ and clang, each the newest;
+- the level: `-Os` and `-O2`;
 - the instruction set: `-march=x86-64-v4`.
 
 That is four binaries for each kind of test, and one table with a column
-for each. x86-64-v3 is no longer a column: the owner took it out. An arm
-that one of them does not compile is a cell in that table with the
-error, and is never left out without a word. An arm is chosen only when
-it is the faster one across the table, not in one column.
+for each. An arm that one of them does not compile is a cell in that
+table with the error, and is never left out without a word. An arm is
+chosen only when it is the faster one across the table, not in one
+column.
 
 The compilers are signed packages from an apt source, and nothing else:
-apt.llvm.org for clang, the ubuntu-toolchain-r PPA for g++. A compiler
-is never built here. The newest of each that such a source has is the
-default: `gcc`, `g++`, `cc` and `c++` name g++ 16, which has the
+apt.llvm.org for clang, and for g++ whichever apt source has the newest.
+A compiler is never built here. The newest of each is the default:
+`gcc`, `g++`, `cc` and `c++` name the newest g++, which has the
 reflection this tree needs, and `clang` and `clang++` name the newest
-clang. clang builds against the libstdc++ of g++ 16: the Google
+clang. clang builds against the libstdc++ of that g++: the Google
 Benchmark package is built against libstdc++, and a binary built against
 libc++ does not link with it, because libc++ names its types
 `std::__1::`.
@@ -372,24 +368,20 @@ Every function that reads a grammar takes one `std::string_view` and
 reads it to the end. None of them holds a state between calls, and
 none of them can stop in the middle and go on later.
 
-This works because of what stands in front of them. picohttpparser
-reports a header only when the whole field is in the buffer, and HPACK
-gives back whole fields as well. So a field value is contiguous in
-memory by the time a parser sees it.
+This holds because of what stands in front of them: the layer that
+reads bytes hands a parser a field only when the whole field is in the
+buffer, so a field value is contiguous in memory by the time a parser
+sees it.
 
-That is a condition, not a fact of HTTP. A server that reads bytes and
-parses them as they arrive needs a state machine that can stop between
-two bytes, which is what llhttp and Boost.Beast are. If the layer in
-front of these parsers ever changes so that a field value can arrive in
-two pieces, this shape is wrong, and the answer is a state machine and
-not a patch.
+That is a condition, not a fact of HTTP. If the layer in front ever
+changes so that a field value can arrive in two pieces, this shape is
+wrong, and the answer is a state machine and not a patch.
 
 ## Each part does one thing, and the others do not know how
 
-A module owns the types of its dependency and shows them to nobody.
-The HTTP/1.1 part owns picohttpparser, the HTTP/2 part owns ls-hpack,
-the compression part owns zlib. A type from a dependency does not
-appear in the declaration of another part.
+A module owns the types of its dependency and shows them to nobody. A
+type from a dependency does not appear in the declaration of another
+part.
 
 The reason is that one part must change inside without a second part
 changing with it.
@@ -403,17 +395,9 @@ back, and add nothing of their own. The decision graph reads a request
 and makes a response, and it cannot see which version carried them.
 
 No version knows another. `Http2` never names `Http1`, and the state of
-one version never stands in the header of another. This is the rule the
-archive broke, and it is why this tree exists: there, HTTP/2's stream
-and connection state were declared in HTTP/1.1's header, and the file
-that frames HTTP/2 defined methods of the HTTP/1.1 class. Two versions
-with one name.
+one version never stands in the header of another.
 
-What follows from that is the whole reason for the split. Anything a
-version answers by itself exists in that version alone: the archive
-serves its docroot from a method of the HTTP/1.1 class, so a request
-over HTTP/2 is never served from disk. Not because somebody forgot it,
-but because there was no HTTP/2 for it to live in.
+Anything a version answers by itself exists in that version alone.
 
 The check is mechanical and belongs in the suite: a grep for one
 version's name in another version's files finds nothing.
@@ -458,18 +442,13 @@ seeing which language gave them.
 
 So the callbacks are a C++ interface that a Ruby binding implements, and
 not an mruby shape that C++ has to imitate. A request answered by the
-C++ application makes no Ruby object at all, and the archive answers
-those from its konst tier without entering a VM. No type here may assume
-a VM, and nothing is built because Ruby might ask for it later.
+C++ application makes no Ruby object at all. No type here may assume a
+VM, and nothing is built because Ruby might ask for it later.
 
-That is also why a shape this tree invents may not stand where
-webmachine has one. Two did and are gone: a Representation that bundled
-a media type, a coding, a language and an entity tag, where webmachine
-picks four values from four separate callbacks and bundles nothing; and
-a Resource holding a function pointer, where a callback is answered by
-whoever has an answer. Inside, `Http` keeps the words RFC 9110 uses - a
-status is a status and not a code - because that is where the RFC is the
-specification. The line is what the author sees.
+A shape this tree invents may not stand where webmachine has one.
+Inside, `Http` keeps the words RFC 9110 uses - a status is a status and
+not a code - because that is where the RFC is the specification. The
+line is what the author sees.
 
 ## A name claims nothing that does not happen
 
@@ -519,41 +498,15 @@ that wants to connect needs the number. The host, because `0.0.0.0` and
 listener with TLS is `https` whatever the configuration said. A unix
 listener reads back `unix://` and its path.
 
-The archive had half of this and the half was wrong. It read the port
-back from the kernel only where the ask was port 0, and it built the
-string from what the operator had typed, with `"http://"` in front of
-it - so an https listener read back an http URL, and nothing in the
-suite asked. A value that is right in one of two cases is worse than one
-that is always computed: the reader cannot tell which case they are in.
-
 `getsockname` comes through the ring
 (`io_uring_prep_cmd_getsockname`). A kernel that cannot do it is a
 kernel this server does not run on, and the refusal says so at boot.
 
-`conf.url = "http://0.0.0.0:0"` is a valid ask and the one this exists
-for. What ada makes of the forms an operator writes was measured
-against the vendored copy, and one row of it is a trap:
-
-| written | `get_protocol` | `get_hostname` | `get_port` | `get_pathname` |
-|---|---|---|---|---|
-| `http://0.0.0.0:0` | `http:` | `0.0.0.0` | `0` | `/` |
-| `http://0.0.0.0:80` | `http:` | `0.0.0.0` | *empty* | `/` |
-| `https://0.0.0.0:443` | `https:` | `0.0.0.0` | *empty* | `/` |
-| `http://0.0.0.0` | `http:` | `0.0.0.0` | *empty* | `/` |
-| `http://[::]:0` | `http:` | `[::]` | `0` | `/` |
-| `unix:///run/a.sock` | `unix:` | *empty* | *empty* | `/run/a.sock` |
-| `unix://relative.sock` | `unix:` | `relative.sock` | *empty* | *empty* |
-| `http://0.0.0.0:65536` | refused by ada | | | |
-
-An empty port is not port 0. ada drops the port that is the scheme's
-default and keeps every other, so an empty `get_port()` means 80 under
-http and 443 under https, and `"0"` means the kernel chooses. Code that
-reads the empty string as a zero binds an ephemeral port where the
-operator wrote 80.
-
-Two more the table states. `:080` and `:00` come back normalized, so
-the digits are ada's to check and the range as well - 65536 never
-arrives here. And a `unix://` URL with no third slash makes a host and
+ada reads the URL the operator wrote. An empty port from ada is not
+port 0: ada drops the port that is the scheme's default and keeps every
+other, so an empty `get_port()` means 80 under http and 443 under https,
+and `"0"` means the kernel chooses. The digits and the range of the port
+are ada's to check. A `unix://` URL with no third slash makes a host and
 no path, which names no socket and is refused with the path it did not
 have.
 
@@ -583,77 +536,17 @@ the listener bound, `IFF_UP` and `IFF_RUNNING`, and nothing else is
 dropped - the loopback address belongs in the list, because a test
 connects to it.
 
-This tree writes `getifaddrs` and slipstreamIO carries it to the
-platforms that have none. That is what slipstreamIO is: it gives every
-platform the Linux shape of a thing, and the shape is the whole point -
-`slipstream_inotify` is inotify's three calls, its mask bits and its
-record; `slipstream_signal` is signalfd's descriptor; `slipstream_tmpfile`
-is `O_TMPFILE` where it exists and `mkstemp` plus `unlink` where it does
-not. Addresses go the same way, and the underside on Windows is
-`GetAdaptersAddresses`. At 53ee540 the gem carries no such header yet -
-`grep -i ifaddr` over it finds nothing - so the call is written against
-`getifaddrs` and the seam moves under it, the way the twelve `__sys_*`
-wrappers already move under liburing.
-
-Measured here, and this machine has no IPv6 at all, so the rows that
-carry one are not measured and are not claimed:
-
-    lo    ipv4 127.0.0.1  scope_id=0 up=1 running=1 loopback=1
-    eth0  ipv4 192.0.2.2  scope_id=0 up=1 running=1 loopback=0
-
 An IPv6 link-local address carries a zone, and a URL that holds one is
 RFC 6874: `http://[fe80::1%25eth0]:8080`, with the "%" written "%25".
-RFC 3986 allows no zone inside an IP-literal, which is why RFC 6874
-exists and why a browser refuses such a URL where curl takes it. The RFC
-is not in `refs/` yet; it arrives in the commit of the first function
-that reads it.
 
-The list is true when `ready` runs. An address that arrives later - DHCP,
-an interface that comes up, a laptop that leaves one network for another
-- is not in it. That is a snapshot, and it is what this tree has today.
-
-Every platform can say when the list changed, and each says it in
-another shape. This is written down because the shape decides what
-slipstreamIO has to build, and one of the three already fits the ring:
-
-- **Linux.** A netlink socket, bound to `RTNLGRP_IPV4_IFADDR` and
-  `RTNLGRP_IPV6_IFADDR`. It is a descriptor, so it is a read the ring
-  carries like any other.
-- **Windows.** `WSAIoctl` with `SIO_ADDRESS_LIST_CHANGE`, which the
-  documentation says to issue overlapped because it blocks. It completes
-  when the address list of that socket's family changes, exactly once,
-  and the application reissues it for the next change; then
-  `SIO_ADDRESS_LIST_QUERY` reads the new list. An overlapped operation
-  that completes later is a ring submission in every way that matters.
-  The nearby error constants, `WSAENETUNREACH` and `WSAENETDOWN`, belong
-  to `SIO_ROUTING_INTERFACE_CHANGE` losing its way, not to this.
-- **Apple.** `nw_path_monitor` of the Network framework, macOS 10.14 and
-  later, which calls a handler on a dispatch queue and carries the
-  available interfaces in the path. It is a callback, so slipstreamIO has
-  to give it a descriptor, the way it gives signals one.
-
-Read from the documentation of the first two; the Apple page did not
-render here and its rows come from the search summary, so they are
-weaker than the others and are marked as such.
-
-An operator who says "serve on every interface" does not want to restart
-the service when an interface arrives. That is the requirement, and half
-of it is already met by the kernel. Measured here:
-
-    bound 0.0.0.0:41101 and listening, before the address exists
-    10.99.0.1 added on lo:9 after bind and listen
-    accepted from 10.99.0.1:59556
-
-A wildcard socket serves an address that did not exist when `bind` and
-`listen` ran. Nothing re-binds, nothing restarts, and this tree does
-nothing for it. What goes stale is only what was reported: `app.urls`.
-So the netlink socket exists to keep a list true, not to keep the server
-reachable, and that is a much smaller thing than it first looked.
+The list is true when `ready` runs. An address that arrives later is
+not in it. A wildcard socket serves an address that did not exist when
+`bind` and `listen` ran, so nothing re-binds and nothing restarts. What
+goes stale is only what was reported: `app.urls`.
 
 Where the ask names one address, the kernel refuses an address the
-machine does not have - `bind 192.0.2.77: [Errno 99] Cannot assign
-requested address` - and that refusal stands. An operator who named one
-address asked for one address.
+machine does not have, and that refusal stands. An operator who named
+one address asked for one address.
 
 An application hears about a change through a second hook, and the hook
 says which of three things happened:
@@ -677,11 +570,9 @@ or loses an address is `:changed`. An interface that goes away is
 with no URLs, because it is present and carries nothing - saying
 `:removed` for it would make two different states read the same.
 
-One change is one call. Netlink delivers a burst when an interface comes
-up - the link, then every address on it - and an application that hears
-four calls for one event has to decide which of them was real. So the
-reactor reads everything the socket has, recomputes the list once, and
-calls the hook once for each interface that differs. Decide, then do.
+One change is one call. The reactor reads everything the socket has,
+recomputes the list once, and calls the hook once for each interface
+that differs. Decide, then do.
 
 The block runs in the reactor's VM, between requests, the way every
 other Ruby callback here does. A block that blocks stops the server, and
@@ -692,36 +583,7 @@ one.
 
 ## Strict where it decides, lax where it only picks a status
 
-An open question, with what is measured about it so far, so that the day
-it is answered nobody starts from zero.
-
-The archive read a media type with no grammar at all: the base is
-everything before the first ";", trimmed. `parse_media_type` reads the
-same bytes as `token "/" token`, and measured in one binary that costs
-about 3.4 ns more on a type of this length.
-
-Those 3.4 ns are not a trade anyone has to weigh, because the archive's
-reader is not a candidate. It hands back `"utf-8"` with its quotes and
-compares byte for byte, so it reads as different the two spellings RFC
-9110 5.6.6 calls equal. What the 3.4 ns buy is a grammar and one
-spelling of a value.
-
-Two shapes were tried against the 3.4 ns and both lost. A wide scan that
-returns the first byte that is not tchar - the nibble mask plus
-`countr_zero`, so the end of the token and the grammar check are one
-answer - read 11.1 ns. Splitting with `memchr` and then checking the run
-with one wide pass read 17.7 ns, worse than everything. A token here is
-4 to 12 bytes, and on a run that short one scalar pass beats several
-vectorized ones: the table setup costs more than the bytes it reads.
-Neither shape is in the tree.
-
-What the numbers do not settle is where a refusal belongs. A refusal is
-cheap when it runs once over the whole buffer and is not repeated per
-field: the classifier reads 120 bytes in 6.75 ns and 8000 in 267, so a
-600 byte header section is about one pass of 35 ns for every field at
-once. Against that stands 3 ns for each field read strictly.
-
-So laxness is a choice per field, and the line is what a wrong answer
+Laxness is a choice per field, and the line is what a wrong answer
 costs:
 
 - **Strict, always.** The value becomes a file name; it decides framing
@@ -736,96 +598,14 @@ costs:
 
 The precondition for laxness is that the bytes which are dangerous
 everywhere - CR, LF, NUL, the control bytes - are refused before any
-field parser runs lax, and picohttpparser refuses them. Not only off the
-wire: `phr_is_field_name` and `phr_is_field_value` are there so that
-what HPACK and QPACK hand over is held to the same definition, which is
-what RFC 9113 8.2.1 asks of an HTTP/2 recipient. Nothing of ours stands
-in front of that or beside it.
+field parser runs lax. That holds for every version: what HPACK and
+QPACK hand over is held to the same definition, which is what RFC 9113
+8.2.1 asks of an HTTP/2 recipient.
 
-One shape was tried against that question. Read the field value once and
-keep the structure in a register: a 32 byte block gives two masks from
-one load - where the structural bytes of RFC 9110 5.6 stand (`/ ; = , "`)
-and where a tchar stands - and then the parse walks the first mask with
-`countr_zero`, while "is this run a token" is a bit test on the second.
-
-One input of 23 bytes, four arms, one binary, medians of five:
-
-| | |
-|---|---|
-| the archive's way: lax, several passes | 34.3 ns |
-| this tree today: strict, several passes | 41.6 ns |
-| one pass, lax | 28.7 ns |
-| one pass, strict from the masks | **27.1 ns** |
-
-So strictness is not what costs. The passes are. Where a value is read at
-all, reading it once makes the grammar free: it is cheaper than the lax
-reader that walks the bytes four times, and it refuses what that one
-waves through.
-
-Then the same idea was put to a whole request, and there it dies. A
-request from Chrome is 416 bytes of header block. One pass over all of
-it, both masks, is 33.9 ns. What the request actually costs to read is
-this:
-
-| what the graph asks for | |
-|---|---|
-| a plain GET: the Host that routed it, and nothing else | 12.6 ns |
-| a conditional GET: Host, the If-None-Match list, If-Modified-Since | 49.1 ns |
-| a negotiated GET: Host and Accept with its media types and q | 80.9 ns |
-| every field of the request read | 415.9 ns |
-
-The last row is the one nobody pays. This server looks at what it needs:
-the graph walks on facts, and a fact is "is there an If-None-Match", not
-what stands inside it; a value is read where a node needs it, and a Ruby
-object is made where a resource asks for it. That is the archive's
-`ReqFacts` - a struct of bools - and its `body_io_` memo, one object per
-run, built on the first ask.
-
-So a pass over the whole block pays for the 300 bytes of User-Agent and
-sec-ch-ua that nobody reads, and for a plain GET it costs two and a half
-times the whole parse. The premise of a whole-block lexer is that the
-bytes get read anyway. They do not.
-
-What survives is the narrow form: stay lazy, and read a value in one
-pass on the day something asks for it.
-
-Three things the spike does not settle, for the day it is built. It
-covers a value of 32 bytes or less and falls back above that, and a block
-loop needs the bit test to cross a block. It leans on picohttpparser
-having refused every control byte already, which holds for every version
-because phr_is_field_value is asked for the ones that arrive out of a
-dynamic table. And it had a bug the
-numbers would have carried: RFC 9110 5.6.6 allows OWS around the
-semicolon, the spike read the space as part of the parameter name, and
-`text/html; charset=utf-8` - which the tree reads correctly today - was
-refused. A check caught it before the row was believed.
-
-The line between strict and lax stays written down, because it answers a
-different question - what a wrong answer costs, not what it saves.
-
-## is_token exists twice on purpose, and a test holds the two together
-
-picohttpparser already answers what a field name is, in
-`phr_is_field_name` and `phr_is_lowercase_field_name`, and this tree
-keeps `is_token` and `is_lowercase_token` beside them anyway. Measured in
-one binary, medians of five, over the thirteen field names of a Chrome
-request: 37.7 ns here against 90.8 in phr, and 37.5 against 167 for the
-lowercase form. `findchar_fast` needs sixteen bytes before it does
-anything and ten of those names are shorter, so phr walks them one byte
-at a time.
-
-The two cannot be merged, and that is a fact rather than a preference.
-Every input in phr's own suite is placed with its last byte against an
-unreadable page, which tests the promise that it never reads past what
-it was given. Our classifier loads 32 bytes whatever the length. Put to
-the same wall:
-
-    phr_is_field_name      answered 1
-    http::is_token         died with signal 11
-
-So a test holds them together instead: every byte value, at every
-position, at every length to 40, both pairs, 419841 comparisons, and
-they agree. It moves into `test/` on the day mruby-phr is in the build.
+A value is read where a node needs it, in one pass, and not before. The
+graph walks on facts, and a fact is "is there an If-None-Match", not
+what stands inside it. A Ruby object is made where a resource asks for
+it.
 
 ## A gem that only the tests need is a test dependency
 
@@ -838,9 +618,9 @@ library that ships.
 A gem that needs C++20 reads the build's C++ flags in its own
 `mrbgem.rake`. Where they already name `-std=c++20` or a later standard,
 it adds nothing. Only where they name none, or an earlier one, does it
-add `-std=c++20`. A gem never forces its standard over a later one: this
-build uses `-std=c++26 -freflection`, and a forced `-std=c++20` took the
-reflection away from every file after it.
+add `-std=c++20`. A gem never forces its standard over a later one: a
+forced `-std=c++20` takes the reflection of `-std=c++26 -freflection`
+away from every file after it.
 
 ## A grammar is read, not remembered
 
@@ -890,66 +670,35 @@ that comparison and nothing else. A second question is a second binary.
 One kind of test per binary, too: a short request and a long one, a
 field name and a path, are two tests and two binaries, even when the
 arms are the same. The source may hold several tests, and the build
-picks exactly one of them.
-Measured in mruby-mustache: one arm read 315 and 327 ns, and the same
-arm read 378 ns after an arm for another question was linked into the
-same binary. Its code had not changed. Each arm that is added moves the
-code of every other arm.
+picks exactly one of them. Each arm that is added moves the code of
+every other arm.
 
 So the old implementation stays, as an arm of the benchmark, until the
 change it is being judged against is decided. Deleting it first and
 reading the next run against the last one measures the link.
 
-This rule exists because a hand written harness gave 29, 45, 63 and 74
-nanoseconds for one unchanged function, and 43 against 64 in two runs
-of one binary. sysbench read 2.5 percent of spread over runs of a fifth
-of a second, so the machine was not the reason. The harness was.
-
 Whether two cases in one process disturb each other is a question for
 the first measurement, not an assumption.
 
 A number is tied to the binary that produced it, and a relink is a new
-binary. The same source, one machine, alternating at raised priority
-and a load of 0.09, read 66 ns against one build of the timing library
-and 90 against two others - and with `-falign-functions=64
--falign-loops=64 -falign-jumps=64` all three read 89.0 plus or minus
-0.5. Nothing about the library explained it. Linking something else
-moved the hot loop, and where a loop sits is worth a third of its cost.
-
-So: the alignment flags are always on, the arms of one comparison, and
-only those, are compared inside one binary, and an absolute nanosecond
-figure is never carried from one build to the next. Below roughly a
-third, the clock cannot answer a question across binaries at all, and
+binary. Where a loop sits is worth a third of its cost. So: the
+alignment flags `-falign-functions=64 -falign-loops=64
+-falign-jumps=64` are always on, the arms of one comparison, and only
+those, are compared inside one binary, and an absolute nanosecond figure
+is never carried from one build to the next. Below roughly a third, the
+clock cannot answer a question across binaries at all, and
 `bench/instructions.sh` is what can - it counts what the binary
 executed, and that count does not move.
 
-Measured the same day, and the reason the rule is written this hard:
-one change read 31.3 ns before and 42.1 after, which looks like a
-regression of a third. The two implementations in one binary read 3.08
-and 2.32, which is an improvement. The 42.1 was a different link.
+The library is the machine's. It is not vendored.
 
-This was learned the long way. A relink changed a median by 30 percent,
-it was called code layout, then an instruction count disagreed and the
-layout reading was dropped, and four wrong mechanisms were proposed -
-a debug timing library, a version bump, AVX-512 licence throttling and
-the machine's own load - before the flags settled it. Each one was
-plausible and each one was stated before it was tested.
+A row says which library made it. Google Benchmark writes
+`library_build_type` into the context, so a library built without
+`NDEBUG` is named in the row. `WM_MARCH=` pins the harness's own ISA,
+because `-march=native` is not one instruction set across two
+containers.
 
-The library is the machine's. It was vendored for a while, to pin a
-version and to match the harness's instruction set, and the measurement
-above took that reason away: with the alignment flags on, three builds
-of it answer the same. A dependency kept for a reason that has been
-disproved is a dependency to remove.
-
-What matters is that a row says which library made it. Debian's carries
-no `NDEBUG` and warns about that on stderr, where a harness reading only
-stdout never saw it; Google Benchmark also writes `library_build_type`
-into the context, so the row carries the warning even when nobody reads
-the terminal. `WM_MARCH=` still pins the harness's own ISA, because
-`-march=native` is not one instruction set across two containers.
-
-Nothing this tree runs sends stderr to /dev/null. That is how the
-warning stayed unread for a day.
+Nothing this tree runs sends stderr to /dev/null.
 
 Every row records `benchmark_lib`, `ran_as`, `bench_nice` and
 `bench_threads_max`, and Google Benchmark adds `library_build_type`
@@ -961,46 +710,35 @@ One cpu fewer than the box has, for the whole measurement, the server
 and the client together, so one of them stays out of it.
 
 The run goes to nice -15 and everything else this user owns goes to
-+15, skipping the run's own ancestors. Thirty points; ten does not do
-it, and +19 alone cannot build the gap from above. No sudo: a negative
-nice needs `RLIMIT_NICE`, granted once to a user in
-`/etc/security/limits.d`, and without the grant this is a no-op rather
-than a refusal. The row records whether it got it.
++15, skipping the run's own ancestors. No sudo: a negative nice needs
+`RLIMIT_NICE`, granted once to a user in `/etc/security/limits.d`, and
+without the grant this is a no-op rather than a refusal. The row records
+whether it got it.
 
-On an idle machine this buys nothing. It exists for a machine that is
-not idle, and the thing that is not idle here is us: an agent building
-and testing in the background moves one arm of a comparison and not the
-others. Measured today - a `cmake --parallel` left the one minute load
-at 1.86 while a benchmark ran.
-
-And the run is never root. Root holds CAP_SYS_NICE and CAP_IPC_LOCK, so
+The run is never root. Root holds CAP_SYS_NICE and CAP_IPC_LOCK, so
 `RLIMIT_NICE` and `RLIMIT_MEMLOCK` are advisory for it, and io_uring
-charges its SQ and CQ rings against memlock: on 6.18 with an 8192 KiB
-limit, root opened 512 rings of 32768 entries without a refusal where an
-unprivileged user was stopped at two. A provided buffer pool is ordinary
-memory and is not charged. Where no `bench` user exists the run goes
-ahead as the caller, and the row says which it was.
+charges its SQ and CQ rings against memlock. A provided buffer pool is
+ordinary memory and is not charged. Where no `bench` user exists the run
+goes ahead as the caller, and the row says which it was.
 
 ## A server run is valid only when both sides are busy
 
 The server has one thread. The client is htgen with one or two
-threads, never more. `bench/floor.sh` is the form, taken from the
-archive.
+threads, never more. `bench/floor.sh` is the form.
 
 A run is valid only when the server and the client each use at least
 90 percent of one core. A run where either stays below that measured
 the waiting, not the server, and its numbers are not written down.
 
-One server runs at a time. The archive and this tree are measured one
-after the other, never side by side.
+One server runs at a time. Two servers are measured one after the
+other, never side by side.
 
-The connections number in the hundreds. Thirty-two do not keep one
-server thread busy.
+The connections number in the hundreds.
 
 What is read is the share of the server's time that the kernel spends,
-and the userland nanoseconds per request. htgen spends 99.9 percent of
-its time in the kernel. The server's goal is 95 percent: what is left
-for userland is the cost of this tree.
+and the userland nanoseconds per request. The server's goal is 95
+percent in the kernel: what is left for userland is the cost of this
+tree.
 
 ## A run is never pinned
 
@@ -1018,20 +756,9 @@ what the code does when it meets one.
 `setpriv --reuid=65534 --regid=65534 --clear-groups` runs a command
 as nobody, and `prlimit` sets the limit it runs under.
 
-Measured on 6.18.44, RLIMIT_MEMLOCK 8192 KiB, one ring in each process:
-
-| SQ entries | taken | refused |
-|---|---|---|
-| 32768 | rings 1 and 2, as nobody | ring 3, ENOMEM |
-| 16384 | rings 1 to 5, as nobody | ring 6, ENOMEM |
-| 32768 | as root, every time | - |
-| 49152, 65536 | - | EINVAL, as any user |
-
-So the budget belongs to the uid and not to the process: three
-servers under one user share it, and a ring cannot know what the
-others took. The kernel charges about 1.6 MiB for 16384 entries: 64
-bytes for each SQE, 16 for each of twice as many CQEs, and the SQ
-array. No ring takes more than 32768 SQ entries, whatever the budget.
+The memlock budget belongs to the uid and not to the process: servers
+under one user share it, and a ring cannot know what the others took.
+No ring takes more than 32768 SQ entries, whatever the budget.
 
 ## What is there to debug is there in a debug build
 
@@ -1078,33 +805,12 @@ We are not a conformance tool. A server refuses and serves on, so the
 detail a refusal carries has to be cheap enough to carry always. Eight
 bytes are. Sixty four are not.
 
-Measured on the timestamp parser: 47.0 ns with a full record in every
-return, 28.5 ns with helpers on `std::optional` and a `Refusal` above
-them. The same full record on `parse_field_value_parameter`, which runs
-once per parameter, cost 16.3 ns to 31.6 ns.
-
-That number says what an error carries, and it says nothing about the
-wrapper. The wrapper was measured after it: `parse_host` in three
-shapes, in one binary, `WM_MARCH=x86-64-v3`.
-
-| shape | a name | a name and a port | a refused name |
-|---|---|---|---|
-| `std::expected<Host, Refusal>` | 10.1 ns | 15.5 ns | 8.04 ns |
-| `std::optional<Host>` | 10.0 ns | 15.5 ns | 8.05 ns |
-| a `Refusal` inside the returned value | 6.96 ns | 15.5 ns | 8.08 ns |
-
-Medians of five repetitions, all three arms in one binary.
-`std::expected` costs nothing over `std::optional`: both are 32 bytes
-here and both come back in registers. The third shape wins 3 ns on the
-short name alone, where the work is small enough for one branch to
-show, and it loses the thing the other two have: the compiler makes
-nobody look. So `std::expected` stays the shape of a function that can
-refuse, and "it is slow" was never measured about it.
+`std::expected` is the shape of a function that can refuse. It costs
+nothing over `std::optional`, and the compiler makes the caller look.
 
 One call of it is banned inside the tree: `.value()`. It throws
 `std::bad_expected_access<Refusal>`, and no catch here names that type,
 so it ends the process. Ask with `if (!got)` and read with `*got`.
-simdjson has the same pair and calls them the same way.
 
 ## The optimal case is optimized, and the cold path stays usable
 
@@ -1122,8 +828,6 @@ where the fault is found, and no test waits for five more to be read.
 
 `if (...) [[unlikely]] return std::unexpected(...)`. The compiler lays
 the cold block out of the way and stops optimizing it for speed.
-Measured: valid input 10 percent faster, invalid input 6 percent
-slower.
 
 ## An error object does not allocate
 
@@ -1131,22 +835,17 @@ slower.
 is one allocation for every refused request. That is a lever an
 attacker pulls. The base takes an empty string, which libstdc++ answers
 with a shared representation and no allocation, and `what()` gives the
-title out of the table of problems. Measured: the error path went 32
-percent faster.
+title out of the table of problems.
 
 ## A wide read needs a page behind it, not a promise from the caller
 
 A function that classifies bytes reads 32 at a time and masks what lies
 behind the run it was given. Those bytes have to exist.
 
-The first answer here was a `readable_bytes` parameter: the caller
-counts how far the read may go. That answer is wrong, and ASan says so.
-With a count that is 4096 too large the wide scan is a
-`heap-buffer-overflow`, `READ of size 32`, zero bytes past a 40 byte
-region. The scalar form cannot be made to do that. So the parameter
-moved a memory safety obligation onto the caller through a bare
-`size_t`, where the compiler checks nothing and a wrong answer is a
-crash under load.
+A count from the caller of how far the read may go is not the answer:
+it moves a memory safety obligation onto the caller through a bare
+`size_t`, where the compiler checks nothing, and a wrong count is a
+read past the buffer.
 
 Three rules replace it, and which one holds depends on who mapped the
 memory.
@@ -1182,19 +881,6 @@ suite gets that for nothing.
 the scanner of this build loads at a time, and the suite checks that
 the padding covers it.
 
-This is simdjson's answer. `SIMDJSON_PADDING = 64` in `base.h`, its
-`padded_string` allocates `length + SIMDJSON_PADDING`, and each reader
-asserts against it.
-
-mruby-fast-json answers the case this tree does not have. It takes Ruby
-strings it did not allocate, so it asks whether the read stays inside one
-mapped page - `last % page_bytes + SIMDJSON_PADDING < page_bytes` - and
-copies when it does not. Worth knowing and not worth carrying: a rule
-with no caller here is a rule that goes stale unread.
-
-Both ways answer the same, and a test holds them against each other
-over all 256 bytes at every length.
-
 ## A byte set is a table, and the table makes its own vector form
 
 The set is written once as `std::array<bool, 256>`, from the ABNF.
@@ -1202,36 +888,8 @@ The set is written once as `std::array<bool, 256>`, from the ABNF.
 at compile time, from that same array. Nobody writes a set twice.
 
 Neither compiler vectorizes the scalar form: a 256 entry table is a
-gather, and gcc says so. The set written as nine range comparisons is
-not vectorized either, and measured slower than the table, 174 ns
-against 117. So the intrinsic is written, for AVX2 and NEON at once,
-with the table as the third branch.
-
-Measured in the tree, the twelve field names of a request from Chrome:
-90.9 ns byte by byte, 37.7 ns with the wide read.
-
-The technique is simdjson's, and it was chosen over the one the fast
-servers use. picohttpparser, and so h2o and libreactor, scan with
-`_mm_cmpestri`, which holds eight ranges; `tchar` needs nine, so
-picohttpparser scans only for control bytes and checks the token
-against a table byte by byte. `_mm_cmpestri` also has no counterpart in
-NEON.
-
-## What a request may cost
-
-The fastest row this project has measured is in the archive, in
-`bench/results/forgecore.log`: 10 165 746 requests a second over
-HTTP/2 on one thread, so 98 nanoseconds per request and core. That is
-the yardstick, until a row replaces it.
-
-Read what that row measured before holding a number against it: no
-TLS, no body, and an answer whose every field came out of the HPACK
-table. It is the cost of moving frames, and a request that does work
-costs more.
-
-HTTP/2 reaches it partly because a field name arrives as an index and
-has no bytes to check. HTTP/1.1 reads every name off the wire, so the
-same work costs it more, and that is where it is worth removing.
+gather, and `-fopt-info-vec-missed` says so. So the intrinsic is
+written, for AVX2 and NEON at once, with the table as the third branch.
 
 ## What is built while answering was built too late
 
@@ -1239,9 +897,9 @@ A body that comes into existence during a request costs that request the
 whole of its making, and no language makes that cheap. So the work moves
 earlier, and there are only four places it can stand:
 
-- **At build time.** `assets.cpp` in the archive computes the gzip of
-  every entry, its CRC, its length and its entity tag when the pack is
-  made. A request then picks one and sends it.
+- **At build time.** The gzip of every asset, its CRC, its length and
+  its entity tag are computed when the pack is made. A request then
+  picks one and sends it.
 - **At `route.add`.** The field plan, the provided lists copied into
   padded storage and checked once, the compiled cache key. Everything
   the class declares is known there, and `def self.` gives way to a DSL
