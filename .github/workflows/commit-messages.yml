@@ -1,0 +1,70 @@
+# Refuse a push that carries a commit message which points at a tool.
+# .claude/RULES.md, "Nothing points at a tool": a link into an editor,
+# a build service or an assistant belongs nowhere in this repository.
+#
+# GitHub runs this check after the push. To make it a refusal, a branch
+# protection rule must require the check "commit messages" before a
+# merge, and the branch must not accept a direct push.
+
+name: commit messages
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  commit-messages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find the commits of this push
+        id: range
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            echo "range=$BASE..$HEAD" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "range=$BEFORE..$HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=$HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse a message that points at a tool
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          # One pattern per line. A line of a commit message that matches
+          # any of them fails the check.
+          cat > refused.txt <<'PATTERNS'
+          ^Co-Authored-By:
+          ^Co-authored-by:
+          ^Claude-Session:
+          ^Generated-By:
+          Generated with \[
+          https?://claude\.ai/
+          https?://claude\.com/
+          https?://chatgpt\.com/
+          https?://cursor\.com/
+          @anthropic\.com
+          PATTERNS
+          failed=0
+          for commit in $(git rev-list --no-merges "$RANGE"); do
+            hits=$(git log -1 --format=%B "$commit" | grep -n -E -f refused.txt || true)
+            if [ -n "$hits" ]; then
+              failed=1
+              echo "::error::commit $(git rev-parse --short "$commit") points at a tool:"
+              echo "$hits"
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Rewrite the message of every commit named above and push again."
+            exit 1
+          fi
+          echo "every commit message in $RANGE is clean"
