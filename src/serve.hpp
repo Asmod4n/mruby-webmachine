@@ -450,7 +450,7 @@ inline wm::Answered
 answer_to(const http1::Request &request, const flow::Facts &facts, Cache &c, const Today &today,
           const std::span<char> room)
 {
-    if (http::spelled_as(request.request_line.request_target, "/hello"))
+    if (request.request_line.request_target == "/hello")
         return answered_constant(Hello{}, kHelloBody, request, facts, c, today, room);
     return answered_by(home::Home{}, home::page_of, request, facts, c, today, room);
 }

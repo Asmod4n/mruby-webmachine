@@ -17,7 +17,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 namespace
 {
 
-#if defined(__AVX2__)
+#if defined(__AVX512BW__)
+constexpr std::string_view kArm = "AVX-512";
+#elif defined(__AVX2__)
 constexpr std::string_view kArm = "AVX2";
 #elif defined(__ARM_NEON)
 constexpr std::string_view kArm = "NEON";
@@ -25,15 +27,9 @@ constexpr std::string_view kArm = "NEON";
 constexpr std::string_view kArm = "byte loop";
 #endif
 
-constexpr size_t kLongestRun = 40;
-
-size_t scalar_run_length(const std::string_view text, const std::array<bool, 256> &allowed)
-{
-    const auto found = std::ranges::find_if_not(text, [&allowed](const char letter) {
-        return allowed.at(static_cast<unsigned char>(letter));
-    });
-    return static_cast<size_t>(std::distance(text.begin(), found));
-}
+// Past two blocks of the widest form, so a refusal in the second and in
+// the third block of 64 is asked for too.
+constexpr size_t kLongestRun = 130;
 
 char first_allowed_byte(const std::array<bool, 256> &allowed)
 {
@@ -46,7 +42,7 @@ char first_allowed_byte(const std::array<bool, 256> &allowed)
 struct Table {
     std::string_view name;
     const std::array<bool, 256> &allowed;
-    const std::array<unsigned char, 16> &low_bits;
+    const http::NibbleTable &low_bits;
 };
 
 long refusals_the_wide_scan_missed(const Table &table)
@@ -59,9 +55,17 @@ long refusals_the_wide_scan_missed(const Table &table)
             for (unsigned value = 0; value < 256; value++) {
                 held.at(at) = static_cast<char>(value);
                 const std::string_view text(held.data(), length);
-                if (http::allowed_run_length(text, table.allowed, table.low_bits) !=
-                    scalar_run_length(text, table.allowed))
+                const size_t floor = http::floor_run_length(text, table.allowed);
+                if (http::allowed_run_length(text, table.allowed, table.low_bits) != floor)
                     missed++;
+#if defined(__AVX2__)
+                if (http::avx2_run_length(text, table.low_bits) != floor)
+                    missed++;
+#endif
+#if defined(__AVX512BW__)
+                if (http::avx512_run_length(text, table.low_bits) != floor)
+                    missed++;
+#endif
             }
             held.at(at) = filler;
         }

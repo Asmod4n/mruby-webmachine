@@ -92,13 +92,9 @@ void inside(const std::string_view part, const std::string_view whole)
 }
 
 void scans_agree(const std::string_view text, const std::array<bool, 256> &allowed,
-                 const std::array<unsigned char, 16> &low_bits)
+                 const http::NibbleTable &low_bits)
 {
-    const size_t wide = http::allowed_run_length(text, allowed, low_bits);
-    const auto found = std::ranges::find_if_not(text, [&allowed](const char letter) {
-        return allowed.at(static_cast<unsigned char>(letter));
-    });
-    demand(wide == static_cast<size_t>(std::distance(text.begin(), found)),
+    demand(http::allowed_run_length(text, allowed, low_bits) == http::floor_run_length(text, allowed),
            "the wide scan and the byte loop disagree");
 }
 

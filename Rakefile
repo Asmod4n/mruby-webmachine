@@ -209,23 +209,25 @@ task :fuzz, [:seconds] do |_task, args|
      "-artifact_prefix=#{fuzz}/", '-max_len=512', '-print_final_stats=1', *limit)
 end
 
-CROSS_CXX = ENV.fetch('CROSS_CXX', 'aarch64-linux-gnu-g++').freeze
-CROSS_RUN = ENV.fetch('CROSS_RUN', 'qemu-aarch64').freeze
+# No signed package gives a g++ 16 for aarch64 on this distribution, so
+# clang builds the aarch64 side, against the aarch64 libstdc++.
+CROSS_CXX = ENV.fetch('CROSS_CXX', 'clang++ --target=aarch64-linux-gnu').freeze
+CROSS_RUN = ENV.fetch('CROSS_RUN', 'qemu-aarch64-static').freeze
 
 desc 'run the wide scanners of another architecture under qemu; CROSS_CXX and CROSS_RUN set the tools'
 task :crosscheck do
-  %W[#{CROSS_CXX} #{CROSS_RUN}].each do |tool|
+  [CROSS_CXX, CROSS_RUN].map { |command| command.split.first }.each do |tool|
     next if system("command -v #{tool} >/dev/null 2>&1")
 
-    raise "#{tool} is not installed; apt install g++-aarch64-linux-gnu qemu-user-static"
+    raise "#{tool} is not installed; apt install clang g++-aarch64-linux-gnu qemu-user-static"
   end
   ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
   raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
 
   fuzz = File.join(__dir__, 'fuzz')
   binary = File.join(fuzz, 'crosscheck')
-  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), mustache, lmdb]
-  sh "#{CROSS_CXX} -std=c++23 -O2 -g -static " \
+  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include')]
+  sh "#{CROSS_CXX} -std=c++2c -O2 -g -static " \
      "#{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
      "#{File.join(fuzz, 'crosscheck.cpp')} #{File.join(fuzz, 'fuzz_http.cpp')} " \
      "#{File.join(ada, 'src', 'ada.cpp')} -o #{binary}"

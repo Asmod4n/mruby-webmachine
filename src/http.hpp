@@ -205,35 +205,29 @@ enum class Method : uint8_t {
     kQuery,
 };
 
-template <size_t N>
-constexpr bool spelled_as(const std::string_view text, const char (&word)[N])
-{
-    return text.size() == N - 1 && std::equal(word, word + N - 1, text.data());
-}
-
 constexpr Method method_of(const std::string_view text)
 {
     if (text.empty())
         return Method::kUnknown;
     switch (text.front()) {
         case 'G':
-            return spelled_as(text, "GET") ? Method::kGet : Method::kUnknown;
+            return text == "GET" ? Method::kGet : Method::kUnknown;
         case 'H':
-            return spelled_as(text, "HEAD") ? Method::kHead : Method::kUnknown;
+            return text == "HEAD" ? Method::kHead : Method::kUnknown;
         case 'P':
-            if (spelled_as(text, "POST"))
+            if (text == "POST")
                 return Method::kPost;
-            return spelled_as(text, "PUT") ? Method::kPut : Method::kUnknown;
+            return text == "PUT" ? Method::kPut : Method::kUnknown;
         case 'D':
-            return spelled_as(text, "DELETE") ? Method::kDelete : Method::kUnknown;
+            return text == "DELETE" ? Method::kDelete : Method::kUnknown;
         case 'C':
-            return spelled_as(text, "CONNECT") ? Method::kConnect : Method::kUnknown;
+            return text == "CONNECT" ? Method::kConnect : Method::kUnknown;
         case 'O':
-            return spelled_as(text, "OPTIONS") ? Method::kOptions : Method::kUnknown;
+            return text == "OPTIONS" ? Method::kOptions : Method::kUnknown;
         case 'T':
-            return spelled_as(text, "TRACE") ? Method::kTrace : Method::kUnknown;
+            return text == "TRACE" ? Method::kTrace : Method::kUnknown;
         case 'Q':
-            return spelled_as(text, "QUERY") ? Method::kQuery : Method::kUnknown;
+            return text == "QUERY" ? Method::kQuery : Method::kUnknown;
         default:
             return Method::kUnknown;
     }
@@ -416,21 +410,27 @@ constexpr bool is_qdtext(const char letter)
     return kQdtext.at(static_cast<unsigned char>(letter));
 }
 
-inline constexpr std::array<unsigned char, 16> kHighNibbleBit = [] {
-    std::array<unsigned char, 16> table{};
+// A byte shuffle looks up inside each 128 bit lane on its own, so a
+// nibble table holds its 16 entries once for each of the four lanes of
+// the widest register. Each form loads as much of it as it is wide.
+using NibbleTable = std::array<unsigned char, 64>;
+
+inline constexpr NibbleTable kHighNibbleBit = [] {
+    NibbleTable table{};
     for (unsigned nibble = 0; nibble < 8; nibble++)
-        table.at(nibble) = static_cast<unsigned char>(1 << nibble);
+        for (unsigned lane = 0; lane < 64; lane += 16)
+            table.at(lane + nibble) = static_cast<unsigned char>(1 << nibble);
     return table;
 }();
 
-constexpr std::array<unsigned char, 16>
-ascii_low_nibble_bits_of(const std::array<bool, 256> &allowed)
+constexpr NibbleTable ascii_low_nibble_bits_of(const std::array<bool, 256> &allowed)
 {
-    std::array<unsigned char, 16> table{};
+    NibbleTable table{};
     for (unsigned byte = 0; byte < 128; byte++)
         if (allowed.at(byte))
-            table.at(byte & 0x0F) =
-                static_cast<unsigned char>(table.at(byte & 0x0F) | (1 << (byte >> 4)));
+            for (unsigned lane = 0; lane < 64; lane += 16)
+                table.at(lane + (byte & 0x0F)) =
+                    static_cast<unsigned char>(table.at(lane + (byte & 0x0F)) | (1 << (byte >> 4)));
     return table;
 }
 
@@ -512,8 +512,7 @@ inline bool every_byte_is_allowed(const std::string_view text, const std::array<
 }
 
 #if defined(__ARM_NEON)
-inline uint64_t neon_block_refusals(const unsigned char *at,
-                                    const std::array<unsigned char, 16> &low_bits)
+inline uint64_t neon_block_refusals(const unsigned char *at, const NibbleTable &low_bits)
 {
     const uint8x16_t bytes = vld1q_u8(at);
     const uint8x16_t low = vqtbl1q_u8(vld1q_u8(low_bits.data()), vandq_u8(bytes, vdupq_n_u8(0x0F)));
@@ -527,7 +526,9 @@ inline constexpr size_t kNeonNibblesPerByte = 4;
 
 inline constexpr size_t kWidePadding = 64;
 
-#if defined(__AVX2__)
+#if defined(__AVX512BW__)
+inline constexpr size_t kWideBlockBytes = 64;
+#elif defined(__AVX2__)
 inline constexpr size_t kWideBlockBytes = 32;
 #elif defined(__ARM_NEON)
 inline constexpr size_t kWideBlockBytes = 16;
@@ -547,24 +548,64 @@ inline uint32_t avx2_block_refusals(const char *at, const __m256i low_table,
     return static_cast<uint32_t>(_mm256_movemask_epi8(
         _mm256_cmpeq_epi8(_mm256_and_si256(low, high), _mm256_setzero_si256())));
 }
-#endif
 
-inline size_t allowed_run_length(const std::string_view padded,
-                                 [[maybe_unused]] const std::array<bool, 256> &allowed,
-                                 [[maybe_unused]] const std::array<unsigned char, 16> &low_bits)
+inline size_t avx2_run_length(const std::string_view padded, const NibbleTable &low_bits)
 {
-#if defined(__AVX2__)
-    const __m256i low_table = _mm256_broadcastsi128_si256(
-        _mm_loadu_si128(reinterpret_cast<const __m128i *>(low_bits.data())));
-    const __m256i high_table = _mm256_broadcastsi128_si256(
-        _mm_loadu_si128(reinterpret_cast<const __m128i *>(kHighNibbleBit.data())));
-    for (size_t at = 0; at < padded.size(); at += kWideBlockBytes) {
+    const __m256i low_table = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(low_bits.data()));
+    const __m256i high_table =
+        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(kHighNibbleBit.data()));
+    for (size_t at = 0; at < padded.size(); at += 32) {
         const uint32_t refused =
             avx2_block_refusals(std::next(padded.data(), at), low_table, high_table);
         if (refused != 0)
             return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
     }
     return padded.size();
+}
+#endif
+
+#if defined(__AVX512BW__)
+inline uint64_t avx512_block_refusals(const char *at, const __m512i low_table,
+                                      const __m512i high_table)
+{
+    const __m512i bytes = _mm512_loadu_si512(at);
+    const __m512i low =
+        _mm512_shuffle_epi8(low_table, _mm512_and_si512(bytes, _mm512_set1_epi8(0x0F)));
+    const __m512i high = _mm512_shuffle_epi8(
+        high_table, _mm512_and_si512(_mm512_srli_epi16(bytes, 4), _mm512_set1_epi8(0x0F)));
+    return _mm512_testn_epi8_mask(low, high);
+}
+
+inline size_t avx512_run_length(const std::string_view padded, const NibbleTable &low_bits)
+{
+    const __m512i low_table = _mm512_loadu_si512(low_bits.data());
+    const __m512i high_table = _mm512_loadu_si512(kHighNibbleBit.data());
+    for (size_t at = 0; at < padded.size(); at += 64) {
+        const uint64_t refused =
+            avx512_block_refusals(std::next(padded.data(), at), low_table, high_table);
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
+    }
+    return padded.size();
+}
+#endif
+
+inline size_t floor_run_length(const std::string_view text, const std::array<bool, 256> &allowed)
+{
+    const auto found = std::ranges::find_if_not(text, [&allowed](const char letter) {
+        return allowed.at(static_cast<unsigned char>(letter));
+    });
+    return static_cast<size_t>(std::distance(text.begin(), found));
+}
+
+inline size_t allowed_run_length(const std::string_view padded,
+                                 [[maybe_unused]] const std::array<bool, 256> &allowed,
+                                 [[maybe_unused]] const NibbleTable &low_bits)
+{
+#if defined(__AVX512BW__)
+    return avx512_run_length(padded, low_bits);
+#elif defined(__AVX2__)
+    return avx2_run_length(padded, low_bits);
 #elif defined(__ARM_NEON)
     const unsigned char *const from = reinterpret_cast<const unsigned char *>(padded.data());
     for (size_t at = 0; at < padded.size(); at += kWideBlockBytes) {
@@ -576,10 +617,7 @@ inline size_t allowed_run_length(const std::string_view padded,
     }
     return padded.size();
 #else
-    const auto found = std::ranges::find_if_not(padded, [&allowed](const char letter) {
-        return allowed.at(static_cast<unsigned char>(letter));
-    });
-    return static_cast<size_t>(std::distance(padded.begin(), found));
+    return floor_run_length(padded, allowed);
 #endif
 }
 
