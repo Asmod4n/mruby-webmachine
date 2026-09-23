@@ -140,7 +140,9 @@ mrb_value spec_zip_entries(mrb_state *mrb, mrb_value)
     bytes.resize(bytes.size() - static_cast<size_t>(cut));
     const auto entries = zip::entries_of(bytes);
     if (!entries) {
-        const std::string_view title = zip::kProblemTitles.at(static_cast<size_t>(entries.error().problem));
+        std::string title(zip::kProblemTitles.at(static_cast<size_t>(entries.error().problem)));
+        if (entries.error().problem == zip::Problem::kReader)
+            title += std::string(": ") + mz_zip_get_error_string(entries.error().reader_error);
         return mrb_str_new(mrb, title.data(), static_cast<mrb_int>(title.size()));
     }
     const mrb_value names = mrb_ary_new(mrb);

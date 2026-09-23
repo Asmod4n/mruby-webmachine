@@ -116,7 +116,8 @@ assert('an Accept that does not parse is refused') do
   assert_equal :refused, P.form_of('text/html;q=2', false)
 end
 
-# APPNOTE 4.3: the pack is a zip of stored entries, 55 pictures. A JPEG
+# APPNOTE 4.3: the pack is a zip of stored entries, 55 pictures, read by
+# miniz. A JPEG
 # starts with the SOI marker FF D8 FF.
 assert('the pack reads as 55 stored JPEG entries') do
   entries = P.zip_entries
@@ -130,10 +131,13 @@ assert('a changed byte in an entry is refused by its CRC-32') do
   assert_equal 'APPNOTE 4.4.7: the CRC-32 does not match the data', P.zip_entries(120498)
 end
 
-# APPNOTE 4.3.16: the end record states the comment length, so a pack cut
-# short has no end record where the length says it is.
-assert('a pack cut short has no end of central directory record') do
-  assert_equal 'APPNOTE 4.3.16: no end of central directory record', P.zip_entries(-1, 1)
+# APPNOTE 4.3.16: a zip ends with the end of central directory record,
+# 22 bytes and then the comment, 2248 bytes in this pack. A pack cut short
+# by more than both has no end record, and miniz refuses it.
+assert('a pack cut short is refused by the zip reader') do
+  got = P.zip_entries(-1, 2248 + 22 + 1)
+  assert_kind_of String, got
+  assert_true got.start_with?('the zip reader refused the pack: ')
 end
 
 # The pack writes the finished <img> into an extra field of each entry
