@@ -815,6 +815,13 @@ A measurement compares before against after in **one binary**, with both
 arms built the same way and run alternately. There is no other valid
 comparison here.
 
+Each comparison has its own binary, and that binary holds the arms of
+that comparison and nothing else. A second question is a second binary.
+Measured in mruby-mustache: one arm read 315 and 327 ns, and the same
+arm read 378 ns after an arm for another question was linked into the
+same binary. Its code had not changed. Each arm that is added moves the
+code of every other arm.
+
 So the old implementation stays, as an arm of the benchmark, until the
 change it is being judged against is decided. Deleting it first and
 reading the next run against the last one measures the link.
@@ -835,11 +842,12 @@ and 90 against two others - and with `-falign-functions=64
 0.5. Nothing about the library explained it. Linking something else
 moved the hot loop, and where a loop sits is worth a third of its cost.
 
-So: the alignment flags are always on, two arms are compared inside one
-binary, and an absolute nanosecond figure is never carried from one
-build to the next. Below roughly a third, the clock cannot answer a
-question across binaries at all, and `bench/instructions.sh` is what
-can - it counts what the binary executed, and that count does not move.
+So: the alignment flags are always on, the arms of one comparison, and
+only those, are compared inside one binary, and an absolute nanosecond
+figure is never carried from one build to the next. Below roughly a
+third, the clock cannot answer a question across binaries at all, and
+`bench/instructions.sh` is what can - it counts what the binary
+executed, and that count does not move.
 
 Measured the same day, and the reason the rule is written this hard:
 one change read 31.3 ns before and 42.1 after, which looks like a
