@@ -937,9 +937,15 @@ array. No ring takes more than 32768 SQ entries, whatever the budget.
 
 Everything that exists to debug is compiled only where `MRB_DEBUG` is
 defined, and `conf.enable_debug` is what defines it. There is no macro
-of this tree's own beside it, because mruby writes no usable backtrace
-without it: a debug feature without `MRB_DEBUG` would have nothing to
-show.
+of this tree's own beside it: `MRB_DEBUG` is what gives the C and C++
+side of mruby what it needs to be debugged, and a second switch would
+only be a way for the two to disagree.
+
+A Ruby backtrace is another thing and does not depend on it. Bytecode
+compiled with `mrbc -g` carries its file names and line numbers, and an
+exception raised in it has a full backtrace in every build. So the
+error log has one in a release build too, as long as the application
+was compiled with `-g`.
 
 So a release binary does not hold the code, and nobody can switch it on
 in production. It costs nothing there, and it shows a client nothing
@@ -949,7 +955,7 @@ about the server. In the debug build and only there:
 - the path a request took through the decision graph.
 
 What the operator reads stays in every build: the error log with the
-request, the fingerprint and what mruby gives about the exception, and
+request, the fingerprint and the exception with its backtrace, and
 the `instance` and `fingerprint` on an error page, which name a record
 of that log and nothing else.
 
