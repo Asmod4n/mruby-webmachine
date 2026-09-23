@@ -53,7 +53,7 @@ answered_until_stored(serve::Cache &c, serve::Today &today, const std::string_vi
     for (int tries = 0; tries < 200; tries++) {
         serve::brought_up_to_date(today);
         const wm::Answered answer = serve::answered(asked, room, c, today);
-        if (answer.held != nullptr) cache_sent(c.of_thread, static_cast<cache_held *>(const_cast<void *>(answer.held)));
+        if (answer.held != nullptr) serve::released(c, static_cast<cache_held *>(const_cast<void *>(answer.held)));
         if (stored(c, today, target)) return;
         c.handed_over_at = {};
         usleep(10000);
@@ -74,7 +74,7 @@ answered_from_the_cache(benchmark::State &state, const std::string_view asked, c
         if (answer.head == 0 || answer.held == nullptr) [[unlikely]] std::abort();
         size_t head = answer.head;
         benchmark::DoNotOptimize(head);
-        cache_sent(c.of_thread, static_cast<cache_held *>(const_cast<void *>(answer.held)));
+        serve::released(c, static_cast<cache_held *>(const_cast<void *>(answer.held)));
     }
 }
 

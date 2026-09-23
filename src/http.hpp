@@ -205,29 +205,35 @@ enum class Method : uint8_t {
     kQuery,
 };
 
+template <size_t N>
+constexpr bool spelled_as(const std::string_view text, const char (&word)[N])
+{
+    return text.size() == N - 1 && std::equal(word, word + N - 1, text.data());
+}
+
 constexpr Method method_of(const std::string_view text)
 {
     if (text.empty())
         return Method::kUnknown;
     switch (text.front()) {
         case 'G':
-            return text == "GET" ? Method::kGet : Method::kUnknown;
+            return spelled_as(text, "GET") ? Method::kGet : Method::kUnknown;
         case 'H':
-            return text == "HEAD" ? Method::kHead : Method::kUnknown;
+            return spelled_as(text, "HEAD") ? Method::kHead : Method::kUnknown;
         case 'P':
-            if (text == "POST")
+            if (spelled_as(text, "POST"))
                 return Method::kPost;
-            return text == "PUT" ? Method::kPut : Method::kUnknown;
+            return spelled_as(text, "PUT") ? Method::kPut : Method::kUnknown;
         case 'D':
-            return text == "DELETE" ? Method::kDelete : Method::kUnknown;
+            return spelled_as(text, "DELETE") ? Method::kDelete : Method::kUnknown;
         case 'C':
-            return text == "CONNECT" ? Method::kConnect : Method::kUnknown;
+            return spelled_as(text, "CONNECT") ? Method::kConnect : Method::kUnknown;
         case 'O':
-            return text == "OPTIONS" ? Method::kOptions : Method::kUnknown;
+            return spelled_as(text, "OPTIONS") ? Method::kOptions : Method::kUnknown;
         case 'T':
-            return text == "TRACE" ? Method::kTrace : Method::kUnknown;
+            return spelled_as(text, "TRACE") ? Method::kTrace : Method::kUnknown;
         case 'Q':
-            return text == "QUERY" ? Method::kQuery : Method::kUnknown;
+            return spelled_as(text, "QUERY") ? Method::kQuery : Method::kUnknown;
         default:
             return Method::kUnknown;
     }

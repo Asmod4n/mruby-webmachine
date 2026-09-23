@@ -51,13 +51,13 @@ main(int argc, char **argv)
     try {
         ring.serves(
             [&](const std::string_view asked, const std::span<char> room) -> wm::Answered {
-                serve::brought_up_to_date(today);
                 if (asked.starts_with("STOP")) enough = true;
                 return serve::answered(asked, room, c, today);
             },
             [&](const void *const held) {
-                cache_sent(c.of_thread, static_cast<cache_held *>(const_cast<void *>(held)));
+                serve::released(c, static_cast<cache_held *>(const_cast<void *>(held)));
             },
+            [&]() { serve::brought_up_to_date(today); },
             enough);
     } catch (const wm::QueueIsFull &full) {
         fprintf(stderr, "webmachine-serve: %s\n", full.what());

@@ -88,7 +88,9 @@ class Ring
             munmap(room_, static_cast<size_t>(kBufferCount) * kBufferBytes);
         if (answers_ != nullptr)
             munmap(answers_, static_cast<size_t>(connections_) * kAnswerBytes);
-        free(owed_);
+        if (owed_ != nullptr)
+            munmap(owed_, static_cast<size_t>(connections_) * sizeof(Owed));
+        free(free_rooms_);
         if (standing_)
             io_uring_queue_exit(&ring_);
     }
@@ -138,14 +140,23 @@ class Ring
         if (mapped == MAP_FAILED)
             return -errno;
         room_ = static_cast<uint8_t *>(mapped);
+        madvise(mapped, static_cast<size_t>(kBufferCount) * kBufferBytes, MADV_HUGEPAGE);
 
         void *const answering = mmap(nullptr, static_cast<size_t>(connections_) * kAnswerBytes,
                                      PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (answering == MAP_FAILED)
             return -errno;
         answers_ = static_cast<uint8_t *>(answering);
-        owed_ = static_cast<Owed *>(calloc(connections_, sizeof *owed_));
+        madvise(answering, static_cast<size_t>(connections_) * kAnswerBytes, MADV_HUGEPAGE);
+        void *const owing = mmap(nullptr, static_cast<size_t>(connections_) * sizeof(Owed), PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        owed_ = owing == MAP_FAILED ? nullptr : static_cast<Owed *>(owing);
+        if (owed_ != nullptr)
+            madvise(owing, static_cast<size_t>(connections_) * sizeof(Owed), MADV_HUGEPAGE);
         if (owed_ == nullptr)
+            return -ENOMEM;
+        free_rooms_ = static_cast<uint8_t **>(calloc(connections_, sizeof *free_rooms_));
+        if (free_rooms_ == nullptr)
             return -ENOMEM;
         bundles_ = (ring_.features & IORING_FEAT_RECVSEND_BUNDLE) != 0;
 
@@ -297,8 +308,8 @@ class Ring
         return which < kListeners ? port_[which] : 0;
     }
 
-    template <class Answering, class Releasing>
-    void serves(Answering answering, Releasing released, const bool &until)
+    template <class Answering, class Releasing, class Waking>
+    void serves(Answering answering, Releasing released, Waking woken, const bool &until)
     {
         while (!until) {
             io_uring_cqe *first = nullptr;
@@ -307,26 +318,32 @@ class Ring
                 io_uring_submit_and_wait_timeout(&ring_, &first, 1, &a_second, nullptr);
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
+            woken();
             io_uring_cqe *cqe = nullptr;
-            while (io_uring_peek_cqe(&ring_, &cqe) == 0 && cqe != nullptr) {
+            unsigned head = 0;
+            unsigned seen = 0;
+            io_uring_for_each_cqe(&ring_, head, cqe)
+            {
                 took(cqe, answering, released);
-                io_uring_cqe_seen(&ring_, cqe);
+                seen++;
             }
+            io_uring_cq_advance(&ring_, seen);
             given_back();
         }
     }
 
   private:
-    struct Owed {
-        msghdr message;
-        iovec piece[kPiecesMost];
-        const void *held[kHeldMost];
+    struct alignas(64) Owed {
         uint32_t filled;
         uint32_t first;
         uint32_t pieces;
         uint32_t helds;
         bool sending;
         bool closing;
+        uint8_t *room;
+        iovec piece[kPiecesMost];
+        const void *held[kHeldMost];
+        msghdr message;
     };
 
     int one_at_a_time(io_uring_sqe *const sqe)
@@ -415,6 +432,23 @@ class Ring
         return true;
     }
 
+    uint8_t *room_taken()
+    {
+        if (free_room_count_ > 0)
+            return free_rooms_[--free_room_count_];
+        if (fresh_rooms_ < connections_)
+            return answers_ + static_cast<size_t>(fresh_rooms_++) * kAnswerBytes;
+        return nullptr;
+    }
+
+    void room_given_back(Owed &owed)
+    {
+        if (owed.room == nullptr)
+            return;
+        free_rooms_[free_room_count_++] = owed.room;
+        owed.room = nullptr;
+    }
+
     template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released)
     {
         Owed &owed = owed_[slot];
@@ -424,6 +458,7 @@ class Ring
             owed.closing = true;
         } else {
             all_released(owed, released);
+            room_given_back(owed);
             owed = Owed{};
         }
         io_uring_sqe *const sqe = room_for_one_more();
@@ -481,7 +516,11 @@ class Ring
             Owed &owed = owed_[slot];
             if (owed.closing)
                 return armed;
-            uint8_t *const into = answers_ + static_cast<size_t>(slot) * kAnswerBytes;
+            if (owed.room == nullptr)
+                owed.room = room_taken();
+            if (owed.room == nullptr) [[unlikely]]
+                return armed + closes(slot, released);
+            uint8_t *const into = owed.room;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
             while (!left.empty() && owed.filled < kAnswerBytes && owed.pieces + 2 <= kPiecesMost &&
                    owed.helds < kHeldMost) {
@@ -509,6 +548,7 @@ class Ring
             owed.sending = false;
             if (owed.closing) {
                 all_released(owed, released);
+                room_given_back(owed);
                 owed = Owed{};
                 return armed;
             }
@@ -528,6 +568,7 @@ class Ring
             }
             if (owed.first == owed.pieces) {
                 all_released(owed, released);
+                room_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
             } else {
@@ -546,6 +587,9 @@ class Ring
     io_uring_buf_ring *buffers_ = nullptr;
     uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
+    uint8_t **free_rooms_ = nullptr;
+    uint32_t free_room_count_ = 0;
+    uint32_t fresh_rooms_ = 0;
     uint32_t buf_tail_ = 0;
     uint32_t replenish_ = 0;
     Owed *owed_ = nullptr;
