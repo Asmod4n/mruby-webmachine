@@ -12,6 +12,8 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
 
   spec.bins = %w[webmachine-cache webmachine-cache-check webmachine-serve]
 
+  spec.linker.libraries << 'crypto'
+
   # liburing carries slipstream's seam, so its archive reaches back into
   # symbols that live in libmruby.a - which the linker has already walked
   # by the time it reaches liburing. Named once more, it can answer.

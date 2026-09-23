@@ -34,6 +34,12 @@ is a bug in this directory, not a local decision.
 | 2046 | media types |
 | 9651 | Structured Field Values, which Accept-Query is written in |
 | 10008 | the QUERY method |
+| 9562 | UUIDs. Version 4 and the urn:uuid: form, for the instance of a problem |
+
+`APPNOTE.TXT` is PKWARE's .ZIP File Format Specification 6.3.10, from
+`https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT`. It decides
+how the pack of error pictures is read: the end record, the central
+directory, the local headers and the CRC-32.
 
 A specification this tree starts to implement is downloaded here in the
 same commit as the first function that reads it.

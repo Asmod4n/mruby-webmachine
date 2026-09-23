@@ -1,7 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +20,7 @@
 #endif
 
 #include "http.hpp"
+#include "zip.hpp"
 
 namespace problem
 {
@@ -25,6 +30,7 @@ struct Details {
     std::string                title;
     uint16_t                   status;
     std::optional<std::string> instance;
+    std::optional<std::string> fingerprint;
 #if defined(MRB_DEBUG)
     std::optional<std::string> exception;
     std::optional<std::string> message;
@@ -37,6 +43,8 @@ struct Fields {
     std::string                title;
     std::string                status;
     std::optional<std::string> instance;
+    std::optional<std::string> fingerprint;
+    std::optional<std::string> picture;
     std::optional<std::string> exception;
     std::optional<std::string> message;
     std::vector<std::string>   backtrace;
@@ -47,6 +55,31 @@ inline constexpr std::string_view kMediaTypeHtml = "text/html; charset=utf-8";
 inline constexpr std::string_view kMediaTypeJson = "application/problem+json";
 inline constexpr std::string_view kMediaTypeXml = "application/problem+xml";
 inline constexpr std::string_view kMediaTypeText = "text/plain; charset=utf-8";
+inline constexpr std::string_view kMediaTypeJpeg = "image/jpeg";
+inline constexpr std::string_view kMediaTypePlainJson = "application/json";
+
+enum class Form : uint8_t { kHtml, kProblemJson, kJpeg, kJson, kProblemXml, kText };
+
+struct Offer {
+    Form            form;
+    http::MediaType media_type;
+};
+
+inline constexpr std::array<Offer, 6> kOffers{{
+    {Form::kHtml, {"text", "html", ""}},
+    {Form::kProblemJson, {"application", "problem+json", ""}},
+    {Form::kJpeg, {"image", "jpeg", ""}},
+    {Form::kJson, {"application", "json", ""}},
+    {Form::kProblemXml, {"application", "problem+xml", ""}},
+    {Form::kText, {"text", "plain", ""}},
+}};
+
+inline constexpr uint16_t kExtraImgTag = 0x574d;
+
+struct Picture {
+    std::string_view           img;
+    std::span<const std::byte> jpeg;
+};
 
 inline constexpr char kHtml[] =
     "<!doctype html>\n"
@@ -57,6 +90,9 @@ inline constexpr char kHtml[] =
     "<main>\n"
     "<p>{{status}}</p>\n"
     "<h1>{{title}}</h1>\n"
+    "{{#picture}}\n"
+    "{{{picture}}}\n"
+    "{{/picture}}\n"
     "{{#exception}}\n"
     "<p>{{exception}}</p>\n"
     "{{/exception}}\n"
@@ -69,6 +105,13 @@ inline constexpr char kHtml[] =
     "{{#instance}}\n"
     "<p>Reference {{instance}}</p>\n"
     "{{/instance}}\n"
+    "{{#fingerprint}}\n"
+    "<p>Fingerprint {{fingerprint}}</p>\n"
+    "{{/fingerprint}}\n"
+    "{{#picture}}\n"
+    "<p>Cat by <a href=\"https://girliemac.com/blog/2011/12/18/the-day-i-seized-the-interweb-http-status-cats/\">"
+    "Tomomi Imura</a>, <a href=\"https://creativecommons.org/licenses/by/2.0/\">CC BY 2.0</a>, unchanged</p>\n"
+    "{{/picture}}\n"
     "</main>\n";
 
 inline constexpr char kXml[] =
@@ -80,6 +123,9 @@ inline constexpr char kXml[] =
     "{{#instance}}\n"
     "<instance>{{instance}}</instance>\n"
     "{{/instance}}\n"
+    "{{#fingerprint}}\n"
+    "<fingerprint>{{fingerprint}}</fingerprint>\n"
+    "{{/fingerprint}}\n"
     "{{#exception}}\n"
     "<exception>{{exception}}</exception>\n"
     "{{/exception}}\n"
@@ -108,7 +154,10 @@ inline constexpr char kText[] =
     "{{/backtrace}}\n"
     "{{#instance}}\n"
     "Reference {{{instance}}}\n"
-    "{{/instance}}\n";
+    "{{/instance}}\n"
+    "{{#fingerprint}}\n"
+    "Fingerprint {{{fingerprint}}}\n"
+    "{{/fingerprint}}\n";
 
 inline Details
 details_of(const uint16_t status)
@@ -120,18 +169,20 @@ inline Fields
 fields_of(const Details &d)
 {
 #if defined(MRB_DEBUG)
-    return {d.type,      d.title,   std::to_string(d.status), d.instance,
+    return {d.type,      d.title,   std::to_string(d.status), d.instance, d.fingerprint, std::nullopt,
             d.exception, d.message, d.backtrace,
             d.backtrace.empty() ? std::nullopt : std::optional<std::string>(std::in_place)};
 #else
-    return {d.type, d.title, std::to_string(d.status), d.instance, std::nullopt, std::nullopt, {}, std::nullopt};
+    return {d.type,       d.title,      std::to_string(d.status), d.instance, d.fingerprint, std::nullopt,
+            std::nullopt, std::nullopt, {},                       std::nullopt};
 #endif
 }
 
 inline size_t
 page_bound_of(const std::string_view source, const Fields &f)
 {
-    size_t values = f.type.size() + f.title.size() + f.status.size() + f.instance.value_or("").size();
+    size_t values = f.type.size() + f.title.size() + f.status.size() + f.instance.value_or("").size() +
+                    f.fingerprint.value_or("").size() + f.picture.value_or("").size();
     values += f.exception.value_or("").size() + f.message.value_or("").size();
     for (const std::string &line : f.backtrace) values += line.size();
     const size_t lines = f.backtrace.size();
@@ -155,9 +206,10 @@ page_of(const T &fields, const size_t bound)
 }
 
 inline std::optional<std::string>
-html_of(const Details &d)
+html_of(const Details &d, const std::optional<std::string_view> picture)
 {
-    const Fields f = fields_of(d);
+    Fields f = fields_of(d);
+    if (picture) f.picture = std::string(*picture);
     return page_of<mustache::fixed_string{kHtml}>(f, page_bound_of(std::string_view(kHtml), f));
 }
 
@@ -188,6 +240,8 @@ value_of(const Fields &f)
     m.set("title", Value{f.title});
     m.set("status", Value{f.status});
     if (f.instance) m.set("instance", Value{*f.instance});
+    if (f.fingerprint) m.set("fingerprint", Value{*f.fingerprint});
+    if (f.picture) m.set("picture", Value{*f.picture});
     if (f.exception) m.set("exception", Value{*f.exception});
     if (f.message) m.set("message", Value{*f.message});
     List lines;
@@ -219,9 +273,11 @@ page_of(const std::string_view source, const Fields &f)
 }
 
 inline std::optional<std::string>
-html_of(const Details &d)
+html_of(const Details &d, const std::optional<std::string_view> picture)
 {
-    return page_of(std::string_view(kHtml), fields_of(d));
+    Fields f = fields_of(d);
+    if (picture) f.picture = std::string(*picture);
+    return page_of(std::string_view(kHtml), f);
 }
 
 inline std::optional<std::string>
@@ -252,6 +308,10 @@ json_of(const Details &d)
         b.append_raw(R"(,"instance":)");
         b.escape_and_append_with_quotes(*d.instance);
     }
+    if (d.fingerprint) {
+        b.append_raw(R"(,"fingerprint":)");
+        b.escape_and_append_with_quotes(*d.fingerprint);
+    }
 #if defined(MRB_DEBUG)
     if (d.exception) {
         b.append_raw(R"(,"exception":)");
@@ -274,6 +334,69 @@ json_of(const Details &d)
     std::string_view json;
     if (b.view().get(json)) [[unlikely]] return std::nullopt;
     return std::string(json);
+}
+
+inline std::string
+instance_of(const std::span<const std::byte, 16> random)
+{
+    constexpr std::string_view kHex = "0123456789abcdef";
+    std::array<uint8_t, 16> octets{};
+    for (size_t i = 0; i < octets.size(); i++) octets.at(i) = std::to_integer<uint8_t>(random[i]);
+    octets.at(6) = static_cast<uint8_t>((octets.at(6) & 0x0f) | 0x40);
+    octets.at(8) = static_cast<uint8_t>((octets.at(8) & 0x3f) | 0x80);
+    std::string out = "urn:uuid:";
+    for (size_t i = 0; i < octets.size(); i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) out.push_back('-');
+        out.push_back(kHex.at(octets.at(i) >> 4));
+        out.push_back(kHex.at(octets.at(i) & 0xf));
+    }
+    return out;
+}
+
+inline std::optional<Picture>
+picture_of(const std::span<const zip::Entry> pictures, const uint16_t status)
+{
+    const std::string name = std::to_string(status) + ".jpg";
+    for (const zip::Entry &entry : pictures) {
+        if (entry.name != name) continue;
+        const std::optional<std::span<const std::byte>> img = zip::extra_field_of(entry.extra, kExtraImgTag);
+        if (!img) [[unlikely]] return std::nullopt;
+        return Picture{std::string_view(reinterpret_cast<const char *>(img->data()), img->size()), entry.data};
+    }
+    return std::nullopt;
+}
+
+inline std::expected<Form, http::Refusal>
+form_of(const std::optional<std::string_view> accept, const bool has_picture)
+{
+    if (!accept) return Form::kHtml;
+    std::array<http::MediaType, kOffers.size()> provided{};
+    std::array<Form, kOffers.size()> forms{};
+    size_t count = 0;
+    for (const Offer &offer : kOffers) {
+        if (offer.form == Form::kJpeg && !has_picture) continue;
+        provided.at(count) = offer.media_type;
+        forms.at(count) = offer.form;
+        count++;
+    }
+    const auto chosen = http::choose_media_type(std::span(provided).first(count), *accept);
+    if (!chosen) [[unlikely]] return std::unexpected(chosen.error());
+    if (!*chosen) return Form::kText;
+    return forms.at((*chosen)->at);
+}
+
+inline std::string_view
+media_type_of(const Form form)
+{
+    switch (form) {
+        case Form::kHtml: return kMediaTypeHtml;
+        case Form::kProblemJson: return kMediaTypeJson;
+        case Form::kJpeg: return kMediaTypeJpeg;
+        case Form::kJson: return kMediaTypePlainJson;
+        case Form::kProblemXml: return kMediaTypeXml;
+        case Form::kText: return kMediaTypeText;
+    }
+    return kMediaTypeText;
 }
 
 }
