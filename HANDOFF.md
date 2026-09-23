@@ -33,7 +33,11 @@ where this session broke one, it says so.
    lane of a `simd_mask` at a time (`hit[i] = false`) puts the mask in
    memory, 934 ns against 555. The form that stays ands the mask with
    `lane > i`, a whole vector operation.
-4. **RHEL 7 must build it.** That is devtoolset-11, g++ 11.2.1,
+4. **Withdrawn: RHEL 7 was a probe, not a requirement.** The owner said
+   so on 2026-09-23. C++20 and later are allowed, and a build without
+   C++26 reflection takes the runtime path behind
+   `#if defined(__cpp_impl_reflection)`. What the probe found stays below.
+   RHEL 7 would have been devtoolset-11, g++ 11.2.1,
    `-std=c++17`. Checked in a container, not assumed:
 
        podman run --rm --network=host -v /root/.ccr/ca-bundle.crt:/work/proxy-ca.crt:ro \

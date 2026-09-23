@@ -6,7 +6,8 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-uri-parser'
   spec.add_dependency 'mruby-lmdb'
-  spec.add_dependency 'mruby-mustache', github: 'Asmod4n/mruby-mustache', branch: 'main'
+  spec.add_dependency 'mruby-mustache', github: 'Asmod4n/mruby-mustache', branch: 'cpp-core'
+  spec.add_dependency 'mruby-fast-json', github: 'Asmod4n/mruby-fast-json', branch: 'main'
   spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
 
   spec.bins = %w[webmachine-cache webmachine-cache-check webmachine-serve]
