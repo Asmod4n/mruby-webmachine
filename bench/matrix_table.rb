@@ -9,8 +9,12 @@ require 'json'
 
 out = ARGV.fetch(0)
 cells = Dir[File.join(out, '*')].select { |path| File.directory?(path) }.map { |path| File.basename(path) }
-builds = %w[g++-16 clang++-23].product(%w[Os O2 O3], %w[x86-64-v3 x86-64-v4]).map { |parts| parts.join('-') }
+levels = ENV.fetch('BENCH_LEVELS', 'Os O2').split
+marches = ENV.fetch('BENCH_MARCH', 'x86-64-v4').split
+builds = %w[g++-16 clang++-23].product(levels, marches).map { |parts| parts.join('-') }
 tests = cells.map { |cell| cell[/-test(.+)\z/, 1] }.uniq.sort_by { |test| test.to_i }
+# Where each binary holds one arm, every binary of a build is one column.
+tests = ['*'] if ENV['ONE_TABLE']
 
 def median(values)
   sorted = values.sort
@@ -25,7 +29,7 @@ def spread(values)
   Math.sqrt(values.sum { |value| (value - mean)**2 } / (values.size - 1)) / mean * 100
 end
 
-short = ->(build) { build.sub('clang++-23', 'clang').sub('g++-16', 'gcc').sub('-x86-64-', ' ') }
+short = ->(build) { build.sub('clang++-23', 'clang').sub('g++-16', 'gcc').sub('-x86-64-', ' ').sub('-native', '') }
 
 tests.each do |test|
   times = Hash.new { |hash, arm| hash[arm] = Hash.new { |inner, build| inner[build] = [] } }

@@ -167,35 +167,59 @@ one_run(benchmark::State &state, const Padded &padded, const std::array<bool, 25
     }
 }
 
-// One kind of test per binary: RUN_TEST picks it.
-//   0  every field name of a browser request, against tchar
-//   N  a token of N bytes, against tchar
-#if defined(RUN_TEST) && RUN_TEST == 0
-#define ARM(name, Run) void name(benchmark::State &state) { names<Run>(state); }
-#elif defined(RUN_TEST)
-const Padded kToken = token_of(RUN_TEST);
-#define ARM(name, Run) void name(benchmark::State &state) { one_run<Run>(state, kToken, http::kTchar, http::kTcharLowBits); }
+// One question: does reading the first 32 bytes with AVX2 and the rest
+// with AVX-512 beat either form alone? One test, every run of a browser
+// request: its field names against tchar, its host against reg-name, and
+// a target with a query, 200 bytes as a tracking link sends by default.
+// One form per binary, and RUN_ARM picks it.
+const Padded kHost("shop.example.com");
+// TARGET_BYTES sets how long the target is; a query fills it up.
+#if !defined(TARGET_BYTES)
+#define TARGET_BYTES 200
 #endif
+const Padded kTarget = [] {
+    std::string target = "/orders/4711/items?utm_source=newsletter&utm_medium=email&utm_campaign=autumn-sale-2026"
+                         "&utm_content=hero-banner&session=7f3a9c1e40b2d5a8c3e1f0a9b8c7d6e5&ref=home&page=2";
+    while (target.size() < TARGET_BYTES)
+        target += "&filter=open&sort=added";
+    target.resize(TARGET_BYTES);
+    return Padded(target);
+}();
 
-// Built without RUN_TEST, as rake bench builds every file, it holds no arm.
-#if defined(ARM)
-ARM(run_floor, by_the_floor)
-BENCHMARK(run_floor);
-#if defined(__AVX2__)
-ARM(run_avx2, by_avx2)
+template <size_t (*Run)(std::string_view, const std::array<bool, 256> &, const http::NibbleTable &)>
+size_t
+every_run_of_a_request()
+{
+    size_t sum = all_names<Run>(field_names());
+    sum += Run(kHost.text(), http::kRegName, http::kRegNameLowBits);
+    sum += Run(kTarget.text(), http::kQueryByte, http::kQueryByteLowBits);
+    return sum;
+}
+
+template <size_t (*Run)(std::string_view, const std::array<bool, 256> &, const http::NibbleTable &)>
+void
+request(benchmark::State &state)
+{
+    the_same_as_the_floor_or_abort<Run>();
+    if (every_run_of_a_request<Run>() != every_run_of_a_request<by_the_floor>()) [[unlikely]]
+        std::abort();
+    for (auto _ : state) {
+        size_t sum = every_run_of_a_request<Run>();
+        benchmark::DoNotOptimize(sum);
+    }
+}
+
+// Built without RUN_ARM, as rake bench builds every file, it holds no arm.
+#if defined(__AVX512BW__) && defined(RUN_ARM)
+#if RUN_ARM == 1
+void run_avx2(benchmark::State &state) { request<by_avx2>(state); }
 BENCHMARK(run_avx2);
-#endif
-#if defined(__AVX512BW__)
-ARM(run_avx512, by_avx512)
+#elif RUN_ARM == 2
+void run_avx512(benchmark::State &state) { request<by_avx512>(state); }
 BENCHMARK(run_avx512);
-ARM(run_avx2_then_avx512, by_avx2_then_avx512)
+#elif RUN_ARM == 3
+void run_avx2_then_avx512(benchmark::State &state) { request<by_avx2_then_avx512>(state); }
 BENCHMARK(run_avx2_then_avx512);
-ARM(run_avx512_masked, by_avx512_masked)
-BENCHMARK(run_avx512_masked);
-#endif
-#if RUN_TEST == 0
-void run_floor_not_unrolled(benchmark::State &state) { names_not_unrolled(state); }
-BENCHMARK(run_floor_not_unrolled);
 #endif
 #endif
 

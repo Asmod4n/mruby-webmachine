@@ -259,10 +259,11 @@ form stay below it as its fallbacks.
 A comparison runs in each permutation of:
 
 - the compiler: g++ and clang, each the newest release;
-- the level: `-Os`, `-O2`, `-O3`;
-- the instruction set: `-march=x86-64-v3` and `-march=x86-64-v4`.
+- the level: `-Os` and `-O2`; `-O3` lost too often to stay a column;
+- the instruction set: `-march=x86-64-v4`.
 
-That is twelve binaries, and one table with a column for each. An arm
+That is four binaries for each kind of test, and one table with a column
+for each. x86-64-v3 is no longer a column: the owner took it out. An arm
 that one of them does not compile is a cell in that table with the
 error, and is never left out without a word. An arm is chosen only when
 it is the faster one across the table, not in one column.
