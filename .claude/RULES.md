@@ -70,6 +70,16 @@ The branch the owner sets as the main branch of a session is never
 pushed to. A session commits on a branch of its own, named for the
 work, and pushes that one.
 
+## A security fix is never pushed
+
+This repository is public. A branch, a pull request, an issue or a
+comment that carries a fix for a weakness also carries the test that
+triggers it, and publishes both before the owner has released the fix.
+So a session that finds or fixes a weakness pushes nothing about it:
+it commits locally and hands the owner the patch, from
+`git format-patch --stdout`, where only the owner reads it. The owner
+decides when it goes public.
+
 ## pgrep answers about itself, so the shell waits instead
 
 `pgrep -f` matches the command line of the shell that runs it. A session
