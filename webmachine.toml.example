@@ -1,0 +1,15 @@
+# webmachine.toml
+#
+# Every knob this server reads from a file is here, with what it does
+# and what it does without you. Nothing in this file changes anything
+# until you change a line.
+
+[log]
+# The key of the error fingerprint: 64 hex digits, 32 bytes. Every error
+# page and every line of the error log carries a fingerprint, BLAKE2b
+# with this key over the build, the request and the backtrace, so one
+# failure has one fingerprint and a grep finds every time it happened.
+# Keep the key, and a fingerprint from yesterday still names the same
+# failure. Without it the server makes a new key at every start.
+#   openssl rand -hex 32
+# fingerprint_key = "..."
