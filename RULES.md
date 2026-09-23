@@ -945,7 +945,8 @@ A Ruby backtrace is another thing and does not depend on it. Bytecode
 compiled with `mrbc -g` carries its file names and line numbers, and an
 exception raised in it has a full backtrace in every build. So the
 error log has one in a release build too, as long as the application
-was compiled with `-g`.
+was compiled with `-g`. That backtrace names Ruby frames and nothing
+else: where C or C++ went wrong is read in a debug build.
 
 So a release binary does not hold the code, and nobody can switch it on
 in production. It costs nothing there, and it shows a client nothing
