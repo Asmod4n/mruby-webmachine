@@ -6,7 +6,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
+#include <ctime>
+#include <functional>
+#include <optional>
+#include <vector>
 #include <span>
 #include <string_view>
 #include <netinet/in.h>
@@ -75,6 +80,7 @@ inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
 inline constexpr size_t kBufferRoomLeast = 512;
 inline constexpr uint16_t kSendGroupFirst = 2;
 inline constexpr unsigned kSendEntries = 8;
+inline constexpr uint32_t kSendGroupEpochsIdle = 2;
 
 class Ring
 {
@@ -94,12 +100,9 @@ class Ring
         if (owed_ != nullptr)
             munmap(owed_, static_cast<size_t>(connections_) * sizeof(Owed));
         free(free_rooms_);
-        if (send_rings_ != nullptr)
-            for (uint32_t slot = 0; slot < connections_; slot++)
-                if (send_rings_[slot] != nullptr)
-                    io_uring_free_buf_ring(&ring_, send_rings_[slot], kSendEntries,
-                                           static_cast<int>(kSendGroupFirst + slot));
-        free(send_rings_);
+        for (size_t at = 0; at < send_groups_.size(); at++)
+            io_uring_free_buf_ring(&ring_, send_groups_[at].buffers, kSendEntries,
+                                   static_cast<int>(kSendGroupFirst + at));
         if (standing_)
             io_uring_queue_exit(&ring_);
     }
@@ -167,9 +170,7 @@ class Ring
         free_rooms_ = static_cast<uint8_t **>(calloc(connections_, sizeof *free_rooms_));
         if (free_rooms_ == nullptr)
             return -ENOMEM;
-        send_rings_ = static_cast<io_uring_buf_ring **>(calloc(connections_, sizeof *send_rings_));
-        if (send_rings_ == nullptr)
-            return -ENOMEM;
+
         bundles_ = (ring_.features & IORING_FEAT_RECVSEND_BUNDLE) != 0;
 
         int trouble = 0;
@@ -330,6 +331,12 @@ class Ring
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
             woken();
+            const time_t now = time(nullptr);
+            if (now != send_epoch_at_) {
+                send_epoch_at_ = now;
+                send_epoch_++;
+            }
+            send_group_collected_step();
             io_uring_cqe *cqe = nullptr;
             unsigned head = 0;
             unsigned seen = 0;
@@ -353,6 +360,8 @@ class Ring
         bool closing;
         uint16_t bid;
         bool holds_bid;
+        bool holds_group;
+        uint16_t group;
         uint8_t *room;
         iovec piece[kPiecesMost];
         const void *held[kHeldMost];
@@ -410,18 +419,50 @@ class Ring
         owed.holds_bid = false;
     }
 
-    io_uring_buf_ring *send_ring_of(const uint32_t slot)
+    std::optional<uint16_t> send_group_taken()
     {
-        if (slot + kSendGroupFirst > 0xFFFF)
-            return nullptr;
-        if (send_rings_[slot] == nullptr && !send_ring_refused_) {
-            int trouble = 0;
-            send_rings_[slot] = io_uring_setup_buf_ring(&ring_, kSendEntries,
-                                                        static_cast<int>(kSendGroupFirst + slot), 0, &trouble);
-            if (send_rings_[slot] == nullptr)
-                send_ring_refused_ = true;
+        while (!free_send_groups_.empty()) {
+            std::ranges::pop_heap(free_send_groups_, std::ranges::greater{});
+            const uint16_t at = free_send_groups_.back();
+            free_send_groups_.pop_back();
+            if (at >= send_groups_.size() || !send_groups_[at].free)
+                continue;
+            send_groups_[at].free = false;
+            send_groups_[at].used_in = send_epoch_;
+            return at;
         }
-        return send_rings_[slot];
+        if (send_groups_.size() + kSendGroupFirst > 0xFFFF)
+            return std::nullopt;
+        const uint16_t at = static_cast<uint16_t>(send_groups_.size());
+        int trouble = 0;
+        io_uring_buf_ring *const buffers =
+            io_uring_setup_buf_ring(&ring_, kSendEntries, static_cast<int>(kSendGroupFirst + at), 0, &trouble);
+        if (buffers == nullptr) [[unlikely]]
+            return std::nullopt;
+        send_groups_.push_back(SendGroup{buffers, send_epoch_, false});
+        return at;
+    }
+
+    void send_group_given_back(Owed &owed)
+    {
+        if (!owed.holds_group)
+            return;
+        send_groups_[owed.group].free = true;
+        free_send_groups_.push_back(owed.group);
+        std::ranges::push_heap(free_send_groups_, std::ranges::greater{});
+        owed.holds_group = false;
+    }
+
+    void send_group_collected_step()
+    {
+        if (send_groups_.empty())
+            return;
+        const SendGroup &youngest = send_groups_.back();
+        if (!youngest.free || send_epoch_ - youngest.used_in < kSendGroupEpochsIdle)
+            return;
+        io_uring_free_buf_ring(&ring_, youngest.buffers, kSendEntries,
+                               static_cast<int>(kSendGroupFirst + send_groups_.size() - 1));
+        send_groups_.pop_back();
     }
 
     bool in_the_receive_pool(const iovec &piece) const
@@ -437,15 +478,18 @@ class Ring
             return 0;
         io_uring_sqe *const sqe = room_for_one_more();
         if (owed.pieces - owed.first == 1 && in_the_receive_pool(owed.piece[owed.first])) {
-            io_uring_buf_ring *const own = send_ring_of(slot);
-            if (own != nullptr) {
+            const std::optional<uint16_t> group = send_group_taken();
+            if (group) {
+                owed.group = *group;
+                owed.holds_group = true;
+                io_uring_buf_ring *const own = send_groups_[*group].buffers;
                 const iovec &only = owed.piece[owed.first];
                 io_uring_buf_ring_add(own, only.iov_base, static_cast<unsigned>(only.iov_len), 0,
                                       io_uring_buf_ring_mask(kSendEntries), 0);
                 io_uring_buf_ring_advance(own, 1);
                 io_uring_prep_send(sqe, static_cast<int>(slot), nullptr, 0, MSG_NOSIGNAL | MSG_WAITALL);
                 sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
-                sqe->buf_group = static_cast<uint16_t>(kSendGroupFirst + slot);
+                sqe->buf_group = static_cast<uint16_t>(kSendGroupFirst + *group);
                 io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
                 owed.sending = true;
                 return 1;
@@ -519,6 +563,7 @@ class Ring
             all_released(owed, released);
             room_given_back(owed);
             bid_given_back(owed);
+            send_group_given_back(owed);
             owed = Owed{};
         }
         io_uring_sqe *const sqe = room_for_one_more();
@@ -620,6 +665,7 @@ class Ring
         case Doing::kSending: {
             Owed &owed = owed_[slot];
             owed.sending = false;
+            send_group_given_back(owed);
             if (owed.closing) {
                 all_released(owed, released);
                 room_given_back(owed);
@@ -664,8 +710,15 @@ class Ring
     uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
     uint8_t **free_rooms_ = nullptr;
-    io_uring_buf_ring **send_rings_ = nullptr;
-    bool send_ring_refused_ = false;
+    struct SendGroup {
+        io_uring_buf_ring *buffers;
+        uint32_t used_in;
+        bool free;
+    };
+    std::vector<SendGroup> send_groups_;
+    std::vector<uint16_t> free_send_groups_;
+    uint32_t send_epoch_ = 0;
+    time_t send_epoch_at_ = 0;
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
     uint16_t returned_[kBufferCount] = {};
