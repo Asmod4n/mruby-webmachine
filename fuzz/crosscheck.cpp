@@ -65,6 +65,10 @@ long refusals_the_wide_scan_missed(const Table &table)
 #if defined(__AVX512BW__)
                 if (http::avx512_run_length(text, table.low_bits) != floor)
                     missed++;
+                if (http::avx2_then_avx512_run_length(text, table.low_bits) != floor)
+                    missed++;
+                if (http::avx512_masked_run_length(text, table.low_bits) != floor)
+                    missed++;
 #endif
             }
             held.at(at) = filler;

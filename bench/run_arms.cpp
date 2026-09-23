@@ -8,10 +8,11 @@
 
 #include "http.hpp"
 
-// How long a run of allowed bytes is, three ways in one binary: the
-// standard library form that is the floor, AVX2, and AVX-512. The same
-// runs a browser sends: its field names against tchar, and a path and a
-// long query against their tables.
+// How long a run of allowed bytes is, every form in one binary: the
+// standard library form that is the floor, AVX2, AVX-512, AVX-512 with a
+// masked load, and AVX2 for the first 32 bytes then AVX-512. The runs are
+// the field names a browser sends, and tokens of a fixed length, to find
+// where the wider form starts to pay.
 
 namespace
 {
@@ -46,11 +47,36 @@ field_names()
 const Padded kPath("/articles/42/comments/7/replies");
 const Padded kLongQuery("/search?q=" + std::string(400, 'x') + "&page=2&sort=added&filter=open");
 
+// A token of the given length, every byte a tchar, so the run is the whole
+// view and a form reads it to its end.
+Padded
+token_of(const size_t length)
+{
+    constexpr std::string_view kTchars = "abcdefghijklmnopqrstuvwxyz0123456789-_.~!#$%&'*+^`|ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::string token;
+    for (size_t at = 0; at < length; at++)
+        token += kTchars.at(at % kTchars.size());
+    return Padded(token);
+}
+
 template <size_t (*Run)(std::string_view, const std::array<bool, 256> &, const http::NibbleTable &)>
 size_t
 all_names(const std::vector<Padded> &names)
 {
     size_t sum = 0;
+    for (const Padded &name : names)
+        sum += Run(name.text(), http::kTchar, http::kTcharLowBits);
+    return sum;
+}
+
+// The same loop, which the compiler may not unroll: clang -O3 made one
+// copy of the byte loop per name and read slower than -Os, which made one.
+template <size_t (*Run)(std::string_view, const std::array<bool, 256> &, const http::NibbleTable &)>
+size_t
+all_names_not_unrolled(const std::vector<Padded> &names)
+{
+    size_t sum = 0;
+#pragma GCC unroll 1
     for (const Padded &name : names)
         sum += Run(name.text(), http::kTchar, http::kTcharLowBits);
     return sum;
@@ -71,6 +97,18 @@ by_avx2(const std::string_view text, const std::array<bool, 256> &, const http::
 #endif
 
 #if defined(__AVX512BW__)
+size_t
+by_avx512_masked(const std::string_view text, const std::array<bool, 256> &, const http::NibbleTable &low_bits)
+{
+    return http::avx512_masked_run_length(text, low_bits);
+}
+
+size_t
+by_avx2_then_avx512(const std::string_view text, const std::array<bool, 256> &, const http::NibbleTable &low_bits)
+{
+    return http::avx2_then_avx512_run_length(text, low_bits);
+}
+
 size_t
 by_avx512(const std::string_view text, const std::array<bool, 256> &, const http::NibbleTable &low_bits)
 {
@@ -103,12 +141,24 @@ names(benchmark::State &state)
     }
 }
 
+void
+names_not_unrolled(benchmark::State &state)
+{
+    const std::vector<Padded> &every = field_names();
+    for (auto _ : state) {
+        size_t sum = all_names_not_unrolled<by_the_floor>(every);
+        benchmark::DoNotOptimize(sum);
+    }
+}
+
 template <size_t (*Run)(std::string_view, const std::array<bool, 256> &, const http::NibbleTable &)>
 void
 one_run(benchmark::State &state, const Padded &padded, const std::array<bool, 256> &allowed,
         const http::NibbleTable &low_bits)
 {
     the_same_as_the_floor_or_abort<Run>();
+    if (Run(padded.text(), allowed, low_bits) != http::floor_run_length(padded.text(), allowed)) [[unlikely]]
+        std::abort();
     for (auto _ : state) {
         std::string_view text = padded.text();
         benchmark::DoNotOptimize(text);
@@ -118,15 +168,13 @@ one_run(benchmark::State &state, const Padded &padded, const std::array<bool, 25
 }
 
 // One kind of test per binary: RUN_TEST picks it.
-//   1  every field name of a browser request, against tchar
-//   2  a path of 31 bytes, against the path table
-//   3  a query of 440 bytes, against the query table
-#if RUN_TEST == 1
+//   0  every field name of a browser request, against tchar
+//   N  a token of N bytes, against tchar
+#if defined(RUN_TEST) && RUN_TEST == 0
 #define ARM(name, Run) void name(benchmark::State &state) { names<Run>(state); }
-#elif RUN_TEST == 2
-#define ARM(name, Run) void name(benchmark::State &state) { one_run<Run>(state, kPath, http::kPathByte, http::kPathByteLowBits); }
-#elif RUN_TEST == 3
-#define ARM(name, Run) void name(benchmark::State &state) { one_run<Run>(state, kLongQuery, http::kQueryByte, http::kQueryByteLowBits); }
+#elif defined(RUN_TEST)
+const Padded kToken = token_of(RUN_TEST);
+#define ARM(name, Run) void name(benchmark::State &state) { one_run<Run>(state, kToken, http::kTchar, http::kTcharLowBits); }
 #endif
 
 // Built without RUN_TEST, as rake bench builds every file, it holds no arm.
@@ -140,6 +188,14 @@ BENCHMARK(run_avx2);
 #if defined(__AVX512BW__)
 ARM(run_avx512, by_avx512)
 BENCHMARK(run_avx512);
+ARM(run_avx2_then_avx512, by_avx2_then_avx512)
+BENCHMARK(run_avx2_then_avx512);
+ARM(run_avx512_masked, by_avx512_masked)
+BENCHMARK(run_avx512_masked);
+#endif
+#if RUN_TEST == 0
+void run_floor_not_unrolled(benchmark::State &state) { names_not_unrolled(state); }
+BENCHMARK(run_floor_not_unrolled);
 #endif
 #endif
 

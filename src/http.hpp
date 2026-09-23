@@ -565,15 +565,20 @@ inline size_t avx2_run_length(const std::string_view padded, const NibbleTable &
 #endif
 
 #if defined(__AVX512BW__)
-inline uint64_t avx512_block_refusals(const char *at, const __m512i low_table,
-                                      const __m512i high_table)
+inline uint64_t avx512_refusals_of(const __m512i bytes, const __mmask64 inside,
+                                   const __m512i low_table, const __m512i high_table)
 {
-    const __m512i bytes = _mm512_loadu_si512(at);
     const __m512i low =
         _mm512_shuffle_epi8(low_table, _mm512_and_si512(bytes, _mm512_set1_epi8(0x0F)));
     const __m512i high = _mm512_shuffle_epi8(
         high_table, _mm512_and_si512(_mm512_srli_epi16(bytes, 4), _mm512_set1_epi8(0x0F)));
-    return _mm512_testn_epi8_mask(low, high);
+    return _mm512_mask_testn_epi8_mask(inside, low, high);
+}
+
+inline uint64_t avx512_block_refusals(const char *at, const __m512i low_table,
+                                      const __m512i high_table)
+{
+    return avx512_refusals_of(_mm512_loadu_si512(at), ~__mmask64{0}, low_table, high_table);
 }
 
 inline size_t avx512_run_length(const std::string_view padded, const NibbleTable &low_bits)
@@ -587,6 +592,47 @@ inline size_t avx512_run_length(const std::string_view padded, const NibbleTable
             return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
     }
     return padded.size();
+}
+#endif
+
+#if defined(__AVX512BW__)
+// The first 32 bytes through AVX2, where most field names and paths end,
+// and what is longer 64 bytes at a time.
+inline size_t avx2_then_avx512_run_length(const std::string_view padded, const NibbleTable &low_bits)
+{
+    const uint32_t first = avx2_block_refusals(
+        padded.data(), _mm256_loadu_si256(reinterpret_cast<const __m256i *>(low_bits.data())),
+        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(kHighNibbleBit.data())));
+    if (first != 0 || padded.size() <= 32)
+        return std::min(static_cast<size_t>(std::countr_zero(first)), padded.size());
+    const __m512i low_table = _mm512_loadu_si512(low_bits.data());
+    const __m512i high_table = _mm512_loadu_si512(kHighNibbleBit.data());
+    for (size_t at = 32; at < padded.size(); at += 64) {
+        const uint64_t refused =
+            avx512_block_refusals(std::next(padded.data(), at), low_table, high_table);
+        if (refused != 0)
+            return std::min(at + static_cast<size_t>(std::countr_zero(refused)), padded.size());
+    }
+    return padded.size();
+}
+#endif
+
+#if defined(__AVX512BW__)
+// Only the bytes the view holds are loaded, so the last block needs no
+// padding behind it, and a run shorter than 64 bytes is one load.
+inline size_t avx512_masked_run_length(const std::string_view text, const NibbleTable &low_bits)
+{
+    const __m512i low_table = _mm512_loadu_si512(low_bits.data());
+    const __m512i high_table = _mm512_loadu_si512(kHighNibbleBit.data());
+    for (size_t at = 0; at < text.size(); at += 64) {
+        const size_t left = text.size() - at;
+        const __mmask64 inside = left >= 64 ? ~__mmask64{0} : _bzhi_u64(~uint64_t{0}, static_cast<unsigned>(left));
+        const __m512i bytes = _mm512_maskz_loadu_epi8(inside, std::next(text.data(), at));
+        const uint64_t refused = avx512_refusals_of(bytes, inside, low_table, high_table);
+        if (refused != 0)
+            return at + static_cast<size_t>(std::countr_zero(refused));
+    }
+    return text.size();
 }
 #endif
 
