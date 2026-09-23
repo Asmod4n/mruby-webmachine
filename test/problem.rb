@@ -142,8 +142,10 @@ end
 
 # The pack writes the finished <img> into an extra field of each entry
 # (APPNOTE 4.5.1 lets a writer add its own), so the page joins no URL.
+# The path starts with a dot segment named for the server, a name an
+# application does not pick for a route of its own.
 assert('a status with a picture gets its <img>, one without gets none') do
-  assert_include P.picture(404), 'src="/error_assets/404.jpg"'
+  assert_include P.picture(404), 'src="/.webmachine/error-assets/404.jpg"'
   assert_nil P.picture(299)
 end
 

@@ -82,20 +82,35 @@ table_in(mrb_state *mrb, const mrb_value document, const std::string_view name)
     return table;
 }
 
-inline std::expected<std::optional<fingerprint::Key>, ConfigError>
-fingerprint_key_in(mrb_state *mrb, const std::string_view text)
+inline std::expected<std::optional<std::string>, ConfigError>
+string_in(mrb_state *mrb, const std::string_view text, const std::string_view table, const std::string_view name)
 {
     const std::expected<mrb_value, ConfigError> document = document_of(mrb, text);
     if (!document) [[unlikely]] return std::unexpected(document.error());
-    const std::optional<mrb_value> log = table_in(mrb, *document, "log");
-    if (!log) return std::nullopt;
-    if (!mrb_hash_p(*log)) [[unlikely]] return std::unexpected(ConfigError("webmachine.toml: [log] is not a table"));
-    const mrb_value value = mrb_hash_get(mrb, *log, mrb_str_new_lit(mrb, "fingerprint_key"));
+    const std::optional<mrb_value> found = table_in(mrb, *document, table);
+    if (!found) return std::nullopt;
+    const std::string where = "webmachine.toml: [" + std::string(table) + "] ";
+    if (!mrb_hash_p(*found)) [[unlikely]] return std::unexpected(ConfigError(where + "is not a table"));
+    const mrb_value value = mrb_hash_get(mrb, *found, mrb_str_new(mrb, name.data(), static_cast<mrb_int>(name.size())));
     if (mrb_nil_p(value)) return std::nullopt;
     if (!mrb_string_p(value)) [[unlikely]]
-        return std::unexpected(ConfigError("webmachine.toml: [log] fingerprint_key is not a string"));
-    const std::optional<fingerprint::Key> key =
-        fingerprint::key_of(std::string_view(RSTRING_PTR(value), static_cast<size_t>(RSTRING_LEN(value))));
+        return std::unexpected(ConfigError(where + std::string(name) + " is not a string"));
+    return std::string(RSTRING_PTR(value), static_cast<size_t>(RSTRING_LEN(value)));
+}
+
+inline std::expected<std::optional<std::string>, ConfigError>
+error_assets_in(mrb_state *mrb, const std::string_view text)
+{
+    return string_in(mrb, text, "server", "error_assets");
+}
+
+inline std::expected<std::optional<fingerprint::Key>, ConfigError>
+fingerprint_key_in(mrb_state *mrb, const std::string_view text)
+{
+    const std::expected<std::optional<std::string>, ConfigError> hex = string_in(mrb, text, "log", "fingerprint_key");
+    if (!hex) [[unlikely]] return std::unexpected(hex.error());
+    if (!*hex) return std::nullopt;
+    const std::optional<fingerprint::Key> key = fingerprint::key_of(**hex);
     if (!key) [[unlikely]]
         return std::unexpected(ConfigError("webmachine.toml: [log] fingerprint_key is not 64 hex digits"));
     return key;

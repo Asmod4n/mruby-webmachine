@@ -74,6 +74,7 @@ inline constexpr std::array<Offer, 6> kOffers{{
     {Form::kText, {"text", "plain", ""}},
 }};
 
+inline constexpr std::string_view kErrorAssetsPrefix = "/.webmachine/error-assets/";
 inline constexpr uint16_t kExtraImgTag = 0x574d;
 
 struct Picture {

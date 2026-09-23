@@ -24,3 +24,13 @@ assert('a wrong key or a broken file is refused with the reason') do
                C.fingerprint_key_in("[log]\nfingerprint_key = 5\n")
   assert_true C.fingerprint_key_in("[log\n").start_with?('webmachine.toml: ')
 end
+
+# rake install writes where it put the pack of error pictures into
+# [server] error_assets, and the server reads it from there.
+assert('[server] error_assets names the pack') do
+  path = '/usr/local/share/mruby-webmachine/error-assets.zip'
+  assert_equal path.to_sym, C.error_assets_in("[server]\nerror_assets = \"#{path}\"\n")
+  assert_nil C.error_assets_in("[log]\n")
+  assert_equal 'webmachine.toml: [server] error_assets is not a string',
+               C.error_assets_in("[server]\nerror_assets = 1\n")
+end

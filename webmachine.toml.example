@@ -4,6 +4,12 @@
 # and what it does without you. Nothing in this file changes anything
 # until you change a line.
 
+[server]
+# The pictures on the error pages: a zip, one <status>.jpg per status.
+# rake install puts it under PREFIX/share/mruby-webmachine and writes its
+# path here. Without it the pages render without pictures.
+# error_assets = "/usr/local/share/mruby-webmachine/error-assets.zip"
+
 [log]
 # The key of the error fingerprint: 64 hex digits, 32 bytes. Every error
 # page and every line of the error log carries a fingerprint, BLAKE2b
