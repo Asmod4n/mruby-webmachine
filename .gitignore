@@ -6,3 +6,4 @@ fuzz/leak-*
 fuzz/oom-*
 fuzz/timeout-*
 mruby/
+build/
