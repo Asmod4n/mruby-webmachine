@@ -907,6 +907,32 @@ unprivileged user was stopped at two. A provided buffer pool is ordinary
 memory and is not charged. Where no `bench` user exists the run goes
 ahead as the caller, and the row says which it was.
 
+## A limit is tested by a user the limit holds
+
+Every limit this tree meets or sets is tested as a user with no
+capability: not root, no CAP_IPC_LOCK, no CAP_SYS_NICE, no
+CAP_SYS_RESOURCE. Root is not held to RLIMIT_MEMLOCK or RLIMIT_NICE,
+so a test that runs as root sees no limit and proves nothing about
+what the code does when it meets one.
+
+`setpriv --reuid=65534 --regid=65534 --clear-groups` runs a command
+as nobody, and `prlimit` sets the limit it runs under.
+
+Measured on 6.18.44, RLIMIT_MEMLOCK 8192 KiB, one ring in each process:
+
+| SQ entries | taken | refused |
+|---|---|---|
+| 32768 | rings 1 and 2, as nobody | ring 3, ENOMEM |
+| 16384 | rings 1 to 5, as nobody | ring 6, ENOMEM |
+| 32768 | as root, every time | - |
+| 49152, 65536 | - | EINVAL, as any user |
+
+So the budget belongs to the uid and not to the process: three
+servers under one user share it, and a ring cannot know what the
+others took. The kernel charges about 1.6 MiB for 16384 entries: 64
+bytes for each SQE, 16 for each of twice as many CQEs, and the SQ
+array. No ring takes more than 32768 SQ entries, whatever the budget.
+
 ## An error is small where it travels and full where it is read
 
 A function gives back what its caller can use, and nothing more.
