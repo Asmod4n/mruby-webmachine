@@ -30,10 +30,10 @@ body_of(cache_held *const held, const uint64_t route, const uint64_t now)
     return std::string_view(reinterpret_cast<const char *>(answer.value), answer.length);
 }
 
-class Resource : public webmachine::Resource
+template <class Inner> class Resource final : public webmachine::Resource
 {
   public:
-    Resource(const webmachine::Resource &inner, cache_held *const held, const uint64_t route,
+    Resource(const Inner &inner, cache_held *const held, const uint64_t route,
            const std::chrono::sys_seconds now, const std::chrono::year current_year)
         : inner_(inner), held_(held), route_(route), now_(now), current_year_(current_year)
     {
@@ -204,7 +204,7 @@ class Resource : public webmachine::Resource
         return *date;
     }
 
-    const webmachine::Resource &inner_;
+    const Inner &inner_;
     cache_held *const held_;
     const uint64_t route_;
     const std::chrono::sys_seconds now_;

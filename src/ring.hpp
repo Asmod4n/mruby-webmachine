@@ -374,11 +374,16 @@ class Ring
         Owed &owed = owed_[slot];
         if (owed.sending || owed.first == owed.pieces)
             return 0;
-        owed.message = msghdr{};
-        owed.message.msg_iov = owed.piece + owed.first;
-        owed.message.msg_iovlen = owed.pieces - owed.first;
         io_uring_sqe *const sqe = room_for_one_more();
-        io_uring_prep_sendmsg(sqe, static_cast<int>(slot), &owed.message, MSG_NOSIGNAL | MSG_WAITALL);
+        if (owed.pieces - owed.first == 1) {
+            const iovec &only = owed.piece[owed.first];
+            io_uring_prep_send(sqe, static_cast<int>(slot), only.iov_base, only.iov_len, MSG_NOSIGNAL | MSG_WAITALL);
+        } else {
+            owed.message = msghdr{};
+            owed.message.msg_iov = owed.piece + owed.first;
+            owed.message.msg_iovlen = owed.pieces - owed.first;
+            io_uring_prep_sendmsg(sqe, static_cast<int>(slot), &owed.message, MSG_NOSIGNAL | MSG_WAITALL);
+        }
         sqe->flags |= IOSQE_FIXED_FILE;
         io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
         owed.sending = true;

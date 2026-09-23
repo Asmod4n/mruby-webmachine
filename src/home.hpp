@@ -22,7 +22,7 @@ namespace home
 
 constexpr webmachine::MediaTypeHandler kHomeTypes[] = {{"text/html; charset=utf-8", "to_html"}};
 
-class Home : public webmachine::Resource
+class Home final : public webmachine::Resource
 {
   public:
     bool resource_exists(const http1::Request &request) const override

@@ -297,14 +297,16 @@ void cache_sent(cache_reader *of_thread, cache_held *of_request)
 {
     if (of_thread == NULL || of_request == NULL)
         return;
-    if (of_request->walking != NULL) {
-        mdb_cursor_close(of_request->walking);
-        of_request->walking = NULL;
-    }
     mdb_txn_reset(of_request->reading);
     if (mdb_txn_renew(of_request->reading) != 0)
         return;
-    if (mdb_cursor_open(of_request->reading, of_thread->fields, &of_request->walking) != 0)
-        return;
+    if (of_request->walking == NULL ||
+        mdb_cursor_renew(of_request->reading, of_request->walking) != 0) {
+        if (of_request->walking != NULL)
+            mdb_cursor_close(of_request->walking);
+        of_request->walking = NULL;
+        if (mdb_cursor_open(of_request->reading, of_thread->fields, &of_request->walking) != 0)
+            return;
+    }
     of_thread->ready[of_thread->ready_count++] = of_request;
 }

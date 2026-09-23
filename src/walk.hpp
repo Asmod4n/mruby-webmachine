@@ -115,8 +115,9 @@ holds_method(const std::span<const http::Method> methods, const http::Method met
     return std::ranges::find(methods, method) != methods.end();
 }
 
-inline std::optional<http::EntityTag>
-entity_tag_of(const webmachine::Resource &resource, const http1::Request &request)
+template <class Resource>
+std::optional<http::EntityTag>
+entity_tag_of(const Resource &resource, const http1::Request &request)
 {
     const std::string_view spelled = resource.generate_etag(request);
     if (spelled.empty()) return std::nullopt;
@@ -135,31 +136,50 @@ content_length_of(const std::string_view field_value)
     return length;
 }
 
-class Walk
+template <class Resource> class Walk
 {
   public:
-    Walk(const webmachine::Resource &resource, const http1::Request &request, const Facts &facts)
+    Walk(const Resource &resource, const http1::Request &request, const Facts &facts)
         : resource_(resource), request_(request), facts_(facts)
     {
     }
 
     std::expected<Outcome, http::Refusal> run()
     {
-        Node at = Node::kB13;
-        for (;;) {
-            const bool answer = answer_at(at);
-            if (refusal_) [[unlikely]] return std::unexpected(*refusal_);
-#if defined(MRB_DEBUG)
-            if (path_length_ < path_.size()) path_.at(path_length_++) = Step{at, answer};
-#endif
-            if (halt_) [[unlikely]] return outcome_at(at, *halt_);
-            const Target next = flow::next(at, answer);
-            if (next.node == Node::kCount) return outcome_at(at, next.status);
-            at = next.node;
-        }
+        const uint32_t ended = from<Node::kB13>();
+        if (refusal_) [[unlikely]] return std::unexpected(*refusal_);
+        return outcome_at(static_cast<Node>(ended >> 16), static_cast<uint16_t>(ended));
     }
 
   private:
+    static constexpr uint32_t ended_at(const Node at, const uint16_t status)
+    {
+        return (static_cast<uint32_t>(at) << 16) | status;
+    }
+
+    template <Node At> uint32_t from()
+    {
+        const bool answer = answer_at(At);
+        if (refusal_) [[unlikely]] return ended_at(At, 0);
+#if defined(MRB_DEBUG)
+        if (path_length_ < path_.size()) path_.at(path_length_++) = Step{At, answer};
+#endif
+        if (halt_) [[unlikely]] return ended_at(At, *halt_);
+        constexpr Target on_true = flow::next(At, true);
+        constexpr Target on_false = flow::next(At, false);
+        if (answer) {
+            if constexpr (on_true.node == Node::kCount)
+                return ended_at(At, on_true.status);
+            else
+                [[gnu::musttail]] return from<on_true.node>();
+        } else {
+            if constexpr (on_false.node == Node::kCount)
+                return ended_at(At, on_false.status);
+            else
+                [[gnu::musttail]] return from<on_false.node>();
+        }
+    }
+
     Outcome outcome_at(const Node at, const uint16_t status) const
     {
 #if defined(MRB_DEBUG)
@@ -183,9 +203,9 @@ class Walk
         return *answer;
     }
 
-    bool answer_at(const Node at)
+    [[gnu::always_inline]] bool answer_at(const Node at)
     {
-        const webmachine::Resource &r = resource_;
+        const Resource &r = resource_;
         const http1::Request &q = request_;
         const Facts &f = facts_;
         switch (at) {
@@ -334,7 +354,7 @@ class Walk
         return best != 0;
     }
 
-    const webmachine::Resource &resource_;
+    const Resource &resource_;
     const http1::Request &request_;
     const Facts &facts_;
     std::optional<size_t> media_type_;
@@ -349,10 +369,11 @@ class Walk
 #endif
 };
 
-inline std::expected<Outcome, http::Refusal>
-walk(const webmachine::Resource &resource, const http1::Request &request, const Facts &facts)
+template <class Resource>
+std::expected<Outcome, http::Refusal>
+walk(const Resource &resource, const http1::Request &request, const Facts &facts)
 {
-    Walk w(resource, request, facts);
+    Walk<Resource> w(resource, request, facts);
     return w.run();
 }
 
