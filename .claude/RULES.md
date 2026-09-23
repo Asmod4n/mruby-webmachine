@@ -64,6 +64,12 @@ finished and green. Changes that are not committed at the end of a turn
 are normal, and a turn does not end with a commit only to silence the
 hook.
 
+## The session's branch is the owner's
+
+The branch the owner sets as the main branch of a session is never
+pushed to. A session commits on a branch of its own, named for the
+work, and pushes that one.
+
 ## pgrep answers about itself, so the shell waits instead
 
 `pgrep -f` matches the command line of the shell that runs it. A session
