@@ -256,7 +256,10 @@ constant_made(const std::span<char> room, Heads &heads, const Today &today, cons
 {
     Spelled out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary);
-    return {out.size(), head ? std::string_view{} : body, nullptr, taken};
+    if (head || body.size() > kSendBodyWithoutCopyAbove)
+        return {out.size(), head ? std::string_view{} : body, nullptr, taken};
+    out.add(body);
+    return {out.size(), {}, nullptr, taken};
 }
 
 inline constexpr std::string_view kAppName = "webmachine-serve";

@@ -73,6 +73,8 @@ inline constexpr uint32_t kAnswerBytes = 16384;
 inline constexpr uint32_t kPiecesMost = 16;
 inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
 inline constexpr size_t kBufferRoomLeast = 512;
+inline constexpr uint16_t kSendGroupFirst = 2;
+inline constexpr unsigned kSendEntries = 8;
 
 class Ring
 {
@@ -92,6 +94,12 @@ class Ring
         if (owed_ != nullptr)
             munmap(owed_, static_cast<size_t>(connections_) * sizeof(Owed));
         free(free_rooms_);
+        if (send_rings_ != nullptr)
+            for (uint32_t slot = 0; slot < connections_; slot++)
+                if (send_rings_[slot] != nullptr)
+                    io_uring_free_buf_ring(&ring_, send_rings_[slot], kSendEntries,
+                                           static_cast<int>(kSendGroupFirst + slot));
+        free(send_rings_);
         if (standing_)
             io_uring_queue_exit(&ring_);
     }
@@ -158,6 +166,9 @@ class Ring
             return -ENOMEM;
         free_rooms_ = static_cast<uint8_t **>(calloc(connections_, sizeof *free_rooms_));
         if (free_rooms_ == nullptr)
+            return -ENOMEM;
+        send_rings_ = static_cast<io_uring_buf_ring **>(calloc(connections_, sizeof *send_rings_));
+        if (send_rings_ == nullptr)
             return -ENOMEM;
         bundles_ = (ring_.features & IORING_FEAT_RECVSEND_BUNDLE) != 0;
 
@@ -399,12 +410,47 @@ class Ring
         owed.holds_bid = false;
     }
 
+    io_uring_buf_ring *send_ring_of(const uint32_t slot)
+    {
+        if (slot + kSendGroupFirst > 0xFFFF)
+            return nullptr;
+        if (send_rings_[slot] == nullptr && !send_ring_refused_) {
+            int trouble = 0;
+            send_rings_[slot] = io_uring_setup_buf_ring(&ring_, kSendEntries,
+                                                        static_cast<int>(kSendGroupFirst + slot), 0, &trouble);
+            if (send_rings_[slot] == nullptr)
+                send_ring_refused_ = true;
+        }
+        return send_rings_[slot];
+    }
+
+    bool in_the_receive_pool(const iovec &piece) const
+    {
+        const uint8_t *const at = static_cast<const uint8_t *>(piece.iov_base);
+        return at >= room_ && at + piece.iov_len <= room_ + static_cast<size_t>(kBufferCount) * kBufferBytes;
+    }
+
     unsigned sends(const uint32_t slot)
     {
         Owed &owed = owed_[slot];
         if (owed.sending || owed.first == owed.pieces)
             return 0;
         io_uring_sqe *const sqe = room_for_one_more();
+        if (owed.pieces - owed.first == 1 && in_the_receive_pool(owed.piece[owed.first])) {
+            io_uring_buf_ring *const own = send_ring_of(slot);
+            if (own != nullptr) {
+                const iovec &only = owed.piece[owed.first];
+                io_uring_buf_ring_add(own, only.iov_base, static_cast<unsigned>(only.iov_len), 0,
+                                      io_uring_buf_ring_mask(kSendEntries), 0);
+                io_uring_buf_ring_advance(own, 1);
+                io_uring_prep_send(sqe, static_cast<int>(slot), nullptr, 0, MSG_NOSIGNAL | MSG_WAITALL);
+                sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
+                sqe->buf_group = static_cast<uint16_t>(kSendGroupFirst + slot);
+                io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
+                owed.sending = true;
+                return 1;
+            }
+        }
         if (owed.pieces - owed.first == 1) {
             const iovec &only = owed.piece[owed.first];
             io_uring_prep_send(sqe, static_cast<int>(slot), only.iov_base, only.iov_len, MSG_NOSIGNAL | MSG_WAITALL);
@@ -618,6 +664,8 @@ class Ring
     uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
     uint8_t **free_rooms_ = nullptr;
+    io_uring_buf_ring **send_rings_ = nullptr;
+    bool send_ring_refused_ = false;
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
     uint16_t returned_[kBufferCount] = {};
