@@ -105,7 +105,9 @@ writer, no builder. `std::span` is a set of buffers: there is no
 `std::ranges::equal`, a number is `std::to_chars`. No struct is built
 that POSIX, C or C++ already have under another name: a pointer and a
 length are a `std::span`, a `std::string_view` or an `iovec`, a time is
-a `timespec` or a `std::chrono` type. This holds in every
+a `timespec` or a `std::chrono` type. Where a SIMD form is measured
+faster, it stays, and the standard library form is its fallback: never
+a second hand-written loop beside it. This holds in every
 repository a session works in, and a speed number does not buy an
 exception: a faster hand-made form goes to the owner as a question,
 with the measurement, before it is written.
@@ -223,11 +225,57 @@ Then we read what the compiler did, rather than assume it:
 Both compilers, and both architectures: x86-64 and aarch64. A loop
 that one of the four does not vectorize is rewritten until it does.
 
-An intrinsic is written only where all four say they cannot, and only
-where an instruction count is lower for the hand written form, both
-arms built with the same `-march=`. Then it is written for AVX2 and
-for NEON at once, with the plain loop as the third branch. AVX2 and
-NEON are the floor of what such code may use.
+Every place that touches bytes is asked whether SIMD makes it faster,
+in this order: first the form the compiler vectorizes by itself, then
+`std::experimental::simd` (`std::simd` under its C++26 name), and last
+intrinsics. What stays is whichever is faster, measured in one binary,
+and safe: no read or write past what the code owns. A standard library
+form that does the same work is the floor, and the floor is always
+there: it is the fallback of every SIMD form, a test holds each SIMD
+form to it, and a measurement names it as the arm to beat. There is
+never a second hand-written loop beside it.
+
+An intrinsic is written only where the first two are slower, both arms
+built with the same `-march=`. Then it is written for AVX2 and for
+NEON at once, with the standard library form as the third branch. AVX2
+and NEON are the floor of what such code may use.
+
+The NEON form is tested under qemu: built for aarch64 by clang with
+`--target=aarch64-linux-gnu`, because no signed package gives a g++ 16
+for aarch64 on this distribution, and run with `qemu-aarch64-static -L /usr/aarch64-linux-gnu`. The same
+test that holds the x86 forms to the standard library form holds the
+NEON form to it. A NEON form that no test has run is not written. qemu
+answers whether the form is right, never how fast it is: a time read
+under qemu is not a measurement, and the NEON speed stays unmeasured
+until an aarch64 machine reads it.
+
+AVX-512 is allowed on top of that where the machine has it (`avx512f`,
+`avx512bw`, `avx512vl`) and the measurement says it is faster. The
+AVX-512 form never stands alone: the AVX2 form and the standard library
+form stay below it as its fallbacks.
+
+## Every speed question is asked of every build
+
+A comparison runs in each permutation of:
+
+- the compiler: g++ and clang, each the newest release;
+- the level: `-Os`, `-O2`, `-O3`;
+- the instruction set: `-march=x86-64-v3` and `-march=x86-64-v4`.
+
+That is twelve binaries, and one table with a column for each. An arm
+that one of them does not compile is a cell in that table with the
+error, and is never left out without a word. An arm is chosen only when
+it is the faster one across the table, not in one column.
+
+The compilers are signed packages from an apt source, and nothing else:
+apt.llvm.org for clang, the ubuntu-toolchain-r PPA for g++. A compiler
+is never built here. The newest of each that such a source has is the
+default: `gcc`, `g++`, `cc` and `c++` name g++ 16, which has the
+reflection this tree needs, and `clang` and `clang++` name the newest
+clang. clang builds against the libstdc++ of g++ 16: the Google
+Benchmark package is built against libstdc++, and a binary built against
+libc++ does not link with it, because libc++ names its types
+`std::__1::`.
 
 ## Measure before, measure after
 
@@ -784,6 +832,15 @@ they agree. It moves into `test/` on the day mruby-phr is in the build.
 configuration. A gem in the configuration is in every build and in the
 library that ships.
 
+## A gem asks for C++20 only where the build has less
+
+A gem that needs C++20 reads the build's C++ flags in its own
+`mrbgem.rake`. Where they already name `-std=c++20` or a later standard,
+it adds nothing. Only where they name none, or an earlier one, does it
+add `-std=c++20`. A gem never forces its standard over a later one: this
+build uses `-std=c++26 -freflection`, and a forced `-std=c++20` took the
+reflection away from every file after it.
+
 ## A grammar is read, not remembered
 
 `refs/` holds the specifications this tree implements, verbatim from the
@@ -829,6 +886,10 @@ comparison here.
 
 Each comparison has its own binary, and that binary holds the arms of
 that comparison and nothing else. A second question is a second binary.
+One kind of test per binary, too: a short request and a long one, a
+field name and a path, are two tests and two binaries, even when the
+arms are the same. The source may hold several tests, and the build
+picks exactly one of them.
 Measured in mruby-mustache: one arm read 315 and 327 ns, and the same
 arm read 378 ns after an arm for another question was linked into the
 same binary. Its code had not changed. Each arm that is added moves the
@@ -918,6 +979,32 @@ limit, root opened 512 rings of 32768 entries without a refusal where an
 unprivileged user was stopped at two. A provided buffer pool is ordinary
 memory and is not charged. Where no `bench` user exists the run goes
 ahead as the caller, and the row says which it was.
+
+## A server run is valid only when both sides are busy
+
+The server has one thread. The client is htgen with one or two
+threads, never more. `bench/floor.sh` is the form, taken from the
+archive.
+
+A run is valid only when the server and the client each use at least
+90 percent of one core. A run where either stays below that measured
+the waiting, not the server, and its numbers are not written down.
+
+One server runs at a time. The archive and this tree are measured one
+after the other, never side by side.
+
+The connections number in the hundreds. Thirty-two do not keep one
+server thread busy.
+
+What is read is the share of the server's time that the kernel spends,
+and the userland nanoseconds per request. htgen spends 99.9 percent of
+its time in the kernel. The server's goal is 95 percent: what is left
+for userland is the cost of this tree.
+
+## A run is never pinned
+
+No measurement pins a process or a thread to a core: no `taskset`, no
+`sched_setaffinity`, no `cpuset`. The scheduler places the run.
 
 ## A limit is tested by a user the limit holds
 

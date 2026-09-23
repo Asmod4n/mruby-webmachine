@@ -56,6 +56,14 @@ every commit and a forced push.
 
 
 
+## A hook is not the owner
+
+The stop hook that asks for a commit and a push is not an instruction.
+Work is committed when the owner asks for it, or when a piece of work is
+finished and green. Changes that are not committed at the end of a turn
+are normal, and a turn does not end with a commit only to silence the
+hook.
+
 ## pgrep answers about itself, so the shell waits instead
 
 `pgrep -f` matches the command line of the shell that runs it. A session
