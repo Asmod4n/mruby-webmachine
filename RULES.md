@@ -102,7 +102,10 @@ No class, no method and no algorithm that the standard library has is
 built here. `std::string` is where output goes: there is no `Out`, no
 writer, no builder. `std::span` is a set of buffers: there is no
 `Spread`. A search is `find`, a comparison is `==` or
-`std::ranges::equal`, a number is `std::to_chars`. This holds in every
+`std::ranges::equal`, a number is `std::to_chars`. No struct is built
+that POSIX, C or C++ already have under another name: a pointer and a
+length are a `std::span`, a `std::string_view` or an `iovec`, a time is
+a `timespec` or a `std::chrono` type. This holds in every
 repository a session works in, and a speed number does not buy an
 exception: a faster hand-made form goes to the owner as a question,
 with the measurement, before it is written.
