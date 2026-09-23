@@ -146,12 +146,16 @@ task :bench do
   raise 'mruby-lmdb is not checked out; run rake test once' if lmdb.nil?
 
   in_c = Dir[File.join(__dir__, 'bench', 'picohttpparser', '*.c')].sort +
-         %w[mdb.c midl.c].map { |one| File.join(lmdb, one) }
+         %w[mdb.c midl.c].map { |one| File.join(lmdb, one) } +
+         [File.join(__dir__, 'src', 'cache.c')]
+  mustache = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-mustache', 'include')].first
+  raise 'mruby-mustache is not checked out; run rake test once' if mustache.nil?
+
   ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
   raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
 
   sources << File.join(ada, 'src', 'ada.cpp')
-  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), lmdb]
+  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), mustache, lmdb]
   binary = File.join(__dir__, 'bench', 'run')
   results = File.join(__dir__, 'bench', 'results')
   mkdir_p results
@@ -194,7 +198,7 @@ task :fuzz, [:seconds] do |_task, args|
 
   fuzz = File.join(__dir__, 'fuzz')
   binary = File.join(fuzz, 'run')
-  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), lmdb]
+  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), mustache, lmdb]
   sh "#{FUZZ_CC} #{FUZZ_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
      "#{File.join(fuzz, 'fuzz_http.cpp')} #{File.join(ada, 'src', 'ada.cpp')} -o #{binary}"
   seconds = args[:seconds].to_i
@@ -220,7 +224,7 @@ task :crosscheck do
 
   fuzz = File.join(__dir__, 'fuzz')
   binary = File.join(fuzz, 'crosscheck')
-  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), lmdb]
+  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), mustache, lmdb]
   sh "#{CROSS_CXX} -std=c++23 -O2 -g -static " \
      "#{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
      "#{File.join(fuzz, 'crosscheck.cpp')} #{File.join(fuzz, 'fuzz_http.cpp')} " \
