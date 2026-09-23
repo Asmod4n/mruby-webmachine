@@ -33,6 +33,8 @@ constexpr std::string_view kAsked = "GET / HTTP/1.1\r\n"
                                     "Accept-Encoding: gzip, deflate, br, zstd\r\n"
                                     "\r\n";
 
+constexpr std::string_view kAskedLikeHtgen = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
 constexpr std::string_view kRoute = "/";
 constexpr std::string_view kEntityTag = "\"home-1\"";
 constexpr std::string_view kLastModified = "Tue, 22 Sep 2026 10:00:00 GMT";
@@ -169,7 +171,24 @@ BM_walk_alone(benchmark::State &state)
         const auto now = now_is();
         const auto outcome = flow::walk(resource, request, flow::facts_of(request, year_of(now)));
         if (!outcome || outcome->status != 200) [[unlikely]] std::abort();
-        benchmark::DoNotOptimize(outcome);
+        benchmark::DoNotOptimize(outcome->status);
+    }
+}
+
+void
+BM_walk_alone_asked_like_htgen(benchmark::State &state)
+{
+    static const http1::Request request = [] {
+        const auto parsed = http1::parse_request(kAskedLikeHtgen);
+        if (!parsed) [[unlikely]] std::abort();
+        return *parsed;
+    }();
+    const home::Home resource;
+    for (auto _ : state) {
+        const auto now = now_is();
+        const auto outcome = flow::walk(resource, request, flow::facts_of(request, year_of(now)));
+        if (!outcome || outcome->status != 200) [[unlikely]] std::abort();
+        benchmark::DoNotOptimize(outcome->status);
     }
 }
 
@@ -237,7 +256,7 @@ BM_walk_then_cache_answers_304(benchmark::State &state)
         const stored::Resource resource(inner, held, cached.route, now, year_of(now));
         const auto outcome = flow::walk(resource, request, flow::facts_of(request, year_of(now)));
         if (!outcome || outcome->status != 304) [[unlikely]] std::abort();
-        benchmark::DoNotOptimize(outcome);
+        benchmark::DoNotOptimize(outcome->status);
         cache_sent(cached.of_thread, held);
     }
 }
@@ -245,6 +264,7 @@ BM_walk_then_cache_answers_304(benchmark::State &state)
 }
 
 BENCHMARK(BM_walk_alone);
+BENCHMARK(BM_walk_alone_asked_like_htgen);
 BENCHMARK(BM_walk_then_render);
 BENCHMARK(BM_walk_then_cache);
 BENCHMARK(BM_walk_then_cache_answers_304);

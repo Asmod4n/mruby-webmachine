@@ -532,6 +532,8 @@ int main(int argc, char **argv)
     for (int at = 0; at < connections; at++)
         armed(&ring, at, &shape);
     io_uring_submit(&ring);
+    if (!putting(&of_file) || !committed(&of_file))
+        return left_with(EIO);
     said_to_the_parent((int32_t) given);
 
     int open_connections = connections;

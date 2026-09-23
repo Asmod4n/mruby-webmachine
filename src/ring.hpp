@@ -7,11 +7,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <string_view>
 #include <netinet/in.h>
 #include <sys/un.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 
 #include <liburing.h>
 
@@ -48,7 +51,9 @@ static_assert(marked(Doing::kAccepting, 0) != marked(Doing::kReceiving, 0),
               "two things done to one slot are two marks");
 
 struct Answered {
-    std::string_view sent;
+    size_t head;
+    std::string_view body;
+    const void *held;
     size_t taken;
 };
 
@@ -65,6 +70,8 @@ inline constexpr uint32_t kBufferCount = 2048;
 inline constexpr uint32_t kBufferBytes = 4096;
 inline constexpr uint32_t kListeners = 4;
 inline constexpr uint32_t kAnswerBytes = 16384;
+inline constexpr uint32_t kPiecesMost = 16;
+inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
 
 class Ring
 {
@@ -290,7 +297,8 @@ class Ring
         return which < kListeners ? port_[which] : 0;
     }
 
-    template <class Answering> void serves(Answering answering, const bool &until)
+    template <class Answering, class Releasing>
+    void serves(Answering answering, Releasing released, const bool &until)
     {
         while (!until) {
             io_uring_cqe *first = nullptr;
@@ -301,7 +309,7 @@ class Ring
                 break;
             io_uring_cqe *cqe = nullptr;
             while (io_uring_peek_cqe(&ring_, &cqe) == 0 && cqe != nullptr) {
-                took(cqe, answering);
+                took(cqe, answering, released);
                 io_uring_cqe_seen(&ring_, cqe);
             }
             given_back();
@@ -309,6 +317,18 @@ class Ring
     }
 
   private:
+    struct Owed {
+        msghdr message;
+        iovec piece[kPiecesMost];
+        const void *held[kHeldMost];
+        uint32_t filled;
+        uint32_t first;
+        uint32_t pieces;
+        uint32_t helds;
+        bool sending;
+        bool closing;
+    };
+
     int one_at_a_time(io_uring_sqe *const sqe)
     {
         io_uring_sqe_set_data64(sqe, 0);
@@ -352,20 +372,55 @@ class Ring
     unsigned sends(const uint32_t slot)
     {
         Owed &owed = owed_[slot];
-        if (owed.sending || owed.sent == owed.filled)
+        if (owed.sending || owed.first == owed.pieces)
             return 0;
+        owed.message = msghdr{};
+        owed.message.msg_iov = owed.piece + owed.first;
+        owed.message.msg_iovlen = owed.pieces - owed.first;
         io_uring_sqe *const sqe = room_for_one_more();
-        io_uring_prep_send(sqe, static_cast<int>(slot),
-                           answers_ + static_cast<size_t>(slot) * kAnswerBytes + owed.sent,
-                           owed.filled - owed.sent, MSG_NOSIGNAL | MSG_WAITALL);
+        io_uring_prep_sendmsg(sqe, static_cast<int>(slot), &owed.message, MSG_NOSIGNAL | MSG_WAITALL);
         sqe->flags |= IOSQE_FIXED_FILE;
         io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
         owed.sending = true;
         return 1;
     }
 
-    unsigned closes(const uint32_t slot)
+    template <class Releasing> void all_released(Owed &owed, Releasing &released)
     {
+        for (uint32_t at = 0; at < owed.helds; at++)
+            released(owed.held[at]);
+        owed.helds = 0;
+    }
+
+    bool owes_a_piece(Owed &owed, uint8_t *const at, const size_t length)
+    {
+        if (length == 0)
+            return true;
+        if (owed.pieces > 0) {
+            iovec &last = owed.piece[owed.pieces - 1];
+            if (static_cast<uint8_t *>(last.iov_base) + last.iov_len == at && owed.first < owed.pieces &&
+                !owed.sending) {
+                last.iov_len += length;
+                return true;
+            }
+        }
+        if (owed.pieces >= kPiecesMost)
+            return false;
+        owed.piece[owed.pieces++] = iovec{at, length};
+        return true;
+    }
+
+    template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released)
+    {
+        Owed &owed = owed_[slot];
+        if (owed.closing)
+            return 0;
+        if (owed.sending) {
+            owed.closing = true;
+        } else {
+            all_released(owed, released);
+            owed = Owed{};
+        }
         io_uring_sqe *const sqe = room_for_one_more();
         io_uring_prep_close_direct(sqe, slot);
         io_uring_sqe_set_data64(sqe, marked(Doing::kClosing, slot));
@@ -382,7 +437,8 @@ class Ring
         return 1;
     }
 
-    template <class Answering> unsigned took(io_uring_cqe *const cqe, Answering &answering)
+    template <class Answering, class Releasing>
+    unsigned took(io_uring_cqe *const cqe, Answering &answering, Releasing &released)
     {
         unsigned armed = 0;
         const uint64_t mark = io_uring_cqe_get_data64(cqe);
@@ -407,7 +463,7 @@ class Ring
                 if (cqe->res == -ENOBUFS)
                     armed += receives(slot);
                 else
-                    armed += closes(slot);
+                    armed += closes(slot, released);
                 return armed;
             }
             const uint32_t which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
@@ -416,19 +472,26 @@ class Ring
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
             replenish_ += static_cast<uint32_t>((took_bytes + kBufferBytes - 1) / kBufferBytes);
             if (from + took_bytes > pool)
-                return armed + closes(slot);
+                return armed + closes(slot, released);
             Owed &owed = owed_[slot];
+            if (owed.closing)
+                return armed;
             uint8_t *const into = answers_ + static_cast<size_t>(slot) * kAnswerBytes;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
-            while (!left.empty() && owed.filled < kAnswerBytes) {
-                const Answered said = answering(left);
+            while (!left.empty() && owed.filled < kAnswerBytes && owed.pieces + 2 <= kPiecesMost &&
+                   owed.helds < kHeldMost) {
+                const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), kAnswerBytes - owed.filled);
+                const Answered said = answering(left, room);
+                if (said.held != nullptr)
+                    owed.held[owed.helds++] = said.held;
                 if (said.taken == 0)
                     break;
-                const size_t room = kAnswerBytes - owed.filled;
-                if (said.sent.size() > room)
+                if (said.head == 0 || said.head > room.size())
                     break;
-                memcpy(into + owed.filled, said.sent.data(), said.sent.size());
-                owed.filled += static_cast<uint32_t>(said.sent.size());
+                owes_a_piece(owed, into + owed.filled, said.head);
+                owed.filled += static_cast<uint32_t>(said.head);
+                owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())),
+                             said.body.size());
                 left.remove_prefix(said.taken);
             }
             armed += sends(slot);
@@ -439,13 +502,32 @@ class Ring
         case Doing::kSending: {
             Owed &owed = owed_[slot];
             owed.sending = false;
+            if (owed.closing) {
+                all_released(owed, released);
+                owed = Owed{};
+                return armed;
+            }
             if (cqe->res <= 0)
-                return armed + closes(slot);
-            owed.sent += static_cast<uint32_t>(cqe->res);
-            if (owed.sent >= owed.filled)
-                owed.sent = owed.filled = 0;
-            else
+                return armed + closes(slot, released);
+            size_t sent = static_cast<size_t>(cqe->res);
+            while (sent > 0 && owed.first < owed.pieces) {
+                iovec &piece = owed.piece[owed.first];
+                if (sent < piece.iov_len) {
+                    piece.iov_base = static_cast<uint8_t *>(piece.iov_base) + sent;
+                    piece.iov_len -= sent;
+                    sent = 0;
+                } else {
+                    sent -= piece.iov_len;
+                    owed.first++;
+                }
+            }
+            if (owed.first == owed.pieces) {
+                all_released(owed, released);
+                owed.first = owed.pieces = 0;
+                owed.filled = 0;
+            } else {
                 armed += sends(slot);
+            }
             return armed;
         }
         case Doing::kClosing:
@@ -461,11 +543,6 @@ class Ring
     uint8_t *answers_ = nullptr;
     uint32_t buf_tail_ = 0;
     uint32_t replenish_ = 0;
-    struct Owed {
-        uint32_t filled;
-        uint32_t sent;
-        bool sending;
-    };
     Owed *owed_ = nullptr;
     bool bundles_ = false;
     unsigned entries_ = 0;

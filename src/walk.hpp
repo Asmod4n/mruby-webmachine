@@ -9,7 +9,6 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <vector>
 
 #include "flow.hpp"
 #include "http.hpp"
@@ -63,22 +62,51 @@ is_present(const std::string_view field_value)
     return field_value.data() != nullptr;
 }
 
+struct FactField {
+    std::string_view name;
+    std::string_view Facts::*member;
+};
+
+inline constexpr std::array<FactField, 10> kFactFields = {{
+    {"Accept", &Facts::accept},
+    {"Accept-Language", &Facts::accept_language},
+    {"Accept-Encoding", &Facts::accept_encoding},
+    {"If-Match", &Facts::if_match},
+    {"If-Unmodified-Since", &Facts::if_unmodified_since},
+    {"If-None-Match", &Facts::if_none_match},
+    {"If-Modified-Since", &Facts::if_modified_since},
+    {"Content-Type", &Facts::content_type},
+    {"Content-Length", &Facts::content_length},
+    {"Authorization", &Facts::authorization},
+}};
+
+constexpr void
+fact_taken(Facts &facts, const http1::FieldLine &field)
+{
+    for (const FactField &fact : kFactFields) {
+        if (fact.name.size() != field.field_name.size()) continue;
+        if (!http::equal_ignoring_case(field.field_name, fact.name)) continue;
+        if (!is_present(facts.*fact.member)) facts.*fact.member = field.field_value;
+        return;
+    }
+}
+
 constexpr Facts
 facts_of(const http1::Request &request, const std::chrono::year current_year)
 {
-    return {request.request_line.method,
-            request.request_line.request_target,
-            http1::field_value_of(request, "Accept"),
-            http1::field_value_of(request, "Accept-Language"),
-            http1::field_value_of(request, "Accept-Encoding"),
-            http1::field_value_of(request, "If-Match"),
-            http1::field_value_of(request, "If-Unmodified-Since"),
-            http1::field_value_of(request, "If-None-Match"),
-            http1::field_value_of(request, "If-Modified-Since"),
-            http1::field_value_of(request, "Content-Type"),
-            http1::field_value_of(request, "Content-Length"),
-            http1::field_value_of(request, "Authorization"),
-            current_year};
+    Facts facts{};
+    facts.method = request.request_line.method;
+    facts.request_target = request.request_line.request_target;
+    facts.current_year = current_year;
+    std::string_view left = request.field_lines;
+    while (!left.empty()) {
+        const size_t ends = left.find("\r\n");
+        if (ends == std::string_view::npos) break;
+        const auto field = http1::parse_field_line(left.substr(0, ends));
+        if (field) fact_taken(facts, *field);
+        left.remove_prefix(ends + 2);
+    }
+    return facts;
 }
 
 constexpr bool
@@ -119,13 +147,13 @@ class Walk
     {
         Node at = Node::kB13;
         for (;;) {
-            const std::expected<bool, http::Refusal> answer = answer_at(at);
-            if (!answer) [[unlikely]] return std::unexpected(answer.error());
+            const bool answer = answer_at(at);
+            if (refusal_) [[unlikely]] return std::unexpected(*refusal_);
 #if defined(MRB_DEBUG)
-            if (path_length_ < path_.size()) path_.at(path_length_++) = Step{at, *answer};
+            if (path_length_ < path_.size()) path_.at(path_length_++) = Step{at, answer};
 #endif
             if (halt_) [[unlikely]] return outcome_at(at, *halt_);
-            const Target next = flow::next(at, *answer);
+            const Target next = flow::next(at, answer);
             if (next.node == Node::kCount) return outcome_at(at, next.status);
             at = next.node;
         }
@@ -146,7 +174,16 @@ class Walk
         return facts_.method == http::Method::kGet || facts_.method == http::Method::kHead;
     }
 
-    std::expected<bool, http::Refusal> answer_at(const Node at)
+    bool taken(const std::expected<bool, http::Refusal> answer)
+    {
+        if (!answer) [[unlikely]] {
+            refusal_ = answer.error();
+            return false;
+        }
+        return *answer;
+    }
+
+    bool answer_at(const Node at)
     {
         const webmachine::Resource &r = resource_;
         const http1::Request &q = request_;
@@ -168,25 +205,25 @@ class Walk
                 if (!r.content_types_provided().empty()) media_type_ = 0;
                 return false;
             }
-            case Node::kC4: return chose_media_type();
+            case Node::kC4: return taken(chose_media_type());
             case Node::kD4: {
                 if (is_present(f.accept_language)) return true;
                 const auto languages = r.languages_provided();
                 if (!languages.empty()) content_language_ = languages.front();
                 return false;
             }
-            case Node::kD5: return chose_language();
+            case Node::kD5: return taken(chose_language());
             case Node::kF6: {
                 if (is_present(f.accept_encoding)) return true;
                 const auto encodings = r.encodings_provided();
                 if (!encodings.empty()) content_coding_ = encodings.front().coding;
                 return false;
             }
-            case Node::kF7: return chose_coding();
+            case Node::kF7: return taken(chose_coding());
             case Node::kG7: return r.resource_exists(q);
             case Node::kG8: return is_present(f.if_match);
             case Node::kG9: return f.if_match == "*";
-            case Node::kG11: return http::if_match_passes(f.if_match, true, entity_tag_of(r, q));
+            case Node::kG11: return taken(http::if_match_passes(f.if_match, true, entity_tag_of(r, q)));
             case Node::kH7: return f.if_match == "*";
             case Node::kH10: return is_present(f.if_unmodified_since);
             case Node::kH11: return http::parse_http_date(f.if_unmodified_since, f.current_year).has_value();
@@ -203,7 +240,7 @@ class Walk
             case Node::kK7: return r.previously_existed(q);
             case Node::kK13: {
                 const auto passes = http::if_none_match_passes(f.if_none_match, true, entity_tag_of(r, q));
-                if (!passes) [[unlikely]] return std::unexpected(passes.error());
+                if (!passes) [[unlikely]] return taken(std::unexpected(passes.error()));
                 return !*passes;
             }
             case Node::kL5: return r.moved_temporarily(q);
@@ -247,18 +284,18 @@ class Walk
     std::expected<bool, http::Refusal> chose_media_type()
     {
         const auto handlers = resource_.content_types_provided();
-        std::vector<http::MediaType> provided;
-        provided.reserve(handlers.size());
-        for (const webmachine::MediaTypeHandler &handler : handlers) {
-            const auto media_type = http::parse_media_type(handler.media_type);
+        uint16_t best = 0;
+        for (size_t at = 0; at < handlers.size(); at++) {
+            const auto media_type = http::parse_media_type(handlers[at].media_type);
             if (!media_type) [[unlikely]] return std::unexpected(media_type.error());
-            provided.push_back(*media_type);
+            const auto weight = http::media_type_weight(facts_.accept, *media_type);
+            if (!weight) [[unlikely]] return std::unexpected(weight.error());
+            if (*weight > best) {
+                best = *weight;
+                media_type_ = at;
+            }
         }
-        const auto chosen = http::choose_media_type(provided, facts_.accept);
-        if (!chosen) [[unlikely]] return std::unexpected(chosen.error());
-        if (!*chosen) return false;
-        media_type_ = (*chosen)->at;
-        return true;
+        return best != 0;
     }
 
     std::expected<bool, http::Refusal> chose_language()
@@ -305,6 +342,7 @@ class Walk
     std::optional<std::string_view> content_coding_;
     std::string_view location_;
     std::optional<uint16_t> halt_;
+    std::optional<http::Refusal> refusal_;
 #if defined(MRB_DEBUG)
     std::array<Step, kPathMost> path_{};
     size_t path_length_ = 0;
