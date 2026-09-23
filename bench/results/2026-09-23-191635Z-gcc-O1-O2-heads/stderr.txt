@@ -1,0 +1,330 @@
+2026-09-23T19:16:49+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.92, 0.68, 0.82
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:16:53+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.92, 0.69, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:16:56+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.93, 0.70, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:01+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.93, 0.70, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:04+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.93, 0.70, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:08+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.94, 0.71, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:12+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.94, 0.71, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:16+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.95, 0.72, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:20+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.95, 0.72, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:25+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.95, 0.72, 0.83
+round: 1
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:30+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.96, 0.73, 0.83
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:34+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.96, 0.73, 0.83
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:38+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.96, 0.74, 0.83
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:41+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.97, 0.74, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:45+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.97, 0.74, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:49+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.97, 0.74, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:53+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.97, 0.75, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:17:57+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.75, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:01+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.76, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:06+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.76, 0.84
+round: 2
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:11+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.77, 0.84
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:15+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.77, 0.84
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:19+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.77, 0.84
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:23+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test2
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.98, 0.77, 0.84
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:27+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test5
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.78, 0.84
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:31+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.78, 0.85
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:35+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test3
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.78, 0.85
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:39+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test4
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.79, 0.85
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:43+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O2-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.79, 0.85
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.
+2026-09-23T19:18:47+00:00
+Running /tmp/tmp.YrkTe4MNVB/g++-16-O1-native-test1
+Run on (4 X 2800.27 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 33792 KiB (x1)
+Load Average: 0.99, 0.79, 0.85
+round: 3
+***WARNING*** Library was built as DEBUG. Timings may be affected.

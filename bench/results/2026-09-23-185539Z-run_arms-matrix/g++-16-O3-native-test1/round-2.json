@@ -1,0 +1,58 @@
+{
+  "context": {
+    "date": "2026-09-23T19:00:50+00:00",
+    "host_name": "vm",
+    "executable": "/tmp/tmp.RTaghgb15V/g++-16-O3-native-test1",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2800,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 34603008,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [1.04297,1.50977,1.25781],
+    "library_version": "1.9.1",
+    "library_build_type": "debug",
+    "json_schema_version": 1,
+    "ran_as": "root",
+    "round": "2"
+  },
+  "benchmarks": [
+    {
+      "name": "run_avx2",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx2",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 13613962,
+      "real_time": 2.6973967703146405e+02,
+      "cpu_time": 2.6505375635689308e+02,
+      "time_unit": "ns"
+    }
+  ]
+}

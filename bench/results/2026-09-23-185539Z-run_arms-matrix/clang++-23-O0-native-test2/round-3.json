@@ -1,0 +1,58 @@
+{
+  "context": {
+    "date": "2026-09-23T19:04:29+00:00",
+    "host_name": "vm",
+    "executable": "/tmp/tmp.RTaghgb15V/clang++-23-O0-native-test2",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2800,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 34603008,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [1.07666,1.27979,1.2124],
+    "library_version": "1.9.1",
+    "library_build_type": "debug",
+    "json_schema_version": 1,
+    "ran_as": "root",
+    "round": "3"
+  },
+  "benchmarks": [
+    {
+      "name": "run_avx512",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx512",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1249243,
+      "real_time": 2.8854949621497644e+03,
+      "cpu_time": 2.8659592136998167e+03,
+      "time_unit": "ns"
+    }
+  ]
+}

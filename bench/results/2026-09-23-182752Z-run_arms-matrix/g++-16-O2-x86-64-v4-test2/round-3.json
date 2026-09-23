@@ -1,0 +1,56 @@
+{
+  "context": {
+    "date": "2026-09-23T18:36:22+00:00",
+    "host_name": "vm",
+    "executable": "/tmp/tmp.vEbjIjWJvE/g++-16-O2-x86-64-v4-test2",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2800,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 34603008,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [1,1.04102,1],
+    "library_build_type": "debug",
+    "ran_as": "root",
+    "round": "3"
+  },
+  "benchmarks": [
+    {
+      "name": "run_avx512",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx512",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 173232974,
+      "real_time": 6.6440066381355933e+01,
+      "cpu_time": 6.5803478008753686e+01,
+      "time_unit": "ns"
+    }
+  ]
+}
