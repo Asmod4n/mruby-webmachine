@@ -98,6 +98,15 @@ The standard library and every linked library come first. Nothing they
 answer is written here a second time. Read the library in its own
 source before you say it cannot do the thing.
 
+No class, no method and no algorithm that the standard library has is
+built here. `std::string` is where output goes: there is no `Out`, no
+writer, no builder. `std::span` is a set of buffers: there is no
+`Spread`. A search is `find`, a comparison is `==` or
+`std::ranges::equal`, a number is `std::to_chars`. This holds in every
+repository a session works in, and a speed number does not buy an
+exception: a faster hand-made form goes to the owner as a question,
+with the measurement, before it is written.
+
 Never do pointer arithmetic by hand. Work in views and indices:
 `std::string_view` or `std::span` for the run, `std::distance` for the
 offset, `std::next` to walk it.
