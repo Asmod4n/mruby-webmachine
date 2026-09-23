@@ -116,3 +116,87 @@ points at are no longer being read.
   is not written down here because the writer is not in this tree yet.
 - **Where the app's media type table is read**: at `app.ready`, once, or
   per response. Not decided.
+
+## Notes from building the cache, so nobody learns them twice
+
+Each of these cost time this session. The LMDB ones were established
+against `lmdb.h` and a running database, not from memory.
+
+**LMDB**
+
+- `MDB_DUPSORT`: a duplicate data item is a sub-key, so `MDB_MAXKEYSIZE`
+  (511) applies to the *value* (`lmdb.h` 287-288). A field value in
+  `fields` is at most 502 bytes of payload after the 9 byte prefix -
+  `kCacheFieldMost`. Anything longer is a body and goes to `bodies`,
+  which is a plain database with no such limit.
+- `MDB_RESERVE` is forbidden on a DUPSORT database. The writer crashed
+  silently on it, and the check tool read a signal death as success
+  because it only looked at `WEXITSTATUS`. Build the value on the stack
+  and `mdb_put` it whole; check `WIFEXITED`.
+- `MDB_GET_BOTH_RANGE` returns the *next* duplicate at or after the one
+  asked for. A miss on field 3 comes back with field 4 and looks like a
+  hit. `cache_asked` checks `bytes[0] == field` for that reason; the
+  test walks a present field right behind an absent one.
+- A `dbi` opened inside a transaction that is then aborted is closed
+  with it. Invisible with the unnamed main database, fatal once the
+  databases have names: the opening read transaction in `cache_open` is
+  **committed**, not aborted.
+- `mdb_txn_reset` + `mdb_txn_renew` keep the reader-table slot; that is
+  why the pool never aborts. `MDB_NOTLS` so a transaction is not tied
+  to the thread that began it.
+- `mdb_drop(txn, dbi, 0)` empties a database and keeps it; that is
+  "forget everything".
+- A value's layout: field entry `[uint8 field][uint64 until][bytes]`,
+  body `[uint64 until][bytes]`. `until` is absolute seconds; the reader
+  reads it with memcpy today, `std::bit_cast` from a `span<8>` tomorrow.
+
+**Datagrams and the writer**
+
+- The store header is 16 bytes (`route`, `freshness_lifetime`, `field`,
+  `body`, `forget`, unused) and the gone datagram is 16 bytes; both
+  static_asserted. `body` says inline or in a file.
+- "Forget the whole route" is written as a field >= `kCacheFieldCount`.
+  `took()` once refused every datagram with such a field - which
+  dropped every route forgetting before it reached its branch. The
+  field check belongs to *storing*, not to receiving.
+- The writer's broadcast to the io threads has a `MSG_DONTWAIT` drop
+  path that is counted but not closed: a thread whose socket is full
+  misses a gone datagram. Not fixed. Either the send blocks, or a
+  missed datagram must be harmless (the reader's `until <= now` check
+  makes an *expired* one harmless; an *invalidated* one is not).
+- `cache_changed` does not exist any more; do not look for it.
+
+**The ring side**
+
+- slipstreamIO's engine has no `IORING_OP_TIMEOUT` (-EOPNOTSUPP,
+  completes at once). Re-arming a timeout on completion was a busy loop
+  at 100% for eight minutes while the walk printed "ok". The deadline
+  is on `io_uring_submit_and_wait_timeout`; the engine advertises
+  `IORING_FEAT_EXT_ARG`. The owner's word: not timer, timeout.
+- The gone datagram arrives as a cqe and is handled like every other
+  cqe - `io_uring_for_each_cqe` and one `cq_advance`, no peek.
+- The socketpairs are made with `::socketpair` and then registered as
+  direct descriptors (`IORING_REGISTER_FILES_UPDATE`, which this session
+  added to slipstreamIO for posix and Windows, proven by asking a
+  running kernel). No `prep_socketpair` exists.
+
+**Sizing and the measurement the owner asked for**
+
+- Two server threads against two htgen clients with the cache on; every
+  path chosen at random in part; bodies up to 1 MB; the cache's maximum
+  size is half the free space of the SSD. Not run yet; this is the
+  shape it has to have.
+- The reader's transaction pool exists because 1500 sends can be in
+  flight at once and each holds a read transaction until its completion
+  says the bytes are no longer being read.
+- Goals in order: predictable latency; zero exploitable surface;
+  requests per second; throughput.
+
+**Two things that are still wrong or unfinished**
+
+- The io thread cannot delete (read-only), so every forgetting from a
+  running server goes through the writer's fd; that path is in
+  `cache_forget.c` and has not been exercised under load.
+- The flow is not wired to the cache yet: the walk has to ask the cache
+  at each resource node first, and only then the bound VM callback; the
+  body is to be sent straight from the LMDB map (iovec), never copied.
