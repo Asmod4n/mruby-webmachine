@@ -33,7 +33,7 @@ struct Request {
     size_t bytes;
 };
 
-inline size_t byte_at(const std::string_view text, const size_t from, const char wanted)
+[[gnu::always_inline]] inline size_t byte_at(const std::string_view text, const size_t from, const char wanted)
 {
     namespace stdx = std::experimental;
     using Bytes = stdx::native_simd<char>;
@@ -67,7 +67,7 @@ inline size_t byte_before(const std::string_view within, const size_t from, cons
     return at < ends ? at : std::string_view::npos;
 }
 
-inline std::expected<RequestLine, http::Refusal>
+[[gnu::always_inline]] inline std::expected<RequestLine, http::Refusal>
 parse_request_line(const std::string_view within, const size_t ends)
 {
     const std::string_view line = within.substr(0, ends);
@@ -97,7 +97,8 @@ parse_request_line(const std::string_view line)
     return parse_request_line(line, line.size());
 }
 
-inline std::expected<FieldLine, http::Refusal> parse_field_line(const std::string_view within, const size_t from,
+[[gnu::always_inline]] inline std::expected<FieldLine, http::Refusal> parse_field_line(const std::string_view within,
+                                                                                      const size_t from,
                                                                 const size_t ends)
 {
     const std::string_view line = within.substr(from, ends - from);

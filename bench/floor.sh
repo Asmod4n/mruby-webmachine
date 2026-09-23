@@ -27,11 +27,21 @@
 #   -c400 h1 unix, n=15, and got sd 18.2% with a 47% range. Nothing
 #   below ~15% is resolvable here.
 #
-#   And the guard below cannot save a run where BOTH ends are pegged -
-#   it refuses a pegged client over a server with headroom, and when
-#   neither has any it is the scheduler that decides the number. That
-#   case is named in the output rather than refused, because refusing
-#   it would refuse every run this box can do.
+#   A run counts only when the server and the client each use at least
+#   90 percent of one core. One below that was waiting on the other or
+#   on the machine, and its number describes the wait. Such a run is
+#   printed and marked, and it is not in the median.
+#
+#   One server thread, and one htgen with CLIENT_THREADS=1 or 2. Nothing
+#   else runs beside them, and nothing larger is allowed.
+#
+#   ARCHIVE=path runs the archive's server in place of this one, with
+#   APP= (the archive's bench/apps/hello.rb) compiled by MRBC=, so the
+#   two are measured by the same lines, one at a time.
+#
+#   Every run prints the server's kernel share (stime over utime plus
+#   stime) and its user time per request, and the medians are over the
+#   runs that count.
 #
 #   SYSCALLS=1 counts the server's syscalls with perf and divides the
 #   responses by them. It is opt-in because counting needs perf, a
@@ -70,6 +80,12 @@ SERVER="${SERVER:-$here/mruby/build/release/bin/webmachine-serve}"
 NICE_ASK=()
 [ -n "${NICE:-}" ] && NICE_ASK=(nice -n "$NICE")
 ARM="${ARM:-}"
+CLIENT_THREADS="${CLIENT_THREADS:-1}"
+case "$CLIENT_THREADS" in
+  1|2) ;;
+  *) echo "CLIENT_THREADS is 1 or 2: one server thread and one htgen of one or two threads, nothing more" >&2; exit 2 ;;
+esac
+ARCHIVE="${ARCHIVE:-}"
 
 HTGEN="${HTGEN:-$(command -v htgen 2>/dev/null)}"
 [ -x "${HTGEN:-}" ] || {
@@ -150,7 +166,19 @@ machine_busy() {
   awk 'NR==1 { print $2+$3+$4+$7+$8+$9 }' /proc/stat
 }
 
-if [ "$TRANSPORT" = unix ]; then
+if [ -n "$ARCHIVE" ]; then
+  [ "$TRANSPORT" = unix ] || { echo "ARCHIVE= runs on a UNIX socket only" >&2; exit 2; }
+  [ -x "$ARCHIVE" ] && [ -f "${APP:-}" ] && [ -x "${MRBC:-}" ] || {
+    echo "ARCHIVE= needs APP= (the archive's bench/apps/hello.rb) and MRBC= (the archive's mrbc)" >&2
+    exit 2
+  }
+  { printf 'BENCH_LISTEN = { unix_path: "%s" }\n' "$SOCK"; cat "$APP"; } > "$WORK/app.rb"
+  "$MRBC" -o "$WORK/app.mrb" "$WORK/app.rb" || exit 1
+  : > "$WORK/none.toml"
+  "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$ARCHIVE" --config="$WORK/none.toml" --app="$WORK/app.mrb" >"$WORK/srv.out" 2>&1 &
+  SRV=$!
+  WHERE=(--sock "$SOCK")
+elif [ "$TRANSPORT" = unix ]; then
   "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$SERVER" "$SOCK" $ARM >"$WORK/srv.out" 2>&1 &
   SRV=$!
   WHERE=(--sock "$SOCK")
@@ -165,18 +193,22 @@ for _ in $(seq 1 100); do
   sleep 0.05
 done
 kill -0 "$SRV" 2>/dev/null || { echo "the server did not come up:" >&2; cat "$WORK/srv.out" >&2; exit 1; }
+"$HTGEN" "${WHERE[@]}" --conns 1 --seconds 1 --path "$PATH_ASKED" >/dev/null 2>&1
+sleep 1.2
 
 CFLAGS_LINE=$(grep -o "'-[^']*'" "$here/build_config_release.rb" | tr -d "'" | sort -u |
   tr '\n' ' ' | sed 's/ $//')
-echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+echo "harness: floor ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
 
 RPS=()
-BOTH_PEGGED=0
+SHARES=()
+USER_NS=()
+INVALID=0
 for rep in $(seq 1 "$REPS"); do
   M0=$(machine_busy)
   read -r SU0 SS0 <<<"$(ticks_of "$SRV")"
   sysc_begin "$SRV" "$DURATION"
-  "$HTGEN" "${WHERE[@]}" --conns "$CONNS" --seconds "$DURATION" --path "$PATH_ASKED" \
+  "$HTGEN" "${WHERE[@]}" --conns "$CONNS" --threads "$CLIENT_THREADS" --seconds "$DURATION" --path "$PATH_ASKED" \
     "${LATENCY_ASK[@]+"${LATENCY_ASK[@]}"}" >"$WORK/cli.out" 2>&1 &
   CLI=$!
   read -r CU0 CS0 <<<"$(ticks_of "$CLI")"
@@ -203,43 +235,52 @@ for rep in $(seq 1 "$REPS"); do
   OTHER=$(( (M1 - M0) * 100 / HZ / DURATION - SCPU - CCPU ))
   [ "$OTHER" -ge 0 ] || OTHER=0
 
-  HEADROOM=15
-  if [ "$CCPU" -ge 90 ] && [ "$SCPU" -le $((CCPU - HEADROOM)) ]; then
-    echo "REFUSED: the client was pegged at ${CCPU}% while the server had ${SCPU}%, ${HEADROOM}+ points under it. This measures htgen, not webmachine. Drive the load from a second machine." >&2
-    exit 1
-  fi
-  [ "$CCPU" -ge 90 ] && [ "$SCPU" -ge 90 ] && BOTH_PEGGED=1
+  NDONE=$(grep -o 'responses=[0-9]*' "$WORK/cli.out" | cut -d= -f2)
+  SHARE=$(awk -v u=$((SU1 - SU0)) -v s=$((SS1 - SS0)) 'BEGIN { printf "%.1f", ((u + s) > 0 ? s * 100 / (u + s) : 0) }')
+  UNS=$(awk -v u=$((SU1 - SU0)) -v k="$HZ" -v d="$NDONE" 'BEGIN { printf "%.0f", (d > 0 ? u / k * 1e9 / d : 0) }')
 
   cat "$WORK/cli.out"
-  echo "server: ${SCPU}% of one core   client: ${CCPU}% of one core   other: ${OTHER}% of one core"
+  if [ "$SCPU" -ge 90 ] && [ "$CCPU" -ge 90 ]; then
+    COUNTS=counts
+  else
+    COUNTS="does not count: under 90% of a core"
+    INVALID=$((INVALID + 1))
+  fi
+  echo "server: ${SCPU}% of one core   client: ${CCPU}% of one core   other: ${OTHER}% of one core   kernel share: ${SHARE}%   user per request: ${UNS} ns   ${COUNTS}"
+  [ "$COUNTS" = counts ] || continue
   if [ -n "$SYSC_PERF" ]; then
     [ -n "$SYSC_PID" ] && wait "$SYSC_PID" 2>/dev/null
     SYSC_PID=
     NSYSC=$(sysc_read)
-    NDONE=$(grep -o 'responses=[0-9]*' "$WORK/cli.out" | cut -d= -f2)
     if [ -n "$NSYSC" ] && [ "$NSYSC" -gt 0 ] && [ -n "$NDONE" ]; then
       awk -v d="$NDONE" -v n="$NSYSC" 'BEGIN { printf "req/syscall: %.1f (%d requests / %d server syscalls)\n", d / n, d, n }'
     fi
   fi
   RPS+=("$(grep -o 'rps=[0-9]*' "$WORK/cli.out" | cut -d= -f2)")
+  SHARES+=("$SHARE")
+  USER_NS+=("$UNS")
 done
+
+[ "${#RPS[@]}" -gt 0 ] || { echo "no run counts: $INVALID of $REPS were under 90% of a core" >&2; exit 1; }
+median_of() {
+  printf '%s\n' "$@" | sort -n | awk '{ a[NR] = $1 } END { print (NR % 2) ? a[(NR + 1) / 2] : (a[NR / 2] + a[NR / 2 + 1]) / 2 }'
+}
 
 MEDIAN=$(printf '%s\n' "${RPS[@]}" | sort -n | awk '{ a[NR] = $1 }
   END { print (NR % 2) ? a[(NR + 1) / 2] : int((a[NR / 2] + a[NR / 2 + 1]) / 2) }')
 SPREAD=$(printf '%s\n' "${RPS[@]}" | sort -n | awk -v m="$MEDIAN" '{ a[NR] = $1 }
   END { printf "%.1f", (m > 0 ? (a[NR] - a[1]) * 100 / m : 0) }')
-echo "median rps: $MEDIAN over $REPS run(s), range ${SPREAD}% of the median"
-if [ "$BOTH_PEGGED" = 1 ]; then
-  echo "NOTE: both ends were pegged, so the scheduler decided the split. The archive measured this shape on a four cpu vm at n=15 and got sd 18.2% with a 47% range - nothing below ~15% is resolvable here, and the load has to come from a second machine to do better."
-fi
+COUNTED="${#RPS[@]} of $REPS run(s) count"
+echo "median rps: $MEDIAN, $COUNTED, range ${SPREAD}% of the median"
+echo "median kernel share: $(median_of "${SHARES[@]}")%   median user per request: $(median_of "${USER_NS[@]}") ns"
 
 mkdir -p "$here/bench/results"
 {
-  echo "harness: floor htgen -c$CONNS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+  echo "harness: floor ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
   printf 'rps:'
   printf ' %s' "${RPS[@]}"
   printf '\n'
-  echo "median rps: $MEDIAN over $REPS run(s), range ${SPREAD}% of the median"
-  [ "$BOTH_PEGGED" = 1 ] && echo "both ends pegged - the scheduler decided the split"
+  echo "median rps: $MEDIAN, $COUNTED, range ${SPREAD}% of the median"
+  echo "median kernel share: $(median_of "${SHARES[@]}")%   median user per request: $(median_of "${USER_NS[@]}") ns"
   echo
 } >> "$here/bench/results/floor.log"

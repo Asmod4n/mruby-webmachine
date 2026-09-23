@@ -46,12 +46,11 @@ main(int argc, char **argv)
     }
     printf("%s\n", argv[1]);
 
-    bool enough = false;
+    const bool enough = false;
     serve::Today today{};
     try {
         ring.serves(
             [&](const std::string_view asked, const std::span<char> room) -> wm::Answered {
-                if (asked.starts_with("STOP")) enough = true;
                 return serve::answered(asked, room, c, today);
             },
             [&](const void *const held) {

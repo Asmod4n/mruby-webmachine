@@ -38,7 +38,26 @@ namespace serve
 {
 
 inline constexpr webmachine::MediaTypeHandler kHelloTypes[] = {{"text/html; charset=utf-8", "to_html"}};
+
+struct HelloFields {
+    std::string_view greeting;
+};
+
+constexpr HelloFields
+hello_fields()
+{
+    return {"Hello, World!"};
+}
+
+inline constexpr char kHelloSource[] = "<html><body>{{greeting}}</body></html>";
+
+#if defined(__cpp_impl_reflection)
+inline constexpr auto kHelloPage = mustache::static_page_of<mustache::fixed_string{kHelloSource}, hello_fields>;
+inline constexpr std::string_view kHelloBody{
+    kHelloPage.data(), mustache::static_length<mustache::fixed_string{kHelloSource}, hello_fields>()};
+#else
 inline constexpr std::string_view kHelloBody = "<html><body>Hello, World!</body></html>";
+#endif
 
 class Hello final : public webmachine::Resource
 {
@@ -231,6 +250,15 @@ stored_made(const std::span<char> room, Heads &heads, const Today &today, const 
     return {out.size(), {}, held, taken};
 }
 
+inline wm::Answered
+constant_made(const std::span<char> room, Heads &heads, const Today &today, const std::string_view content_type,
+              const std::string_view vary, const std::string_view body, const bool head, const size_t taken)
+{
+    Spelled out(room);
+    head_added(out, heads, today, 200, content_type, body.size(), vary);
+    return {out.size(), head ? std::string_view{} : body, nullptr, taken};
+}
+
 inline constexpr std::string_view kAppName = "webmachine-serve";
 inline constexpr uint32_t kFreshnessLifetime = 60;
 
@@ -399,14 +427,28 @@ answered_by(const Inner &inner, Rendering rendering, const http1::Request &reque
     return problem_made(room, today, outcome->status, facts.accept, head, held, request.bytes);
 }
 
+template <class Inner>
+wm::Answered
+answered_constant(const Inner &inner, const std::string_view body, const http1::Request &request,
+                  const flow::Facts &facts, Cache &c, const Today &today, const std::span<char> room)
+{
+    const bool head = request.request_line.method == http::Method::kHead;
+    const auto outcome = flow::walk(inner, request, facts);
+    if (!outcome) [[unlikely]] return problem_made(room, today, 400, {}, head, nullptr, request.bytes);
+    if (outcome->status == 200 && outcome->media_type) {
+        const std::string_view content_type = inner.content_types_provided()[*outcome->media_type].media_type;
+        return constant_made(room, c.heads, today, content_type, vary_of(inner, c.vary), body, head, request.bytes);
+    }
+    if (outcome->status < 400) return made(room, today, outcome->status, "", "", head, "", nullptr, request.bytes);
+    return problem_made(room, today, outcome->status, facts.accept, head, nullptr, request.bytes);
+}
+
 inline wm::Answered
 answer_to(const http1::Request &request, const flow::Facts &facts, Cache &c, const Today &today,
           const std::span<char> room)
 {
     if (http::spelled_as(request.request_line.request_target, "/hello"))
-        return answered_by(
-            Hello{}, [](const http1::Request &, const flow::Outcome &) { return std::string(kHelloBody); }, request,
-            facts, c, today, room);
+        return answered_constant(Hello{}, kHelloBody, request, facts, c, today, room);
     return answered_by(home::Home{}, home::page_of, request, facts, c, today, room);
 }
 
