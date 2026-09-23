@@ -933,6 +933,26 @@ others took. The kernel charges about 1.6 MiB for 16384 entries: 64
 bytes for each SQE, 16 for each of twice as many CQEs, and the SQ
 array. No ring takes more than 32768 SQ entries, whatever the budget.
 
+## What is there to debug is there in a debug build
+
+Everything that exists to debug is compiled only where `MRB_DEBUG` is
+defined, and `conf.enable_debug` is what defines it. There is no macro
+of this tree's own beside it, because mruby writes no usable backtrace
+without it: a debug feature without `MRB_DEBUG` would have nothing to
+show.
+
+So a release binary does not hold the code, and nobody can switch it on
+in production. It costs nothing there, and it shows a client nothing
+about the server. In the debug build and only there:
+
+- the exception, its message and its backtrace on an error page;
+- the path a request took through the decision graph.
+
+What the operator reads stays in every build: the error log with the
+request, the fingerprint and what mruby gives about the exception, and
+the `instance` and `fingerprint` on an error page, which name a record
+of that log and nothing else.
+
 ## An error is small where it travels and full where it is read
 
 A function gives back what its caller can use, and nothing more.
