@@ -76,6 +76,22 @@ where this session broke one, it says so.
    once, text ops are offset and length into that copy, and the walk
    reads plain memory.
 
+## mruby-tls: the branch next is not fuzzed
+
+TLS will come from mruby-tls, branch `next` (62cb458, 2026-09-17):
+libtls from LibreSSL 4.3.2, built against the system's OpenSSL through
+pkg-config, so this process holds one libcrypto. It hands out the kTLS
+TX key material (`Config#ktls_tx`, `mrb_tls_ktls_tx_params`) and ALPN,
+and a TLS 1.3 handshake with ALPN h2 over `tls_accept_cbs` was shown
+against OpenSSL 3.0.13 with no descriptor held by libtls.
+
+The owner decided on 2026-09-23: `next` has not been fuzzed, and it is
+not merged into master until it has been. Its own commit (aa0d13b)
+also leaves three behaviours without a test: the trust store with no CA
+file, a notAfter that a 32 bit time_t cannot hold, and which suites the
+mapped cipher string offers. Whether the binding hands out the SNI name
+and takes several keypairs is not read yet.
+
 ## The mustache gem: state, and a patch
 
 The gem lives in a read-only clone at `/home/user/asmod4n/mruby-mustache`
