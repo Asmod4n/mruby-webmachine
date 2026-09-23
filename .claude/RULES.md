@@ -70,15 +70,16 @@ The branch the owner sets as the main branch of a session is never
 pushed to. A session commits on a branch of its own, named for the
 work, and pushes that one.
 
-## A security fix is never pushed
+## The weekly security watch pushes nothing
 
-This repository is public. A branch, a pull request, an issue or a
-comment that carries a fix for a weakness also carries the test that
-triggers it, and publishes both before the owner has released the fix.
-So a session that finds or fixes a weakness pushes nothing about it:
-it commits locally and hands the owner the patch, from
-`git format-patch --stdout`, where only the owner reads it. The owner
-decides when it goes public.
+This holds for the weekly security watch only, the routine that reads
+the parsers' commits and the new findings on HTTP/1.1 every Monday.
+This repository is public, and a branch that carries its fix also
+carries the test that triggers the weakness. So the watch pushes
+nothing: no branch, no pull request, no issue, no comment. It commits
+in its local clone and hands the owner the patch, from
+`git format-patch --stdout`, in its answer, which reaches the owner by
+mail. The owner decides when it goes public.
 
 ## pgrep answers about itself, so the shell waits instead
 
