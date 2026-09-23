@@ -1,0 +1,161 @@
+{
+  "context": {
+    "date": "2026-09-23T17:39:26+00:00",
+    "host_name": "vm",
+    "executable": "/tmp/tmp.xZxqmJDanB/g++-16-O2-x86-64-v3-test2",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2800,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 34603008,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [0.967773,0.713867,0.590332],
+    "library_build_type": "debug",
+    "ran_as": "root"
+  },
+  "benchmarks": [
+    {
+      "name": "run_avx2_mean",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx2",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "mean",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 2.4275648359215167e+00,
+      "cpu_time": 2.4045123545816143e+00,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_avx2_median",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx2",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "median",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 2.4068418559564462e+00,
+      "cpu_time": 2.3902452931115947e+00,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_avx2_stddev",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx2",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "stddev",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 6.7335894938506086e-02,
+      "cpu_time": 5.6938851776572083e-02,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_avx2_cv",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "run_avx2",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "cv",
+      "aggregate_unit": "percentage",
+      "iterations": 10,
+      "real_time": 2.7738041819568959e-02,
+      "cpu_time": 2.3679999675642941e-02,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_floor_mean",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_floor",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "mean",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 3.0097553242244345e+01,
+      "cpu_time": 2.9891195567914650e+01,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_floor_median",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_floor",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "median",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 2.9997618288292223e+01,
+      "cpu_time": 2.9778990743190356e+01,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_floor_stddev",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_floor",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "stddev",
+      "aggregate_unit": "time",
+      "iterations": 10,
+      "real_time": 5.7392688708304052e-01,
+      "cpu_time": 4.9847569343934550e-01,
+      "time_unit": "ns"
+    },
+    {
+      "name": "run_floor_cv",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "run_floor",
+      "run_type": "aggregate",
+      "repetitions": 10,
+      "threads": 1,
+      "aggregate_name": "cv",
+      "aggregate_unit": "percentage",
+      "iterations": 10,
+      "real_time": 1.9068888506109119e-02,
+      "cpu_time": 1.6676338432391496e-02,
+      "time_unit": "ns"
+    }
+  ]
+}
