@@ -8,6 +8,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 exec podman run --rm -it --network=host \
+    -e https_proxy -e HTTPS_PROXY -e no_proxy -e NO_PROXY \
     -v "$HERE":/work:Z \
     -w "/work/$(realpath --relative-to="$HERE" "$PWD")" \
     localhost/compilers:sid "$@"
