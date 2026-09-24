@@ -14,10 +14,11 @@ MRuby::Build.new("measure-#{File.basename(cxx)}-#{march}") do |conf|
   conf.linker.command = cxx
   [conf.cc, conf.cxx].each { |compiler| compiler.cxx_compile_flag = '-x c++ -std=c++26' }
   conf.gem core: 'mruby-bin-mrbc'
+  conf.gem core: 'mruby-bin-config'
   conf.cc.flags << '-O2' << "-march=#{march}"
   conf.cxx.flags << '-O2' << "-march=#{march}" << '-std=c++26'
   conf.cxx.flags << '-freflection' unless cxx.start_with?('clang')
   conf.cc.defines << 'MRB_UTF8_STRING' << 'NDEBUG'
   conf.cxx.defines << 'MRB_UTF8_STRING' << 'NDEBUG'
-  conf.gem File.expand_path('..', __dir__)
+  conf.gem(File.expand_path('..', __dir__)) { |gem| gem.bins = [] }
 end
