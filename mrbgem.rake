@@ -10,6 +10,9 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-fast-json', github: 'Asmod4n/mruby-fast-json', branch: 'main'
   spec.add_dependency 'mruby-toml'
   spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
+  spec.add_dependency 'mruby-method'
+  spec.add_dependency 'mruby-kernel-ext'
+  spec.add_dependency 'mruby-proc-ext'
 
   spec.bins = %w[webmachine-cache webmachine-cache-check webmachine-serve]
 
@@ -70,10 +73,8 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
     mruby-compar-ext
     mruby-enum-ext
     mruby-hash-ext
-    mruby-kernel-ext
     mruby-numeric-ext
     mruby-object-ext
-    mruby-proc-ext
     mruby-range-ext
     mruby-sprintf
     mruby-string-ext
