@@ -15,9 +15,9 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
 
   # zlib serves gzip and deflate. It is on every server distribution, and
   # its headers are a package of their own.
-  unless spec.cc.search_header('zlib.h')
+  unless spec.search_package('zlib')
     abort <<~MSG
-      mruby-webmachine: zlib headers not found.
+      mruby-webmachine: zlib not found by pkg-config.
 
         Debian/Ubuntu   apt install zlib1g-dev
         RHEL/Fedora     dnf install zlib-devel
@@ -25,12 +25,11 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
         macOS           xcode-select --install
     MSG
   end
-  spec.linker.libraries << 'z'
 
   # libcrypto takes the fingerprint of an error: BLAKE2b with a key.
-  unless spec.cc.search_header('openssl/evp.h')
+  unless spec.search_package('libcrypto')
     abort <<~MSG
-      mruby-webmachine: OpenSSL headers not found.
+      mruby-webmachine: libcrypto not found by pkg-config.
 
         Debian/Ubuntu   apt install libssl-dev
         RHEL/Fedora     dnf install openssl-devel
@@ -38,7 +37,6 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
         macOS           brew install openssl@3
     MSG
   end
-  spec.linker.libraries << 'crypto'
 
   # miniz reads the zip packs of assets. MINIZ_NO_ZLIB_COMPATIBLE_NAMES
   # keeps it off zlib's names, because both meet in one translation unit.
