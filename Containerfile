@@ -21,7 +21,7 @@ RUN set -e; \
         > /etc/apt/sources.list.d/llvm.list; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        g++-16 clang-23 make ruby rake bison git libbenchmark-dev libssl-dev zlib1g-dev; \
+        g++-16 clang-23 make ruby rake bison git pkg-config libbenchmark-dev libssl-dev zlib1g-dev; \
     rm -rf /var/lib/apt/lists/*; \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 100; \
     update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 100; \
