@@ -7,7 +7,7 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-uri-parser'
   spec.add_dependency 'mruby-lmdb'
   spec.add_dependency 'mruby-mustache', github: 'Asmod4n/mruby-mustache', branch: 'main'
-  spec.add_dependency 'mruby-fast-json', github: 'Asmod4n/mruby-fast-json', branch: 'main'
+  spec.add_dependency 'mruby-fast-json'
   spec.add_dependency 'mruby-toml'
   spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
   spec.add_dependency 'mruby-method'
