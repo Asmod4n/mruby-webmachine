@@ -167,6 +167,7 @@ machine_busy() {
 }
 
 if [ -n "$ARCHIVE" ]; then
+  APP_LABEL="$(basename "${APP:-app}" .rb)@archive:$(basename "$ARCHIVE")"
   [ "$TRANSPORT" = unix ] || { echo "ARCHIVE= runs on a UNIX socket only" >&2; exit 2; }
   [ -x "$ARCHIVE" ] && [ -f "${APP:-}" ] && [ -x "${MRBC:-}" ] || {
     echo "ARCHIVE= needs APP= (the archive's bench/apps/hello.rb) and MRBC= (the archive's mrbc)" >&2
@@ -179,10 +180,12 @@ if [ -n "$ARCHIVE" ]; then
   SRV=$!
   WHERE=(--sock "$SOCK")
 elif [ "$TRANSPORT" = unix ]; then
+  APP_LABEL="$(basename "$SERVER")"
   "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$SERVER" "$SOCK" $ARM >"$WORK/srv.out" 2>&1 &
   SRV=$!
   WHERE=(--sock "$SOCK")
 else
+  APP_LABEL="$(basename "$SERVER")"
   "${NICE_ASK[@]+"${NICE_ASK[@]}"}" "$SERVER" "$PORT" $ARM >"$WORK/srv.out" 2>&1 &
   SRV=$!
   WHERE=(--host 127.0.0.1 --port "$PORT")
@@ -198,7 +201,7 @@ sleep 1.2
 
 CFLAGS_LINE=$(grep -o "'-[^']*'" "$here/build_config_release.rb" | tr -d "'" | sort -u |
   tr '\n' ' ' | sed 's/ $//')
-echo "harness: floor ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+echo "harness: floor app=$APP_LABEL ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
 
 RPS=()
 SHARES=()
@@ -276,7 +279,7 @@ echo "median kernel share: $(median_of "${SHARES[@]}")%   median user per reques
 
 mkdir -p "$here/bench/results"
 {
-  echo "harness: floor ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
+  echo "harness: floor app=$APP_LABEL ${ARCHIVE:+archive=$ARCHIVE }htgen -c$CONNS -t$CLIENT_THREADS -d${DURATION}s reps=$REPS transport=$TRANSPORT path=$PATH_ASKED arm=${ARM:-kernel} nice=${NICE:-default} $MEMLOCK_LINE cflags=$CFLAGS_LINE $(uname -mr)"
   printf 'rps:'
   printf ' %s' "${RPS[@]}"
   printf '\n'
