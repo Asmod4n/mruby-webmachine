@@ -6,13 +6,24 @@ file MRUBY_DIR do
   sh "git clone --depth 1 --recursive https://github.com/mruby/mruby.git #{MRUBY_DIR}"
 end
 
+desc "pull every branch-pinned dependency's checkout, so the next build sees its latest commit"
+task :update_deps do
+  Dir[File.join(MRUBY_DIR, 'build', 'repos', '*', '*')]
+    .select { |repo| File.directory?(File.join(repo, '.git')) }
+    .each do |repo|
+      branch = `git -C #{repo} rev-parse --abbrev-ref HEAD`.strip
+      next if branch == 'HEAD' # detached at a pinned commit, nothing to pull
+      sh "git -C #{repo} pull --ff-only origin #{branch}"
+    end
+end
+
 desc 'build and run every test'
 task test: MRUBY_DIR do
   sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{TEST_CONFIG} rake all test"
   Rake::Task['cache'].invoke
 end
 
-desc 'build the release config: what rake install packages'
+desc 'build the release config: what rake install packages, and what rake bench links against'
 task release: MRUBY_DIR do
   sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{RELEASE_CONFIG} rake all"
 end
@@ -148,11 +159,16 @@ end
 desc 'build and run the benchmarks; WM_MARCH sets -march, WM_FILTER picks arms, WM_BUILD picks the mruby build'
 task :bench do
   build_name = ENV['WM_BUILD']
+  raise 'WM_BUILD=debug: a debug build is -Og and asserts, never what a bench measures - ' \
+        'build a release-shaped config and point WM_BUILD at that' if build_name == 'debug'
+
   config = build_name ? File.join(__dir__, 'mruby', 'build', build_name) :
            Dir[File.join(__dir__, 'mruby', 'build', '*')]
+             .reject { |one| File.basename(one) == 'debug' }
              .find { |one| File.executable?(File.join(one, 'bin', 'mruby-config')) }
   mruby_config = config && File.join(config, 'bin', 'mruby-config')
-  raise 'no built mruby config carries mruby-config; run rake test (or MRUBY_CONFIG=... rake) first' unless
+  raise 'no built, non-debug mruby config carries mruby-config; run rake release ' \
+        '(or MRUBY_CONFIG=... rake, with mruby-bin-config in the gem list) first' unless
     mruby_config && File.executable?(mruby_config)
 
   # Everything mrbgem.rake already knows how to build - lmdb, ada, mustache,
