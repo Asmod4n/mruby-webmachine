@@ -1,5 +1,6 @@
 MRUBY_DIR = File.expand_path('mruby', __dir__)
 TEST_CONFIG = File.expand_path('build_config_debug.rb', __dir__)
+RELEASE_CONFIG = File.expand_path('build_config_release.rb', __dir__)
 
 file MRUBY_DIR do
   sh "git clone --depth 1 --recursive https://github.com/mruby/mruby.git #{MRUBY_DIR}"
@@ -9,6 +10,11 @@ desc 'build and run every test'
 task test: MRUBY_DIR do
   sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{TEST_CONFIG} rake all test"
   Rake::Task['cache'].invoke
+end
+
+desc 'build the release config: what rake install packages'
+task release: MRUBY_DIR do
+  sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{RELEASE_CONFIG} rake all"
 end
 
 desc 'walk one cache entry from the server to the reader'
@@ -139,36 +145,45 @@ def bench_provenance(binary, nice)
   }
 end
 
-desc 'build and run the benchmarks; WM_MARCH sets -march, WM_FILTER picks arms'
+desc 'build and run the benchmarks; WM_MARCH sets -march, WM_FILTER picks arms, WM_BUILD picks the mruby build'
 task :bench do
+  build_name = ENV['WM_BUILD']
+  config = build_name ? File.join(__dir__, 'mruby', 'build', build_name) :
+           Dir[File.join(__dir__, 'mruby', 'build', '*')]
+             .find { |one| File.executable?(File.join(one, 'bin', 'mruby-config')) }
+  mruby_config = config && File.join(config, 'bin', 'mruby-config')
+  raise 'no built mruby config carries mruby-config; run rake test (or MRUBY_CONFIG=... rake) first' unless
+    mruby_config && File.executable?(mruby_config)
+
+  # Everything mrbgem.rake already knows how to build - lmdb, ada, mustache,
+  # miniz, zlib, libcrypto - is a member of this archive already. Bench asks
+  # mruby-config for the same flags the gem itself was built with, and
+  # links against it; nothing here is compiled a second time.
+  cxxflags = `#{mruby_config} --cxxflags`.strip
+  ldflags = `#{mruby_config} --ldflags`.strip
+  ldflags_before_libs = `#{mruby_config} --ldflags-before-libs`.strip
+  libs = `#{mruby_config} --libs`.strip
+  libmruby_path = `#{mruby_config} --libmruby-path`.strip
+  raise "#{mruby_config}: gave no libmruby path" if libmruby_path.empty?
+
   sources = Dir[File.join(__dir__, 'bench', '*.cpp')].sort
-  lmdb = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-lmdb', 'lmdb', 'libraries', 'liblmdb')].first
-  raise 'mruby-lmdb is not checked out; run rake test once' if lmdb.nil?
-
-  in_c = Dir[File.join(__dir__, 'bench', 'picohttpparser', '*.c')].sort +
-         %w[mdb.c midl.c].map { |one| File.join(lmdb, one) } +
-         [File.join(__dir__, 'src', 'cache.c')]
-  mustache = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-mustache', 'include')].first
-  raise 'mruby-mustache is not checked out; run rake test once' if mustache.nil?
-
-  ada = Dir[File.join(__dir__, 'mruby', 'build', 'repos', '*', 'mruby-uri-parser')].first
-  raise 'mruby-uri-parser is not checked out; run rake test once' if ada.nil?
-
-  sources << File.join(ada, 'src', 'ada.cpp')
-  includes = [File.join(__dir__, 'src'), File.join(__dir__, 'bench'), File.join(ada, 'include'), mustache, lmdb]
   binary = File.join(__dir__, 'bench', 'run')
   results = File.join(__dir__, 'bench', 'results')
   mkdir_p results
+
+  # picohttpparser is a comparison arm, not a dependency of the gem, so it
+  # is the one thing bench still compiles for itself.
   objects = File.join(Dir.tmpdir, "webmachine-bench-c-#{Process.pid}")
   mkdir_p objects
-  in_c.each do |one|
-    sh "gcc -std=c11 -O3 -march=#{BENCH_MARCH} #{BENCH_ALIGN} -w " \
-       "#{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
+  Dir[File.join(__dir__, 'bench', 'picohttpparser', '*.c')].sort.each do |one|
+    sh "gcc -std=c11 -O3 -march=#{BENCH_MARCH} #{BENCH_ALIGN} -w -I#{File.join(__dir__, 'bench')} " \
        "-c #{one} -o #{File.join(objects, "#{File.basename(one, '.c')}.o")}"
   end
-  sh "g++ #{BENCH_FLAGS} #{includes.map { |dir| "-I#{dir}" }.join(' ')} " \
+
+  sh "g++ #{BENCH_FLAGS} -I#{File.join(__dir__, 'src')} -I#{File.join(__dir__, 'bench')} #{cxxflags} " \
      "#{sources.join(' ')} #{Dir[File.join(objects, '*.o')].sort.join(' ')} " \
-     "-lbenchmark -lpthread -o #{binary}"
+     "#{ldflags} -Wl,--whole-archive #{libmruby_path} -Wl,--no-whole-archive " \
+     "#{ldflags_before_libs} #{libs} -lbenchmark -o #{binary}"
   lowered = bench_priority
   context = bench_provenance(binary, lowered.empty? ? '0' : '1').map do |k, v|
     "--benchmark_context=#{k}=#{v.gsub(/[^A-Za-z0-9.:+~@\/-]+/, '_')}"

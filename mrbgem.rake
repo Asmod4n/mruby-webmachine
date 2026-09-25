@@ -13,6 +13,10 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-method'
   spec.add_dependency 'mruby-kernel-ext'
   spec.add_dependency 'mruby-proc-ext'
+  # mruby-config: whichever build config bench and install run against,
+  # its cxxflags, ldflags and libs come from here - not retyped in the
+  # Rakefile, and not tied to a build's name.
+  spec.add_dependency 'mruby-bin-config'
 
   spec.bins = %w[webmachine-cache webmachine-cache-check webmachine-serve]
 
