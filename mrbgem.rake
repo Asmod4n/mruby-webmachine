@@ -66,7 +66,7 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
     f.relative_path_from(dir).pathmap("#{build_dir}/%X#{spec.exts.object}")
   }
 
-  # liburing carries slipstream's seam, so its archive reaches back into
+  # liburing carries slipstream's syscall layer, so its archive reaches back into
   # symbols that live in libmruby.a - which the linker has already walked
   # by the time it reaches liburing. Named once more, it can answer.
   spec.linker.flags_after_libraries << build.libfile("#{build.build_dir}/lib/libmruby")
