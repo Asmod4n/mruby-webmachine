@@ -1,3 +1,6 @@
 [submodule "deps/miniz"]
 	path = deps/miniz
 	url = https://github.com/richgel999/miniz
+[submodule "refs/webmachine"]
+	path = refs/webmachine
+	url = https://github.com/webmachine/webmachine.git

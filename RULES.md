@@ -26,13 +26,10 @@ says what is passed. The return type says what comes back. A reader
 of the declaration alone knows the behaviour, and does not need the
 body.
 
-## A name that a specification gives is the name the code uses
+## Every name comes from a source outside this tree
 
-Where the C++ standard names the thing instead, the standard wins.
-Where nothing names it, the name says its purpose. A function is
-named with a verb and then the word the specification gives the
-thing. A predicate keeps the plain form. The order of a class follows
-the order of the specification that defines it.
+A name is the word a specification, a standard or a library gives the
+thing. No name is made here.
 
 ## A method name is a sentence
 
@@ -203,6 +200,10 @@ implementation stays as an arm until the change is decided.
 ## The compilers are signed packages
 
 A compiler is never built here.
+
+## What builds the tree is the distribution's package
+
+Nothing that builds this tree is installed from anywhere else.
 
 ## The bench takes the machine, and says how much of it
 

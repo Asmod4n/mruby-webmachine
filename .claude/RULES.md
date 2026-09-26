@@ -102,3 +102,15 @@ for the lock and is given it when the run lets go. Both block the call
 that asks, and neither blocks the one that started the work.
 
 A loop that sleeps and looks again is the mistake that made this rule.
+
+## The words seam and spell are not written
+
+Not in code, not in a commit message, not in an answer. Neither the
+word nor a form of it.
+
+## A document says what a thing does
+
+A README, a comment, a commit message and an answer say what a
+function does and what it does not do. No sentence gives a thing a
+mind, a heart, a wish or a claim. No word says what a thing is
+"really" or "at heart". A reason is one sentence and names a fact.
