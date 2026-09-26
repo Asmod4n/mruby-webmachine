@@ -28,8 +28,13 @@ body.
 
 ## Every name comes from a source outside this tree
 
-A name is the word a specification, a standard or a library gives the
-thing. No name is made here.
+A name is taken from the first of these that names the thing:
+
+1. A specification or an RFC.
+2. The origin of the code that is used.
+3. The concept that the code implements, in the words of that concept.
+
+No name is made here.
 
 ## A method name is a sentence
 

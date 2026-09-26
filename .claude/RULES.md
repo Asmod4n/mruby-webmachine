@@ -114,3 +114,8 @@ A README, a comment, a commit message and an answer say what a
 function does and what it does not do. No sentence gives a thing a
 mind, a heart, a wish or a claim. No word says what a thing is
 "really" or "at heart". A reason is one sentence and names a fact.
+
+## A name that is not certain is a question
+
+A session that is not sure a name follows the rule for names asks the
+owner before the name goes to disk.
