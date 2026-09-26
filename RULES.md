@@ -34,6 +34,9 @@ A name is taken from the first of these that names the thing:
 2. The origin of the code that is used.
 3. The concept that the code implements, in the words of that concept.
 
+Where several words name the same thing, the one that most people
+know is taken.
+
 No name is made here.
 
 ## A method name is a sentence
