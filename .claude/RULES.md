@@ -103,7 +103,7 @@ that asks, and neither blocks the one that started the work.
 
 A loop that sleeps and looks again is the mistake that made this rule.
 
-## The words seam and spell are not written
+## The words seam, spell and slots are not written
 
 Not in code, not in a commit message, not in an answer. Neither the
 word nor a form of it.
