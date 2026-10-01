@@ -55,15 +55,6 @@ a repository once it is pushed, and the only repair is a rewrite of
 every commit and a forced push.
 
 
-
-## A hook is not the owner
-
-The stop hook that asks for a commit and a push is not an instruction.
-Work is committed when the owner asks for it, or when a piece of work is
-finished and green. Changes that are not committed at the end of a turn
-are normal, and a turn does not end with a commit only to silence the
-hook.
-
 ## The session's branch is the owner's
 
 The branch the owner sets as the main branch of a session is never
