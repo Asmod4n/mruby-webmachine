@@ -12,12 +12,9 @@
 
 #include <simdjson.h>
 
-#if defined(__cpp_impl_reflection)
-#include <mustache/reflect.hpp>
-#else
-#include <mustache/render.hpp>
-#include <mustache/std.hpp>
-#endif
+#include <map>
+#include <mustache/mustache.hpp>
+#include <variant>
 
 #include "http.hpp"
 #include "zip.hpp"
@@ -179,31 +176,15 @@ fields_of(const Details &d)
 #endif
 }
 
-inline size_t
-page_bound_of(const std::string_view source, const Fields &f)
-{
-    size_t values = f.type.size() + f.title.size() + f.status.size() + f.instance.value_or("").size() +
-                    f.fingerprint.value_or("").size() + f.picture.value_or("").size();
-    values += f.exception.value_or("").size() + f.message.value_or("").size();
-    for (const std::string &line : f.backtrace) values += line.size();
-    const size_t lines = f.backtrace.size();
-    return source.size() * (lines + 1) + mustache::kEntityMax * values + mustache::kEscapeSlack;
-}
-
 #if defined(__cpp_impl_reflection)
 
 template <mustache::fixed_string Source, class T>
 std::optional<std::string>
-page_of(const T &fields, const size_t bound)
+page_of(const T &fields)
 {
-    std::string page;
-    page.resize_and_overwrite(bound, [&](char *const p, const size_t n) {
-        mustache::Out out{p, p + n - mustache::kEscapeSlack};
-        mustache::render<Source>(out, fields);
-        return out.full ? size_t{0} : static_cast<size_t>(out.w - p);
-    });
-    if (page.empty()) [[unlikely]] return std::nullopt;
-    return page;
+    auto page = mustache::render<Source>(fields);
+    if (!page) [[unlikely]] return std::nullopt;
+    return std::move(*page);
 }
 
 inline std::optional<std::string>
@@ -211,66 +192,48 @@ html_of(const Details &d, const std::optional<std::string_view> picture)
 {
     Fields f = fields_of(d);
     if (picture) f.picture = std::string(*picture);
-    return page_of<mustache::fixed_string{kHtml}>(f, page_bound_of(std::string_view(kHtml), f));
+    return page_of<mustache::fixed_string{kHtml}>(f);
 }
 
 inline std::optional<std::string>
 xml_of(const Details &d)
 {
     const Fields f = fields_of(d);
-    return page_of<mustache::fixed_string{kXml}>(f, page_bound_of(std::string_view(kXml), f));
+    return page_of<mustache::fixed_string{kXml}>(f);
 }
 
 inline std::optional<std::string>
 text_of(const Details &d)
 {
     const Fields f = fields_of(d);
-    return page_of<mustache::fixed_string{kText}>(f, page_bound_of(std::string_view(kText), f));
+    return page_of<mustache::fixed_string{kText}>(f);
 }
 
 #else
 
-inline mustache::std_host::Value
+using Value = std::variant<std::string, std::vector<std::string>>;
+
+inline std::map<std::string, Value>
 value_of(const Fields &f)
 {
-    using mustache::std_host::List;
-    using mustache::std_host::Map;
-    using mustache::std_host::Value;
-    Map m;
-    m.set("type", Value{f.type});
-    m.set("title", Value{f.title});
-    m.set("status", Value{f.status});
-    if (f.instance) m.set("instance", Value{*f.instance});
-    if (f.fingerprint) m.set("fingerprint", Value{*f.fingerprint});
-    if (f.picture) m.set("picture", Value{*f.picture});
-    if (f.exception) m.set("exception", Value{*f.exception});
-    if (f.message) m.set("message", Value{*f.message});
-    List lines;
-    for (const std::string &line : f.backtrace) lines.push_back(Value{line});
-    m.set("backtrace", Value{std::move(lines)});
-    if (f.has_backtrace) m.set("has_backtrace", Value{*f.has_backtrace});
-    return Value{std::move(m)};
+    std::map<std::string, Value> m{{"type", f.type}, {"title", f.title}, {"status", f.status}, {"backtrace", f.backtrace}};
+    if (f.instance) m.emplace("instance", *f.instance);
+    if (f.fingerprint) m.emplace("fingerprint", *f.fingerprint);
+    if (f.picture) m.emplace("picture", *f.picture);
+    if (f.exception) m.emplace("exception", *f.exception);
+    if (f.message) m.emplace("message", *f.message);
+    if (f.has_backtrace) m.emplace("has_backtrace", *f.has_backtrace);
+    return m;
 }
 
 inline std::optional<std::string>
 page_of(const std::string_view source, const Fields &f)
 {
-    using mustache::std_host::Host;
-    using mustache::std_host::Key;
-    using mustache::std_host::Value;
-    Host host;
-    const std::optional<mustache::Program<Key>> program = mustache::program_of<Key>(host, source, source.size());
+    const auto program = mustache::compile(source);
     if (!program) [[unlikely]] return std::nullopt;
-    const Value root = value_of(f);
-    std::string page;
-    page.resize_and_overwrite(page_bound_of(source, f), [&](char *const p, const size_t n) {
-        mustache::Out out{p, p + n - mustache::kEscapeSlack};
-        mustache::Walk<Host, const Value *, Key, mustache::Out> walk(host, out);
-        const mustache::Fault fault = walk.run(*program, &root);
-        return fault == mustache::Fault::none ? static_cast<size_t>(out.w - p) : size_t{0};
-    });
-    if (page.empty()) [[unlikely]] return std::nullopt;
-    return page;
+    auto page = mustache::render(*program, value_of(f));
+    if (!page) [[unlikely]] return std::nullopt;
+    return std::move(*page);
 }
 
 inline std::optional<std::string>
