@@ -6,11 +6,9 @@
 #include <string_view>
 #include <vector>
 
-#if defined(__cpp_impl_reflection)
-#include <mustache/reflect.hpp>
-#endif
-#include <mustache/render.hpp>
-#include <mustache/std.hpp>
+#include <map>
+#include <mustache/mustache.hpp>
+#include <variant>
 
 #include "http.hpp"
 #include "http1.hpp"
@@ -75,7 +73,7 @@ footer{margin-top:3rem;color:var(--dim);font-size:.85rem;border-top:1px solid va
 <li><span class=node>{{node}}</span> <span class=cb>{{question}}</span> <span class={{answer}}>{{answer}}</span><span class=clause>{{clause}}</span></li>
 {{/steps}}
 </ol>
-<footer>{{count}} nodes, rendered by mruby-mustache, served from one io_uring ring.</footer>
+<footer>{{count}} nodes, rendered by mbedded-mustache, served from one io_uring ring.</footer>
 </main>
 )";
 
@@ -122,69 +120,35 @@ fields_of(const http1::Request &request, const flow::Outcome &outcome)
     return f;
 }
 
-inline size_t
-page_bound_of(const PageFields &f)
-{
-    size_t values = f.method.size() + f.target.size() + f.status.size() + f.reason.size() + f.count.size();
-    for (const StepFields &step : f.steps)
-        values += step.node.size() + step.question.size() + 2 * step.answer.size() + step.clause.size();
-    return kPage.size() * (f.steps.size() + 1) + mustache::kEntityMax * values + mustache::kEscapeSlack;
-}
-
 #if defined(__cpp_impl_reflection)
 
 inline std::string
 page_of(const http1::Request &request, const flow::Outcome &outcome)
 {
-    const PageFields f = fields_of(request, outcome);
-    std::string page;
-    page.resize_and_overwrite(page_bound_of(f), [&](char *const p, const size_t n) {
-        mustache::Out out{p, p + n - mustache::kEscapeSlack};
-        mustache::render<mustache::fixed_string{kPageSource}>(out, f);
-        return out.full ? size_t{0} : static_cast<size_t>(out.w - p);
-    });
-    return page;
+    auto page = mustache::render<mustache::fixed_string{kPageSource}>(fields_of(request, outcome));
+    if (!page) [[unlikely]] return {};
+    return std::move(*page);
 }
 
 #else
 
+using Step = std::map<std::string, std::string_view>;
+using Value = std::variant<std::string_view, std::vector<Step>>;
+
 inline std::string
 page_of(const http1::Request &request, const flow::Outcome &outcome)
 {
-    using mustache::std_host::Host;
-    using mustache::std_host::Key;
-    using mustache::std_host::List;
-    using mustache::std_host::Map;
-    using mustache::std_host::Value;
     const PageFields f = fields_of(request, outcome);
-    List steps;
-    for (const StepFields &step : f.steps) {
-        Map m;
-        m.set("node", Value{std::string(step.node)});
-        m.set("question", Value{std::string(step.question)});
-        m.set("answer", Value{std::string(step.answer)});
-        m.set("clause", Value{std::string(step.clause)});
-        steps.push_back(Value{std::move(m)});
-    }
-    Map root;
-    root.set("method", Value{std::string(f.method)});
-    root.set("target", Value{std::string(f.target)});
-    root.set("status", Value{f.status});
-    root.set("reason", Value{std::string(f.reason)});
-    root.set("count", Value{f.count});
-    root.set("steps", Value{std::move(steps)});
-    const Value data{std::move(root)};
-    Host host;
-    const auto program = mustache::program_of<Key>(host, kPage, kPage.size());
+    std::vector<Step> steps;
+    for (const StepFields &step : f.steps)
+        steps.push_back({{"node", step.node}, {"question", step.question}, {"answer", step.answer}, {"clause", step.clause}});
+    const std::map<std::string, Value> root{{"method", f.method}, {"target", f.target}, {"status", f.status},
+                                            {"reason", f.reason}, {"count", f.count},   {"steps", std::move(steps)}};
+    const auto program = mustache::compile(kPage);
     if (!program) [[unlikely]] return {};
-    std::string page;
-    page.resize_and_overwrite(page_bound_of(f), [&](char *const p, const size_t n) {
-        mustache::Out out{p, p + n - mustache::kEscapeSlack};
-        mustache::Walk<Host, const Value *, Key, mustache::Out> walk(host, out);
-        const mustache::Fault fault = walk.run(*program, &data);
-        return fault == mustache::Fault::none ? static_cast<size_t>(out.w - p) : size_t{0};
-    });
-    return page;
+    auto page = mustache::render(*program, root);
+    if (!page) [[unlikely]] return {};
+    return std::move(*page);
 }
 
 #endif
