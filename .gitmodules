@@ -4,3 +4,6 @@
 [submodule "deps/mbedded-mustache"]
 	path = deps/mbedded-mustache
 	url = https://github.com/Asmod4n/mbedded-mustache
+[submodule "deps/pfr"]
+	path = deps/pfr
+	url = https://github.com/boostorg/pfr
