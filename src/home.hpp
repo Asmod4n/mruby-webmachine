@@ -6,9 +6,7 @@
 #include <string_view>
 #include <vector>
 
-#include <map>
 #include <mustache/mustache.hpp>
-#include <variant>
 
 #include "http.hpp"
 #include "http1.hpp"
@@ -132,21 +130,12 @@ page_of(const http1::Request &request, const flow::Outcome &outcome)
 
 #else
 
-using Step = std::map<std::string, std::string_view>;
-using Value = std::variant<std::string_view, std::vector<Step>>;
-
 inline std::string
 page_of(const http1::Request &request, const flow::Outcome &outcome)
 {
-    const PageFields f = fields_of(request, outcome);
-    std::vector<Step> steps;
-    for (const StepFields &step : f.steps)
-        steps.push_back({{"node", step.node}, {"question", step.question}, {"answer", step.answer}, {"clause", step.clause}});
-    const std::map<std::string, Value> root{{"method", f.method}, {"target", f.target}, {"status", f.status},
-                                            {"reason", f.reason}, {"count", f.count},   {"steps", std::move(steps)}};
-    const auto program = mustache::compile(kPage);
+    const auto program = mustache::compile<PageFields>(kPage);
     if (!program) [[unlikely]] return {};
-    auto page = mustache::render(*program, root);
+    auto page = mustache::render(*program, fields_of(request, outcome));
     if (!page) [[unlikely]] return {};
     return std::move(*page);
 }
