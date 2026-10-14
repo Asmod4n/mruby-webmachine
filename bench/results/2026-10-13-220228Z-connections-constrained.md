@@ -53,3 +53,9 @@ nofile=20000 memlock=8192 nproc=4 kernel=6.18.44-fc-v114
   (one htgen process refused: short)
   19000    3     161353      98%      79%     87%      0
 ```
+
+## Not valid above 4096 connections
+
+A row above 4096 connections ran more than one htgen process. On a
+machine with 4 vCPU only one server thread and one htgen thread are
+measurable. Every row with more than one htgen process is not valid.
