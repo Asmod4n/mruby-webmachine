@@ -12,9 +12,7 @@
 
 #include <simdjson.h>
 
-#include <map>
 #include <mustache/mustache.hpp>
-#include <variant>
 
 #include "http.hpp"
 #include "zip.hpp"
@@ -211,27 +209,12 @@ text_of(const Details &d)
 
 #else
 
-using Value = std::variant<std::string, std::vector<std::string>>;
-
-inline std::map<std::string, Value>
-value_of(const Fields &f)
-{
-    std::map<std::string, Value> m{{"type", f.type}, {"title", f.title}, {"status", f.status}, {"backtrace", f.backtrace}};
-    if (f.instance) m.emplace("instance", *f.instance);
-    if (f.fingerprint) m.emplace("fingerprint", *f.fingerprint);
-    if (f.picture) m.emplace("picture", *f.picture);
-    if (f.exception) m.emplace("exception", *f.exception);
-    if (f.message) m.emplace("message", *f.message);
-    if (f.has_backtrace) m.emplace("has_backtrace", *f.has_backtrace);
-    return m;
-}
-
 inline std::optional<std::string>
 page_of(const std::string_view source, const Fields &f)
 {
-    const auto program = mustache::compile(source);
+    const auto program = mustache::compile<Fields>(source);
     if (!program) [[unlikely]] return std::nullopt;
-    auto page = mustache::render(*program, value_of(f));
+    auto page = mustache::render(*program, f);
     if (!page) [[unlikely]] return std::nullopt;
     return std::move(*page);
 }
