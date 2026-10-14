@@ -43,6 +43,18 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   abort 'mruby-webmachine: deps/mbedded-mustache is empty - run: git submodule update --init' unless File.exist?("#{mustache}/mustache/mustache.hpp")
   spec.cxx.include_paths << mustache
 
+  # Boost.PFR reads the members of a struct where the compiler has no
+  # reflection. Boost 1.84 is the first that mbedded-mustache takes. The
+  # stable distributions carry an older Boost, so deps/pfr stands in for it.
+  boost_pfr_first_version = 108400
+  boost_version = spec.cxx.search_header('boost/version.hpp')
+  boost_version = boost_version && File.read(boost_version)[/#define BOOST_VERSION (\d+)/, 1].to_i
+  unless boost_version && boost_version >= boost_pfr_first_version
+    pfr = "#{dir}/deps/pfr/include"
+    abort 'mruby-webmachine: deps/pfr is empty - run: git submodule update --init' unless File.exist?("#{pfr}/boost/pfr/core_name.hpp")
+    spec.cxx.include_paths << pfr
+  end
+
   # miniz reads the zip packs of assets. MINIZ_NO_ZLIB_COMPATIBLE_NAMES
   # keeps it off zlib's names, because both meet in one translation unit.
   mnz = "#{dir}/deps/miniz"
