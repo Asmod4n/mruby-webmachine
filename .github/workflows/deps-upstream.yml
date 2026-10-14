@@ -1,0 +1,16 @@
+name: deps upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@5edf4aad4bf4b28961f796e41b70add958c5da55
+    with:
+      notify: '@Asmod4n'
