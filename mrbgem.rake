@@ -6,7 +6,6 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-uri-parser'
   spec.add_dependency 'mruby-lmdb'
-  spec.add_dependency 'mruby-mustache', github: 'Asmod4n/mruby-mustache', branch: 'cpp-core'
   spec.add_dependency 'mruby-fast-json', github: 'Asmod4n/mruby-fast-json', branch: 'main'
   spec.add_dependency 'mruby-toml'
   spec.add_dependency 'mruby-slipstreamio', github: 'Asmod4n/slipstreamIO', branch: 'main'
@@ -39,6 +38,10 @@ MRuby::Gem::Specification.new('mruby-webmachine') do |spec|
     MSG
   end
   spec.linker.libraries << 'crypto'
+
+  mustache = "#{dir}/deps/mbedded-mustache/include"
+  abort 'mruby-webmachine: deps/mbedded-mustache is empty - run: git submodule update --init' unless File.exist?("#{mustache}/mustache/mustache.hpp")
+  spec.cxx.include_paths << mustache
 
   # miniz reads the zip packs of assets. MINIZ_NO_ZLIB_COMPATIBLE_NAMES
   # keeps it off zlib's names, because both meet in one translation unit.
