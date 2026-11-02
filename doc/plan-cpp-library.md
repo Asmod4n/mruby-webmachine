@@ -1,14 +1,13 @@
 # Plan: webmachine as a C++ library
 
-Status: draft 2, after the first review. Branch `plan-cpp-library`,
+Status: draft 3, WASI dropped (owner, 2026-11-02). Branch `plan-cpp-library`,
 from `integration`.
 
 ## 1. Goal
 
 The tree holds no mruby. Everything is C++. Other languages use the
 library through bindings that reflection makes from the C++ types.
-There is no C API. A second target is WASI: a browser holds a full web
-server, and a page reaches it through `fetch`.
+There is no C API.
 
 Decisions of the owner that this plan takes as given (2026-11-02):
 
@@ -16,12 +15,9 @@ Decisions of the owner that this plan takes as given (2026-11-02):
 - There is no C API.
 - A dependency is fetched by CMake where possible. CRC32C, libhydrogen
   and LMDB come as submodules (RULES.md).
-- WASI is built by clang, which has no reflection (clang 23.1.3 rejects
-  `^^` and defines no `__cpp_impl_reflection`, checked). There Boost.PFR
-  1.84 or later reads the members.
-- slipstreamIO gets a WASI mode, and the ring of this tree runs on it
-  under WASI.
-- In the browser the cache is the cache of the browser.
+- clang has no reflection (clang 23.1.3 rejects `^^` and defines no
+  `__cpp_impl_reflection`, checked). There Boost.PFR 1.84 or later reads
+  the members.
 
 ## 2. What the tree holds today
 
@@ -124,42 +120,12 @@ code it changes.
 - Check: a probe binding with mruby-cpp-reflection calls `dispatch` from
   mruby. A probe file reads every data type with Boost.PFR under clang.
 
-### 3.5 WASI
-
-- Target `wasm32-wasip1` with clang 23, Boost.PFR in place of
-  reflection (question 3).
-- The export of `dispatch` is what a service worker calls on a `fetch`
-  event. No socket under WASI.
-- The ring runs on slipstreamIO in its WASI mode, for files and timers.
-- No LMDB and no thread under WASI.
-- Cache: the HTTP cache of the browser stands behind the service worker
-  (Fetch standard), so a response that the worker makes is not stored
-  there. The cache of the browser for this target is the Cache Storage
-  API, used by the service worker. The tree gives correct `ETag`,
-  `Last-Modified`, `Cache-Control` and `Vary`.
-- Files reach the shim through Cache Storage or `fetch`. OPFS has sync
-  handles only in a dedicated worker, not in a service worker.
-- A service worker can stop at any time and loses its memory. No state
-  lives in the module between two events.
-- Exceptions: `-fwasm-exceptions`. Not checked yet: whether the wasm32
-  libc++ of the distribution is built with exceptions, and which shim
-  and browser carry them. Both are measured first, in a probe file.
-- Check: a page with a service worker loads the module. `fetch('/')`
-  gives the same body as the native server.
-
-### 3.6 slipstreamIO in WASI mode
-
-- A separate plan in slipstreamIO. This plan needs from it: files,
-  timers, and the ring API with no thread.
-
 ## 4. What is measured
 
 - 3.1: the rate of `/hello` at 256 connections, the old build against
   the CMake build, same flags, alternated, after a noise floor.
 - 3.4: the time of one `dispatch` without a ring, in ns, Google
   Benchmark.
-- 3.5: the time of one `fetch` through the service worker in one
-  browser.
 
 No gain is claimed before its measurement.
 
@@ -173,13 +139,14 @@ No gain is claimed before its measurement.
 
 ## 6. Order
 
-3.1, 3.2, 3.3, 3.4, then 3.5 and 3.6 side by side.
+3.1, 3.2, 3.3, 3.4.
 
 ## 7. Not in this plan
 
 - HTTP/2 and HTTP/3.
 - A binding for a language other than the probe of 3.4.
 - The rename of the repository.
+- WASI (dropped by the owner, 2026-11-02).
 
 ## 8. Data this plan leaves on the disk
 
@@ -188,7 +155,6 @@ No gain is claimed before its measurement.
 | CMake build directories | made again by a build command |
 | the old mruby build in `mruby/` | deleted after 3.3 |
 | bench result files | recorded in the state file |
-| the browser probe page | needed by open work until 3.5 is done |
 
 ## 9. Open questions for the owner
 
@@ -196,8 +162,6 @@ No gain is claimed before its measurement.
    or another. Proposal: toml++.
 2. The debug switch: the absence of `NDEBUG` in place of `MRB_DEBUG`.
    Proposal: `NDEBUG`, because the standard gives the name.
-3. WASI version: `wasip1` or `wasip2`. Proposal: `wasip1`, because the
-   browser path needs no socket and every shim carries it.
-4. The body of a `dispatch` response: bytes, a view into LMDB, or a body
+3. The body of a `dispatch` response: bytes, a view into LMDB, or a body
    that comes later when the flow halts. Proposal: one response type
-   whose body is one of these three, and under WASI only bytes.
+   whose body is one of these three.
