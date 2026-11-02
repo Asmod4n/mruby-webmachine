@@ -45,7 +45,7 @@ Dependencies, and how they arrive:
 | LMDB | gem `mruby-lmdb` | submodule (RULES.md) |
 | CRC32C | written by hand in `src/cache.c`, `#error` on other architectures | submodule (RULES.md) |
 | simdjson | gem `mruby-fast-json` | CMake `FetchContent` |
-| TOML | gem `mruby-toml` | a C++ parser by `FetchContent` (question 1) |
+| TOML | gem `mruby-toml` (toml11 inside) | toml11, the parser mruby-toml carries, by `FetchContent` |
 | liburing, slipstreamIO | gem `mruby-slipstreamio` | CMake `FetchContent` |
 | miniz | submodule | CMake `FetchContent` |
 | mbedded-mustache | submodule | CMake `FetchContent`, target `mustache::mustache` |
@@ -158,10 +158,8 @@ No gain is claimed before its measurement.
 
 ## 9. Open questions for the owner
 
-1. TOML parser: toml++ (header only, the most used C++ TOML library)
-   or another. Proposal: toml++.
-2. The debug switch: the absence of `NDEBUG` in place of `MRB_DEBUG`.
+1. The debug switch: the absence of `NDEBUG` in place of `MRB_DEBUG`.
    Proposal: `NDEBUG`, because the standard gives the name.
-3. The body of a `dispatch` response: bytes, a view into LMDB, or a body
+2. The body of a `dispatch` response: bytes, a view into LMDB, or a body
    that comes later when the flow halts. Proposal: one response type
    whose body is one of these three.
