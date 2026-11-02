@@ -71,8 +71,10 @@ code it changes.
 - The flags of `build_config_*.rb` become CMake presets: release and
   debug, g++ 16 with `-std=c++26 -freflection`, clang with `-std=c++26`
   and Boost.PFR.
-- The debug code switches on the absence of `NDEBUG`, the standard
-  name, in place of `MRB_DEBUG` (question 2).
+- The debug code switches on what CMake sets for the build type, in
+  place of `MRB_DEBUG` (owner): CMake defines `NDEBUG` for Release,
+  RelWithDebInfo and MinSizeRel and not for Debug, so debug code stands
+  where `NDEBUG` is not defined. The tree defines no switch of its own.
 - `bench/*.sh`, `bench/*.cpp` and `fuzz/` read their dependencies from
   the CMake build, not from `mruby/build`. The tasks `bench`, `fuzz`
   and `crosscheck` become CMake targets.
@@ -158,8 +160,6 @@ No gain is claimed before its measurement.
 
 ## 9. Open questions for the owner
 
-1. The debug switch: the absence of `NDEBUG` in place of `MRB_DEBUG`.
-   Proposal: `NDEBUG`, because the standard gives the name.
-2. The body of a `dispatch` response: bytes, a view into LMDB, or a body
+1. The body of a `dispatch` response: bytes, a view into LMDB, or a body
    that comes later when the flow halts. Proposal: one response type
    whose body is one of these three.
