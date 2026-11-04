@@ -9,6 +9,14 @@ desc 'build and run every test'
 task test: MRUBY_DIR do
   sh "cd #{MRUBY_DIR} && MRUBY_CONFIG=#{TEST_CONFIG} rake all test"
   Rake::Task['cache'].invoke
+  Rake::Task['serve'].invoke
+end
+
+desc 'speak to a running server over a unix socket'
+task serve: MRUBY_DIR do
+  server = File.join(__dir__, 'mruby', 'build', 'debug', 'bin', 'webmachine-serve')
+  raise "#{server} is not built" unless File.exist?(server)
+  sh "ruby #{File.join(__dir__, 'tools', 'webmachine-serve', 'test.rb')} #{server}"
 end
 
 desc 'walk one cache entry from the server to the reader'

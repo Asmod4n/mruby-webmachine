@@ -590,8 +590,11 @@ class Ring
                         armed += receives(slot);
                     return armed;
                 }
-                if (cqe.res == 0 && owed.connection.reads())
+                if (cqe.res == 0 && owed.connection.reads()) {
                     owed.connection.moves_to(tcp::State::close_wait);
+                    if (owed.sending || owed.first != owed.pieces)
+                        return armed;
+                }
                 return armed + closes(slot, released, cqe.res);
             }
             const uint32_t which = cqe.flags >> IORING_CQE_BUFFER_SHIFT;
@@ -684,6 +687,8 @@ class Ring
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
                 owed.connection.moves_to(http1::State::persistent);
+                if (owed.connection.tcp == tcp::State::close_wait)
+                    armed += closes(slot, released, 0);
             } else {
                 armed += sends(slot);
             }
