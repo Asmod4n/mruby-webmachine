@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
+#include "connection.hpp"
 #include "os_mapping.hpp"
 #include "uring.hpp"
 
@@ -34,27 +35,33 @@ enum class Doing : uint8_t {
     kClosing,
 };
 
-inline constexpr uint64_t marked(const Doing doing, const uint32_t slot)
+inline constexpr unsigned kSlotBits = 20;
+inline constexpr unsigned kGenerationBits = 32;
+inline constexpr unsigned kDoingShift = kSlotBits + kGenerationBits;
+inline constexpr uint32_t kSlotsMost = uint32_t{1} << kSlotBits;
+
+static_assert(kDoingShift + 8 <= 64, "a mark holds the slot, the generation and what was being done");
+
+inline constexpr uint64_t marked(const Doing doing, const uint32_t slot, const uint32_t generation)
 {
-    return (static_cast<uint64_t>(doing) << 32) | slot;
+    return (static_cast<uint64_t>(doing) << kDoingShift) | (static_cast<uint64_t>(generation) << kSlotBits) |
+           (slot & (kSlotsMost - 1));
 }
 
 inline constexpr Doing doing_of(const uint64_t mark)
 {
-    return static_cast<Doing>(mark >> 32);
+    return static_cast<Doing>(mark >> kDoingShift);
 }
 
 inline constexpr uint32_t slot_of(const uint64_t mark)
 {
-    return static_cast<uint32_t>(mark);
+    return static_cast<uint32_t>(mark & (kSlotsMost - 1));
 }
 
-static_assert(doing_of(marked(Doing::kReceiving, 4095)) == Doing::kReceiving,
-              "a mark says what was being done");
-static_assert(slot_of(marked(Doing::kReceiving, 4095)) == 4095,
-              "and which slot it was being done to");
-static_assert(marked(Doing::kAccepting, 0) != marked(Doing::kReceiving, 0),
-              "two things done to one slot are two marks");
+inline constexpr uint32_t generation_of(const uint64_t mark)
+{
+    return static_cast<uint32_t>(mark >> kSlotBits);
+}
 
 struct Answered {
     size_t head;
@@ -102,6 +109,8 @@ class Ring
                                         : static_cast<uint32_t>(limit.rlim_cur);
         if (open_files <= kListeners)
             return -EMFILE;
+        if (limit.rlim_cur != RLIM_INFINITY && limit.rlim_cur > kSlotsMost) [[unlikely]]
+            return -ERANGE;
         connections_ = open_files - kListeners;
 
         constexpr unsigned kAsked = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
@@ -205,7 +214,7 @@ class Ring
             return -EBUSY;
         sqe->prep_multishot_accept_direct(fd);
         sqe->fixed_file();
-        sqe->set_data64(marked(Doing::kAccepting, slot));
+        sqe->set_data64(marked(Doing::kAccepting, slot, 0));
         ring_.submit();
         listeners_++;
         return 0;
@@ -272,7 +281,7 @@ class Ring
             return -EBUSY;
         sqe->prep_multishot_accept_direct(fd);
         sqe->fixed_file();
-        sqe->set_data64(marked(Doing::kAccepting, slot));
+        sqe->set_data64(marked(Doing::kAccepting, slot, 0));
         ring_.submit();
         listeners_++;
         return 0;
@@ -309,16 +318,14 @@ class Ring
 
   private:
     struct alignas(64) Owed {
+        Connection connection;
         uint32_t filled;
         uint32_t first;
         uint32_t pieces;
         uint32_t helds;
         bool sending;
-        bool closing;
-        uint16_t bid;
-        bool holds_bid;
-        bool holds_group;
-        uint16_t group;
+        std::optional<uint16_t> bid;
+        std::optional<uint16_t> group;
         uint8_t *room;
         iovec piece[kPiecesMost];
         const void *held[kHeldMost];
@@ -371,10 +378,17 @@ class Ring
 
     void bid_given_back(Owed &owed)
     {
-        if (!owed.holds_bid)
+        if (!owed.bid)
             return;
-        buffer_returned(owed.bid);
-        owed.holds_bid = false;
+        buffer_returned(*owed.bid);
+        owed.bid.reset();
+    }
+
+    static void clears(Owed &owed)
+    {
+        const Connection kept = owed.connection;
+        owed = Owed{};
+        owed.connection = kept;
     }
 
     std::optional<uint16_t> send_group_taken()
@@ -402,12 +416,12 @@ class Ring
 
     void send_group_given_back(Owed &owed)
     {
-        if (!owed.holds_group)
+        if (!owed.group)
             return;
-        send_groups_[owed.group].free = true;
-        free_send_groups_.push_back(owed.group);
+        send_groups_[*owed.group].free = true;
+        free_send_groups_.push_back(*owed.group);
         std::ranges::push_heap(free_send_groups_, std::ranges::greater{});
-        owed.holds_group = false;
+        owed.group.reset();
     }
 
     void send_group_collected_step()
@@ -441,14 +455,13 @@ class Ring
             const std::optional<uint16_t> group = send_group_taken();
             if (group) {
                 owed.group = *group;
-                owed.holds_group = true;
                 uring::BufferRing &own = send_groups_[*group].buffers;
                 own.buf_ring_add(bytes_of(owed.piece[owed.first]), 0, 0);
                 own.buf_ring_advance(1);
                 sqe.prep_send_selected(static_cast<int>(slot), MSG_NOSIGNAL | MSG_WAITALL);
                 sqe.fixed_file();
                 sqe.buffer_select(own.group());
-                sqe.set_data64(marked(Doing::kSending, slot));
+                sqe.set_data64(marked(Doing::kSending, slot, owed.connection.generation));
                 owed.sending = true;
                 return 1;
             }
@@ -462,7 +475,7 @@ class Ring
             sqe.prep_sendmsg(static_cast<int>(slot), owed.message, MSG_NOSIGNAL | MSG_WAITALL);
         }
         sqe.fixed_file();
-        sqe.set_data64(marked(Doing::kSending, slot));
+        sqe.set_data64(marked(Doing::kSending, slot, owed.connection.generation));
         owed.sending = true;
         return 1;
     }
@@ -509,23 +522,22 @@ class Ring
         owed.room = nullptr;
     }
 
-    template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released)
+    template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released, const int result)
     {
         Owed &owed = owed_[slot];
-        if (owed.closing)
+        if (!owed.connection.is_open())
             return 0;
-        if (owed.sending) {
-            owed.closing = true;
-        } else {
+        owed.connection.moves_to(tcp::state_after_close(owed.connection.tcp, result));
+        if (!owed.sending) {
             all_released(owed, released);
             room_given_back(owed);
             bid_given_back(owed);
             send_group_given_back(owed);
-            owed = Owed{};
+            clears(owed);
         }
         uring::Sqe sqe = room_for_one_more();
         sqe.prep_close_direct(slot);
-        sqe.set_data64(marked(Doing::kClosing, slot));
+        sqe.set_data64(marked(Doing::kClosing, slot, owed.connection.generation));
         return 1;
     }
 
@@ -535,7 +547,7 @@ class Ring
         sqe.prep_recv_multishot(static_cast<int>(slot));
         sqe.fixed_file();
         sqe.buffer_select(kBufferGroup);
-        sqe.set_data64(marked(Doing::kReceiving, slot));
+        sqe.set_data64(marked(Doing::kReceiving, slot, owed_[slot].connection.generation));
         return 1;
     }
 
@@ -545,10 +557,21 @@ class Ring
         unsigned armed = 0;
         const uint64_t mark = cqe.data;
         const uint32_t slot = slot_of(mark);
-        switch (doing_of(mark)) {
+        const Doing doing = doing_of(mark);
+        const bool stale = doing != Doing::kAccepting &&
+                           (slot >= connections_ || generation_of(mark) != owed_[slot].connection.generation);
+        if (stale) [[unlikely]] {
+            if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0)
+                buffer_returned(static_cast<uint16_t>(cqe.flags >> IORING_CQE_BUFFER_SHIFT));
+            return armed;
+        }
+        switch (doing) {
         case Doing::kAccepting:
             if (cqe.res >= 0) {
-                owed_[cqe.res] = Owed{};
+                Owed &fresh = owed_[cqe.res];
+                const Connection next = accepted_after(fresh.connection);
+                fresh = Owed{};
+                fresh.connection = next;
                 armed += receives(static_cast<uint32_t>(cqe.res));
             }
             if ((cqe.flags & IORING_CQE_F_MORE) == 0) {
@@ -561,11 +584,15 @@ class Ring
             return armed;
         case Doing::kReceiving: {
             if (cqe.res <= 0) {
-                if (cqe.res == -ENOBUFS)
-                    armed += receives(slot);
-                else
-                    armed += closes(slot, released);
-                return armed;
+                Owed &owed = owed_[slot];
+                if (cqe.res == -ENOBUFS) {
+                    if (owed.connection.reads())
+                        armed += receives(slot);
+                    return armed;
+                }
+                if (cqe.res == 0 && owed.connection.reads())
+                    owed.connection.moves_to(tcp::State::close_wait);
+                return armed + closes(slot, released, cqe.res);
             }
             const uint32_t which = cqe.flags >> IORING_CQE_BUFFER_SHIFT;
             const size_t took_bytes = static_cast<size_t>(cqe.res);
@@ -573,25 +600,26 @@ class Ring
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
             if (from + took_bytes > pool) {
                 buffer_returned(static_cast<uint16_t>(which));
-                return armed + closes(slot, released);
+                return armed + closes(slot, released, -EIO);
             }
             Owed &owed = owed_[slot];
-            if (owed.closing) {
+            if (!owed.connection.reads()) {
                 buffer_returned(static_cast<uint16_t>(which));
                 return armed;
             }
-            const bool in_the_buffer = owed.room == nullptr && !owed.holds_bid && !owed.sending &&
+            const bool in_the_buffer = owed.room == nullptr && !owed.bid && !owed.sending &&
                                        owed.first == owed.pieces && kBufferBytes - took_bytes >= kBufferRoomLeast;
             if (!in_the_buffer && owed.room == nullptr) {
                 owed.room = room_taken();
                 if (owed.room == nullptr) [[unlikely]] {
                     buffer_returned(static_cast<uint16_t>(which));
-                    return armed + closes(slot, released);
+                    return armed + closes(slot, released, -ENOMEM);
                 }
             }
             uint8_t *const into = in_the_buffer ? room_ + from + took_bytes : owed.room;
             const size_t area = in_the_buffer ? kBufferBytes - took_bytes : kAnswerBytes;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
+            bool answered = false;
             while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
                 const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
                 const Answered said = answering(left, room);
@@ -606,15 +634,21 @@ class Ring
                 owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())),
                              said.body.size());
                 left.remove_prefix(said.taken);
+                answered = true;
+            }
+            if (answered && owed.connection.http != http1::State::response) {
+                if (owed.connection.http == http1::State::persistent)
+                    owed.connection.moves_to(http1::State::header_section);
+                owed.connection.moves_to(http1::State::dispatch);
+                owed.connection.moves_to(http1::State::response);
             }
             if (in_the_buffer && owed.first != owed.pieces) {
                 owed.bid = static_cast<uint16_t>(which);
-                owed.holds_bid = true;
             } else {
                 buffer_returned(static_cast<uint16_t>(which));
             }
             armed += sends(slot);
-            if ((cqe.flags & IORING_CQE_F_MORE) == 0)
+            if ((cqe.flags & IORING_CQE_F_MORE) == 0 && owed.connection.reads())
                 armed += receives(slot);
             return armed;
         }
@@ -622,15 +656,15 @@ class Ring
             Owed &owed = owed_[slot];
             owed.sending = false;
             send_group_given_back(owed);
-            if (owed.closing) {
+            if (!owed.connection.is_open()) {
                 all_released(owed, released);
                 room_given_back(owed);
                 bid_given_back(owed);
-                owed = Owed{};
+                clears(owed);
                 return armed;
             }
             if (cqe.res <= 0)
-                return armed + closes(slot, released);
+                return armed + closes(slot, released, cqe.res);
             size_t sent = static_cast<size_t>(cqe.res);
             while (sent > 0 && owed.first < owed.pieces) {
                 iovec &piece = owed.piece[owed.first];
@@ -649,12 +683,18 @@ class Ring
                 bid_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
+                owed.connection.moves_to(http1::State::persistent);
             } else {
                 armed += sends(slot);
             }
             return armed;
         }
-        case Doing::kClosing:
+        case Doing::kClosing: {
+            Connection &connection = owed_[slot].connection;
+            if (connection.tcp == tcp::State::fin_wait_1 || connection.tcp == tcp::State::last_ack)
+                connection.moves_to(tcp::State::closed);
+            return armed;
+        }
         default:
             return armed;
         }
