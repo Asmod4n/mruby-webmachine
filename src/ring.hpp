@@ -14,14 +14,15 @@
 #include <vector>
 #include <span>
 #include <string_view>
+#include <chrono>
 #include <netinet/in.h>
 #include <sys/un.h>
-#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 
-#include <liburing.h>
+#include "os_mapping.hpp"
+#include "uring.hpp"
 
 namespace wm
 {
@@ -81,6 +82,8 @@ inline constexpr size_t kBufferRoomLeast = 512;
 inline constexpr uint16_t kSendGroupFirst = 2;
 inline constexpr unsigned kSendEntries = 8;
 inline constexpr uint32_t kSendGroupEpochsIdle = 2;
+inline constexpr int kBacklog = 4096;
+inline constexpr long kWaitSeconds = 1;
 
 class Ring
 {
@@ -88,24 +91,6 @@ class Ring
     Ring() = default;
     Ring(const Ring &) = delete;
     Ring &operator=(const Ring &) = delete;
-
-    ~Ring()
-    {
-        if (buffers_ != nullptr)
-            io_uring_free_buf_ring(&ring_, buffers_, kBufferCount, kBufferGroup);
-        if (room_ != nullptr)
-            munmap(room_, static_cast<size_t>(kBufferCount) * kBufferBytes);
-        if (answers_ != nullptr)
-            munmap(answers_, static_cast<size_t>(connections_) * kAnswerBytes);
-        if (owed_ != nullptr)
-            munmap(owed_, static_cast<size_t>(connections_) * sizeof(Owed));
-        free(free_rooms_);
-        for (size_t at = 0; at < send_groups_.size(); at++)
-            io_uring_free_buf_ring(&ring_, send_groups_[at].buffers, kSendEntries,
-                                   static_cast<int>(kSendGroupFirst + at));
-        if (standing_)
-            io_uring_queue_exit(&ring_);
-    }
 
     int stood_up(const unsigned entries)
     {
@@ -122,67 +107,54 @@ class Ring
         constexpr unsigned kAsked = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
                                     IORING_SETUP_COOP_TASKRUN;
         const unsigned floor = entries < 1024 ? entries : 1024;
-        int begun = -EINVAL;
         for (unsigned wanted = entries;; wanted /= 2) {
-            io_uring_params asking = {};
-            asking.flags = kAsked;
-            begun = io_uring_queue_init_params(wanted, &ring_, &asking);
-            if (begun == 0) {
-                entries_ = asking.sq_entries;
+            const auto begun = ring_.queue_init_params(wanted, kAsked);
+            if (begun) {
+                entries_ = *begun;
                 break;
             }
             if (wanted <= floor)
-                return begun;
+                return -begun.error().value();
         }
-        standing_ = true;
-        const int by_index = io_uring_register_ring_fd(&ring_);
-        if (by_index < 0 && by_index != -EINVAL)
-            return by_index;
+        const auto by_index = ring_.register_ring_fd();
+        if (!by_index && by_index.error().value() != EINVAL)
+            return -by_index.error().value();
 
-        const int sparse = io_uring_register_files_sparse(&ring_, connections_ + kListeners);
-        if (sparse != 0)
-            return sparse;
-        const int ranged = io_uring_register_file_alloc_range(&ring_, 0, connections_);
-        if (ranged != 0)
-            return ranged;
+        const auto sparse = ring_.register_files_sparse(connections_ + kListeners);
+        if (!sparse)
+            return -sparse.error().value();
+        const auto ranged = ring_.register_file_alloc_range(0, connections_);
+        if (!ranged)
+            return -ranged.error().value();
 
-        void *const mapped =
-            mmap(nullptr, static_cast<size_t>(kBufferCount) * kBufferBytes,
-                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (mapped == MAP_FAILED)
-            return -errno;
-        room_ = static_cast<uint8_t *>(mapped);
-        madvise(mapped, static_cast<size_t>(kBufferCount) * kBufferBytes, MADV_HUGEPAGE);
+        auto room = os::Mapping::reserved(static_cast<size_t>(kBufferCount) * kBufferBytes);
+        if (!room)
+            return -room.error().value();
+        room_map_.emplace(std::move(*room));
+        room_ = reinterpret_cast<uint8_t *>(room_map_->all().data());
+        (void)room_map_->advise_all(os::Advice::huge_page);
 
-        void *const answering = mmap(nullptr, static_cast<size_t>(connections_) * kAnswerBytes,
-                                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (answering == MAP_FAILED)
-            return -errno;
-        answers_ = static_cast<uint8_t *>(answering);
-        madvise(answering, static_cast<size_t>(connections_) * kAnswerBytes, MADV_HUGEPAGE);
-        void *const owing = mmap(nullptr, static_cast<size_t>(connections_) * sizeof(Owed), PROT_READ | PROT_WRITE,
-                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        owed_ = owing == MAP_FAILED ? nullptr : static_cast<Owed *>(owing);
-        if (owed_ != nullptr)
-            madvise(owing, static_cast<size_t>(connections_) * sizeof(Owed), MADV_HUGEPAGE);
-        if (owed_ == nullptr)
+        auto answering = os::Mapping::reserved(static_cast<size_t>(connections_) * kAnswerBytes);
+        if (!answering)
+            return -answering.error().value();
+        answers_map_.emplace(std::move(*answering));
+        answers_ = reinterpret_cast<uint8_t *>(answers_map_->all().data());
+        (void)answers_map_->advise_all(os::Advice::huge_page);
+        auto owing = os::Mapping::reserved(static_cast<size_t>(connections_) * sizeof(Owed));
+        if (!owing)
             return -ENOMEM;
-        free_rooms_ = static_cast<uint8_t **>(calloc(connections_, sizeof *free_rooms_));
-        if (free_rooms_ == nullptr)
-            return -ENOMEM;
+        owed_map_.emplace(std::move(*owing));
+        owed_ = reinterpret_cast<Owed *>(owed_map_->all().data());
+        (void)owed_map_->advise_all(os::Advice::huge_page);
+        free_rooms_.assign(connections_, nullptr);
 
-        bundles_ = (ring_.features & IORING_FEAT_RECVSEND_BUNDLE) != 0;
-
-        int trouble = 0;
-        buffers_ = io_uring_setup_buf_ring(&ring_, kBufferCount, kBufferGroup, 0, &trouble);
-        if (buffers_ == nullptr)
-            return trouble;
-        const int mask = io_uring_buf_ring_mask(kBufferCount);
+        auto buffers = uring::BufferRing::setup_buf_ring(ring_, kBufferCount, kBufferGroup);
+        if (!buffers)
+            return -buffers.error().value();
+        buffers_.emplace(std::move(*buffers));
         for (uint32_t at = 0; at < kBufferCount; at++)
-            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(at) * kBufferBytes,
-                                  kBufferBytes, static_cast<uint16_t>(at), mask,
-                                  static_cast<int>(at));
-        io_uring_buf_ring_advance(buffers_, kBufferCount);
+            buffers_->buf_ring_add(receive_buffer(static_cast<uint16_t>(at)), static_cast<uint16_t>(at), at);
+        buffers_->buf_ring_advance(kBufferCount);
         return 0;
     }
 
@@ -193,49 +165,48 @@ class Ring
         if (path == nullptr || *path == '\0')
             return -EINVAL;
         const uint32_t slot = connections_ + listeners_;
+        const int fd = static_cast<int>(slot);
 
-        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        auto sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_socket_direct(sqe, AF_UNIX, SOCK_STREAM, 0, slot, 0);
-        int answer = one_at_a_time(sqe);
+        sqe->prep_socket_direct(AF_UNIX, SOCK_STREAM, 0, slot);
+        int answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
         sockaddr_un where = {};
         where.sun_family = AF_UNIX;
-        const size_t room = sizeof where.sun_path - 1;
-        const size_t length = strlen(path);
-        if (length > room)
+        const std::string_view named(path);
+        if (named.size() > sizeof where.sun_path - 1)
             return -ENAMETOOLONG;
-        memcpy(where.sun_path, path, length);
+        std::ranges::copy(named, std::begin(where.sun_path));
         unlink(path);
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_bind(sqe, static_cast<int>(slot), reinterpret_cast<sockaddr *>(&where),
-                           sizeof where);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_bind(fd, where);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_listen(sqe, static_cast<int>(slot), 4096);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_listen(fd, kBacklog);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr, nullptr, 0);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        io_uring_sqe_set_data64(sqe, marked(Doing::kAccepting, slot));
-        io_uring_submit(&ring_);
+        sqe->prep_multishot_accept_direct(fd);
+        sqe->fixed_file();
+        sqe->set_data64(marked(Doing::kAccepting, slot));
+        ring_.submit();
         listeners_++;
         return 0;
     }
@@ -245,23 +216,23 @@ class Ring
         if (listeners_ >= kListeners)
             return -ENOSPC;
         const uint32_t slot = connections_ + listeners_;
+        const int fd = static_cast<int>(slot);
 
-        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        auto sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_socket_direct(sqe, AF_INET, SOCK_STREAM, 0, slot, 0);
-        int answer = one_at_a_time(sqe);
+        sqe->prep_socket_direct(AF_INET, SOCK_STREAM, 0, slot);
+        int answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
         const int on = 1;
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_SETSOCKOPT, static_cast<int>(slot),
-                               SOL_SOCKET, SO_REUSEADDR, const_cast<int *>(&on), sizeof on);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_cmd_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, on);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
@@ -269,43 +240,40 @@ class Ring
         where.sin_family = AF_INET;
         where.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         where.sin_port = htons(port);
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_bind(sqe, static_cast<int>(slot),
-                           reinterpret_cast<sockaddr *>(&where), sizeof where);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_bind(fd, where);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_listen(sqe, static_cast<int>(slot), 4096);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_listen(fd, kBacklog);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
 
         sockaddr_in took = {};
-        socklen_t took_length = sizeof took;
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_GETSOCKNAME, static_cast<int>(slot), 0, 0,
-                               &took, static_cast<int>(took_length));
-        sqe->flags |= IOSQE_FIXED_FILE;
-        answer = one_at_a_time(sqe);
+        sqe->prep_cmd_getsockname(fd, took);
+        sqe->fixed_file();
+        answer = one_at_a_time(*sqe);
         port_[listeners_] = answer >= 0 ? ntohs(took.sin_port) : port;
 
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        sqe = ring_.get_sqe();
+        if (!sqe)
             return -EBUSY;
-        io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr, nullptr, 0);
-        sqe->flags |= IOSQE_FIXED_FILE;
-        io_uring_sqe_set_data64(sqe, marked(Doing::kAccepting, slot));
-        io_uring_submit(&ring_);
+        sqe->prep_multishot_accept_direct(fd);
+        sqe->fixed_file();
+        sqe->set_data64(marked(Doing::kAccepting, slot));
+        ring_.submit();
         listeners_++;
         return 0;
     }
@@ -324,28 +292,17 @@ class Ring
     void serves(Answering answering, Releasing released, Waking woken, const bool &until)
     {
         while (!until) {
-            io_uring_cqe *first = nullptr;
-            __kernel_timespec a_second = {1, 0};
-            const int waited =
-                io_uring_submit_and_wait_timeout(&ring_, &first, 1, &a_second, nullptr);
+            const int waited = ring_.submit_and_wait_timeout(kWaitSeconds);
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
             woken();
-            const time_t now = time(nullptr);
+            const auto now = std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now());
             if (now != send_epoch_at_) {
                 send_epoch_at_ = now;
                 send_epoch_++;
             }
             send_group_collected_step();
-            io_uring_cqe *cqe = nullptr;
-            unsigned head = 0;
-            unsigned seen = 0;
-            io_uring_for_each_cqe(&ring_, head, cqe)
-            {
-                took(cqe, answering, released);
-                seen++;
-            }
-            io_uring_cq_advance(&ring_, seen);
+            ring_.for_each_cqe([&](const uring::Cqe &cqe) { took(cqe, answering, released); });
             given_back();
         }
     }
@@ -368,41 +325,42 @@ class Ring
         msghdr message;
     };
 
-    int one_at_a_time(io_uring_sqe *const sqe)
+    int one_at_a_time(uring::Sqe &sqe)
     {
-        io_uring_sqe_set_data64(sqe, 0);
-        io_uring_submit(&ring_);
-        io_uring_cqe *cqe = nullptr;
-        if (io_uring_wait_cqe(&ring_, &cqe) != 0)
+        sqe.set_data64(0);
+        ring_.submit();
+        const auto cqe = ring_.wait_cqe();
+        if (!cqe)
             return -EIO;
-        const int answer = cqe->res;
-        io_uring_cqe_seen(&ring_, cqe);
-        return answer;
+        return cqe->res;
     }
 
-    io_uring_sqe *room_for_one_more()
+    uring::Sqe room_for_one_more()
     {
-        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
-        if (sqe != nullptr)
-            return sqe;
-        io_uring_submit(&ring_);
-        sqe = io_uring_get_sqe(&ring_);
-        if (sqe == nullptr)
+        auto sqe = ring_.get_sqe();
+        if (sqe)
+            return *sqe;
+        ring_.submit();
+        sqe = ring_.get_sqe();
+        if (!sqe)
             throw QueueIsFull();
-        return sqe;
+        return *sqe;
+    }
+
+    std::span<std::byte> receive_buffer(const uint16_t which) const
+    {
+        return room_map_->all().subspan(static_cast<size_t>(which) * kBufferBytes, kBufferBytes);
     }
 
     void given_back()
     {
         if (returned_count_ == 0)
             return;
-        const int mask = io_uring_buf_ring_mask(kBufferCount);
         for (uint32_t at = 0; at < returned_count_; at++) {
             const uint16_t which = returned_[at];
-            io_uring_buf_ring_add(buffers_, room_ + static_cast<size_t>(which) * kBufferBytes, kBufferBytes, which,
-                                  mask, static_cast<int>(at));
+            buffers_->buf_ring_add(receive_buffer(which), which, at);
         }
-        io_uring_buf_ring_advance(buffers_, static_cast<int>(returned_count_));
+        buffers_->buf_ring_advance(returned_count_);
         returned_count_ = 0;
     }
 
@@ -434,12 +392,11 @@ class Ring
         if (send_groups_.size() + kSendGroupFirst > 0xFFFF)
             return std::nullopt;
         const uint16_t at = static_cast<uint16_t>(send_groups_.size());
-        int trouble = 0;
-        io_uring_buf_ring *const buffers =
-            io_uring_setup_buf_ring(&ring_, kSendEntries, static_cast<int>(kSendGroupFirst + at), 0, &trouble);
-        if (buffers == nullptr) [[unlikely]]
+        auto buffers =
+            uring::BufferRing::setup_buf_ring(ring_, kSendEntries, static_cast<uint16_t>(kSendGroupFirst + at));
+        if (!buffers) [[unlikely]]
             return std::nullopt;
-        send_groups_.push_back(SendGroup{buffers, send_epoch_, false});
+        send_groups_.push_back(SendGroup{std::move(*buffers), send_epoch_, false});
         return at;
     }
 
@@ -460,9 +417,12 @@ class Ring
         const SendGroup &youngest = send_groups_.back();
         if (!youngest.free || send_epoch_ - youngest.used_in < kSendGroupEpochsIdle)
             return;
-        io_uring_free_buf_ring(&ring_, youngest.buffers, kSendEntries,
-                               static_cast<int>(kSendGroupFirst + send_groups_.size() - 1));
         send_groups_.pop_back();
+    }
+
+    static std::span<std::byte> bytes_of(const iovec &piece)
+    {
+        return {static_cast<std::byte *>(piece.iov_base), piece.iov_len};
     }
 
     bool in_the_receive_pool(const iovec &piece) const
@@ -476,36 +436,33 @@ class Ring
         Owed &owed = owed_[slot];
         if (owed.sending || owed.first == owed.pieces)
             return 0;
-        io_uring_sqe *const sqe = room_for_one_more();
+        uring::Sqe sqe = room_for_one_more();
         if (owed.pieces - owed.first == 1 && in_the_receive_pool(owed.piece[owed.first])) {
             const std::optional<uint16_t> group = send_group_taken();
             if (group) {
                 owed.group = *group;
                 owed.holds_group = true;
-                io_uring_buf_ring *const own = send_groups_[*group].buffers;
-                const iovec &only = owed.piece[owed.first];
-                io_uring_buf_ring_add(own, only.iov_base, static_cast<unsigned>(only.iov_len), 0,
-                                      io_uring_buf_ring_mask(kSendEntries), 0);
-                io_uring_buf_ring_advance(own, 1);
-                io_uring_prep_send(sqe, static_cast<int>(slot), nullptr, 0, MSG_NOSIGNAL | MSG_WAITALL);
-                sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
-                sqe->buf_group = static_cast<uint16_t>(kSendGroupFirst + *group);
-                io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
+                uring::BufferRing &own = send_groups_[*group].buffers;
+                own.buf_ring_add(bytes_of(owed.piece[owed.first]), 0, 0);
+                own.buf_ring_advance(1);
+                sqe.prep_send_selected(static_cast<int>(slot), MSG_NOSIGNAL | MSG_WAITALL);
+                sqe.fixed_file();
+                sqe.buffer_select(own.group());
+                sqe.set_data64(marked(Doing::kSending, slot));
                 owed.sending = true;
                 return 1;
             }
         }
         if (owed.pieces - owed.first == 1) {
-            const iovec &only = owed.piece[owed.first];
-            io_uring_prep_send(sqe, static_cast<int>(slot), only.iov_base, only.iov_len, MSG_NOSIGNAL | MSG_WAITALL);
+            sqe.prep_send(static_cast<int>(slot), bytes_of(owed.piece[owed.first]), MSG_NOSIGNAL | MSG_WAITALL);
         } else {
             owed.message = msghdr{};
             owed.message.msg_iov = owed.piece + owed.first;
             owed.message.msg_iovlen = owed.pieces - owed.first;
-            io_uring_prep_sendmsg(sqe, static_cast<int>(slot), &owed.message, MSG_NOSIGNAL | MSG_WAITALL);
+            sqe.prep_sendmsg(static_cast<int>(slot), owed.message, MSG_NOSIGNAL | MSG_WAITALL);
         }
-        sqe->flags |= IOSQE_FIXED_FILE;
-        io_uring_sqe_set_data64(sqe, marked(Doing::kSending, slot));
+        sqe.fixed_file();
+        sqe.set_data64(marked(Doing::kSending, slot));
         owed.sending = true;
         return 1;
     }
@@ -566,53 +523,52 @@ class Ring
             send_group_given_back(owed);
             owed = Owed{};
         }
-        io_uring_sqe *const sqe = room_for_one_more();
-        io_uring_prep_close_direct(sqe, slot);
-        io_uring_sqe_set_data64(sqe, marked(Doing::kClosing, slot));
+        uring::Sqe sqe = room_for_one_more();
+        sqe.prep_close_direct(slot);
+        sqe.set_data64(marked(Doing::kClosing, slot));
         return 1;
     }
 
     unsigned receives(const uint32_t slot)
     {
-        io_uring_sqe *const sqe = room_for_one_more();
-        io_uring_prep_recv_multishot(sqe, static_cast<int>(slot), nullptr, 0, 0);
-        sqe->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
-        sqe->buf_group = kBufferGroup;
-        io_uring_sqe_set_data64(sqe, marked(Doing::kReceiving, slot));
+        uring::Sqe sqe = room_for_one_more();
+        sqe.prep_recv_multishot(static_cast<int>(slot));
+        sqe.fixed_file();
+        sqe.buffer_select(kBufferGroup);
+        sqe.set_data64(marked(Doing::kReceiving, slot));
         return 1;
     }
 
     template <class Answering, class Releasing>
-    unsigned took(io_uring_cqe *const cqe, Answering &answering, Releasing &released)
+    unsigned took(const uring::Cqe &cqe, Answering &answering, Releasing &released)
     {
         unsigned armed = 0;
-        const uint64_t mark = io_uring_cqe_get_data64(cqe);
+        const uint64_t mark = cqe.data;
         const uint32_t slot = slot_of(mark);
         switch (doing_of(mark)) {
         case Doing::kAccepting:
-            if (cqe->res >= 0) {
-                owed_[cqe->res] = Owed{};
-                armed += receives(static_cast<uint32_t>(cqe->res));
+            if (cqe.res >= 0) {
+                owed_[cqe.res] = Owed{};
+                armed += receives(static_cast<uint32_t>(cqe.res));
             }
-            if ((cqe->flags & IORING_CQE_F_MORE) == 0) {
-                io_uring_sqe *const sqe = room_for_one_more();
-                io_uring_prep_multishot_accept_direct(sqe, static_cast<int>(slot), nullptr,
-                                                      nullptr, 0);
-                sqe->flags |= IOSQE_FIXED_FILE;
-                io_uring_sqe_set_data64(sqe, mark);
+            if ((cqe.flags & IORING_CQE_F_MORE) == 0) {
+                uring::Sqe sqe = room_for_one_more();
+                sqe.prep_multishot_accept_direct(static_cast<int>(slot));
+                sqe.fixed_file();
+                sqe.set_data64(mark);
                 armed++;
             }
             return armed;
         case Doing::kReceiving: {
-            if (cqe->res <= 0) {
-                if (cqe->res == -ENOBUFS)
+            if (cqe.res <= 0) {
+                if (cqe.res == -ENOBUFS)
                     armed += receives(slot);
                 else
                     armed += closes(slot, released);
                 return armed;
             }
-            const uint32_t which = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-            const size_t took_bytes = static_cast<size_t>(cqe->res);
+            const uint32_t which = cqe.flags >> IORING_CQE_BUFFER_SHIFT;
+            const size_t took_bytes = static_cast<size_t>(cqe.res);
             const size_t from = static_cast<size_t>(which) * kBufferBytes;
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
             if (from + took_bytes > pool) {
@@ -658,7 +614,7 @@ class Ring
                 buffer_returned(static_cast<uint16_t>(which));
             }
             armed += sends(slot);
-            if ((cqe->flags & IORING_CQE_F_MORE) == 0)
+            if ((cqe.flags & IORING_CQE_F_MORE) == 0)
                 armed += receives(slot);
             return armed;
         }
@@ -673,9 +629,9 @@ class Ring
                 owed = Owed{};
                 return armed;
             }
-            if (cqe->res <= 0)
+            if (cqe.res <= 0)
                 return armed + closes(slot, released);
-            size_t sent = static_cast<size_t>(cqe->res);
+            size_t sent = static_cast<size_t>(cqe.res);
             while (sent > 0 && owed.first < owed.pieces) {
                 iovec &piece = owed.piece[owed.first];
                 if (sent < piece.iov_len) {
@@ -704,27 +660,28 @@ class Ring
         }
     }
 
-    io_uring ring_ = {};
-    bool standing_ = false;
-    io_uring_buf_ring *buffers_ = nullptr;
+    uring::Ring ring_;
+    std::optional<uring::BufferRing> buffers_;
+    std::optional<os::Mapping> room_map_;
+    std::optional<os::Mapping> answers_map_;
+    std::optional<os::Mapping> owed_map_;
     uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
-    uint8_t **free_rooms_ = nullptr;
+    std::vector<uint8_t *> free_rooms_;
     struct SendGroup {
-        io_uring_buf_ring *buffers;
+        uring::BufferRing buffers;
         uint32_t used_in;
         bool free;
     };
     std::vector<SendGroup> send_groups_;
     std::vector<uint16_t> free_send_groups_;
     uint32_t send_epoch_ = 0;
-    time_t send_epoch_at_ = 0;
+    std::chrono::sys_seconds send_epoch_at_{};
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
     uint16_t returned_[kBufferCount] = {};
     uint32_t returned_count_ = 0;
     Owed *owed_ = nullptr;
-    bool bundles_ = false;
     unsigned entries_ = 0;
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
