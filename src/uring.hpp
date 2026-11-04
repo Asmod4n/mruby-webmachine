@@ -99,6 +99,26 @@ class Sqe
         io_uring_prep_close_direct(sqe_, file_index);
     }
 
+    void prep_shutdown(const int fd, const int how)
+    {
+        io_uring_prep_shutdown(sqe_, fd, how);
+    }
+
+    void prep_timeout(const __kernel_timespec &timeout)
+    {
+        io_uring_prep_timeout(sqe_, &timeout, 0, 0);
+    }
+
+    void prep_timeout_remove(const uint64_t data)
+    {
+        io_uring_prep_timeout_remove(sqe_, data, 0);
+    }
+
+    void prep_cancel_fd(const int fd, const unsigned flags)
+    {
+        io_uring_prep_cancel_fd(sqe_, fd, flags);
+    }
+
     void fixed_file()
     {
         sqe_->flags |= IOSQE_FIXED_FILE;

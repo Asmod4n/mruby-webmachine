@@ -117,6 +117,11 @@ struct Connection {
         return tcp == tcp::State::established;
     }
 
+    constexpr bool drains() const
+    {
+        return tcp == tcp::State::fin_wait_1;
+    }
+
     constexpr bool is_open() const
     {
         return tcp == tcp::State::established || tcp == tcp::State::close_wait;
