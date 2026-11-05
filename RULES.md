@@ -259,7 +259,8 @@ form stay below it as its fallbacks.
 A comparison runs in each permutation of:
 
 - the compiler: g++ and clang, each the newest release;
-- the level: `-Os` and `-O2`; `-O3` lost too often to stay a column;
+- the level: `-O2` and `-O3`; `-Os` is no column, and comes back for a
+  build that ships as WebAssembly;
 - the instruction set: `-march=x86-64-v4`.
 
 That is four binaries for each kind of test, and one table with a column
