@@ -53,7 +53,9 @@ main(int argc, char **argv)
             [&](const std::string_view asked, const std::span<char> room) -> wm::Answered {
                 return serve::answered(asked, room, c, today);
             },
-            [&](const std::span<char> room) -> wm::Answered { return serve::timed_out(room, today); },
+            [&](const std::span<char> room, const uint16_t status) -> wm::Answered {
+                return serve::refused(room, today, status, 0);
+            },
             [&](const void *const held) {
                 serve::released(c, static_cast<cache_held *>(const_cast<void *>(held)));
             },

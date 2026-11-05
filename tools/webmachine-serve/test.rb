@@ -21,9 +21,16 @@ class ServeTest < Minitest::Test
     assert File.socket?(@path), "the server did not listen: #{File.read(File.join(@dir, 'err'))}"
   end
 
+  # A server that ends during a test, by a throw or a signal, has failed
+  # it, even where the client saw the answer it wanted first.
   def teardown
+    ended = Process.waitpid(@pid, Process::WNOHANG)
+    errors = File.read(File.join(@dir, 'err'))
+    assert_nil ended, "the server ended during the test: #{$?.inspect} #{errors}"
     Process.kill(:TERM, @pid)
-    Process.wait(@pid)
+    _, status = Process.wait2(@pid)
+    assert_equal Signal.list.fetch('TERM'), status.termsig, "the server did not end by the TERM: #{status.inspect}"
+  ensure
     FileUtils.remove_entry(@dir)
   end
 
@@ -216,6 +223,19 @@ class ServeTest < Minitest::Test
     assert_match(/^Connection: close\r$/i, got)
     kept = ask("GET /hello HTTP/1.0\r\nConnection: keep-alive\r\n\r\n" * 2)
     assert_equal ['HTTP/1.1 200 OK'] * 2, kept.map(&:first)
+  end
+
+  # RFC 9112 6.3 and 9.6: a client that ends its side before the head is
+  # whole sent an incomplete request. It gets 400, and then the close.
+  def test_a_head_cut_off_by_the_client_gets_400
+    socket = UNIXSocket.new(@path)
+    socket.write("GET /hello HTTP/1.1\r\nHo")
+    sleep 0.1
+    socket.close_write
+    got = read_to_end(socket)
+    assert_equal ['HTTP/1.1 400 Bad Request'], answers_of(got).map(&:first)
+  ensure
+    socket&.close
   end
 
   # RFC 9112 3.2 asks for Host in HTTP/1.1 only.

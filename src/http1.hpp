@@ -178,10 +178,10 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
     const size_t first = asked.find('\n');
     if (first == std::string_view::npos) [[unlikely]]
         return std::unexpected(not_whole_yet(asked.size(), kMostRequestLineBytes + 1, kUriTooLong));
-    if (first - 1 > kMostRequestLineBytes) [[unlikely]]
-        return std::unexpected(http::Refusal{kUriTooLong, 0});
     if (first == 0 || asked[first - 1] != '\r') [[unlikely]]
         return std::unexpected(http::Refusal{kStartLineProblem, static_cast<uint32_t>(first)});
+    if (first - 1 > kMostRequestLineBytes) [[unlikely]]
+        return std::unexpected(http::Refusal{kUriTooLong, 0});
     const std::expected<RequestLine, http::Refusal> line = parse_request_line(asked.substr(0, first - 1));
     if (!line) [[unlikely]]
         return std::unexpected(line.error());

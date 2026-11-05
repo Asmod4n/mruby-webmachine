@@ -154,8 +154,10 @@ spelled_head(Spelled &out, const Today &today, const uint16_t status, const std:
         out.add("\r\nContent-Type: ");
         out.add(content_type);
     }
-    out.add("\r\nContent-Length: ");
-    out.add_number(body_length);
+    if (!http::content_is_forbidden(status)) {
+        out.add("\r\nContent-Length: ");
+        out.add_number(body_length);
+    }
     out.add("\r\n");
     out.add(extra_fields);
     out.add(connection);
@@ -522,23 +524,11 @@ constexpr uint16_t status_of(const http::Refusal refusal)
 }
 
 [[gnu::cold, gnu::noinline]] inline wm::Answered
-refused(const std::span<char> room, const Today &today, const http::Refusal refusal, const size_t bytes)
+refused(const std::span<char> room, const Today &today, const uint16_t status, const size_t bytes)
 {
-    const uint16_t status = status_of(refusal);
     wm::Answered said = made(room, today, status, problem::kMediaTypeText,
                              problem::text_of(problem::details_of(status)).value_or(""), false, "", kConnectionClose,
                              nullptr, bytes);
-    said.closes = true;
-    said.refused = true;
-    return said;
-}
-
-[[gnu::cold, gnu::noinline]] inline wm::Answered
-timed_out(const std::span<char> room, const Today &today)
-{
-    wm::Answered said = made(room, today, 408, problem::kMediaTypeText,
-                             problem::text_of(problem::details_of(408)).value_or(""), false, "", kConnectionClose,
-                             nullptr, 0);
     said.closes = true;
     said.refused = true;
     return said;
@@ -550,7 +540,7 @@ not_answered(const std::string_view asked, const std::span<char> room, const Tod
 {
     if (refusal.problem == http1::kNotWholeYet) return {0, {}, nullptr, 0, false, false};
     const size_t bytes = http1::bytes_before_the_body(asked);
-    return refused(room, today, refusal, bytes != 0 ? bytes : asked.size());
+    return refused(room, today, status_of(refusal), bytes != 0 ? bytes : asked.size());
 }
 
 inline wm::Answered
@@ -562,9 +552,9 @@ answered(const std::string_view asked, const std::span<char> room, Cache &c, con
         http1::parse_request(asked, [&facts](const http1::FieldLine &field) { flow::fact_taken(facts, field); });
     if (!request) [[unlikely]] return not_answered(asked, room, today, request.error());
     const auto host = http1::parse_host_field(*request);
-    if (!host) [[unlikely]] return refused(room, today, host.error(), request->bytes);
+    if (!host) [[unlikely]] return refused(room, today, status_of(host.error()), request->bytes);
     const auto body = http1::parse_message_body_length(*request, kMostContentBytes);
-    if (!body) [[unlikely]] return refused(room, today, body.error(), request->bytes);
+    if (!body) [[unlikely]] return refused(room, today, status_of(body.error()), request->bytes);
     facts.method = request->request_line.method;
     facts.request_target = request->request_line.request_target;
     facts.content_length = http1::content_length_of(*request);

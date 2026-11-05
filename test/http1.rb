@@ -190,3 +190,9 @@ assert('is_persistent follows RFC 9112 9.3') do
   assert_true H1.persistent?("GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\n")
   assert_false H1.persistent?("GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n")
 end
+
+# RFC 9112 2.2: a request line ends in CRLF. A bare LF as the first byte
+# is a broken start line (400), not a request line that is too long.
+assert('a request that starts with a bare LF is refused as a start line, not as too long') do
+  assert_equal [PROBLEM[:start_line], 0], H1.parse_request("\nGET / HTTP/1.1\r\nHost: a\r\n\r\n")
+end

@@ -119,6 +119,8 @@ enum class Waiting : uint8_t {
 };
 
 inline constexpr size_t kWaitingKinds = 3;
+inline constexpr uint16_t kBadRequest = 400;
+inline constexpr uint16_t kRequestTimeout = 408;
 
 class Ring
 {
@@ -325,8 +327,8 @@ class Ring
         return which < kListeners ? port_[which] : 0;
     }
 
-    template <class Answering, class TimingOut, class Releasing, class Waking>
-    void serves(Answering answering, TimingOut timing_out, Releasing released, Waking woken, const bool &until)
+    template <class Answering, class Refusing, class Releasing, class Waking>
+    void serves(Answering answering, Refusing refusing, Releasing released, Waking woken, const bool &until)
     {
         while (!until) {
             const int waited = ring_.submit_and_wait_timeout(kWaitSeconds);
@@ -335,8 +337,8 @@ class Ring
             woken();
             now_ = static_cast<uint32_t>(
                 std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started_).count());
-            ring_.for_each_cqe([&](const uring::Cqe &cqe) { took(cqe, answering, released); });
-            expires(timing_out, released);
+            ring_.for_each_cqe([&](const uring::Cqe &cqe) { took(cqe, answering, refusing, released); });
+            expires(refusing, released);
             given_back();
         }
     }
@@ -425,6 +427,13 @@ class Ring
         return static_cast<uint32_t>((bytes + kBufferBytes - 1) / kBufferBytes);
     }
 
+    void consumes(const uint32_t first_buffer, const size_t bytes)
+    {
+        if (first_buffer != (given_back_ + consumed_) % kBufferCount) [[unlikely]]
+            throw std::logic_error("the kernel handed out a buffer out of the order of the ring");
+        consumed_ += buffers_of(bytes);
+    }
+
     static void clears(Owed &owed)
     {
         const Connection kept = owed.connection;
@@ -500,7 +509,7 @@ class Ring
             waits_for(file_index, Waiting::idle);
     }
 
-    template <class TimingOut, class Releasing> void expires(TimingOut &timing_out, Releasing &released)
+    template <class Refusing, class Releasing> void expires(Refusing &refusing, Releasing &released)
     {
         for (size_t kind = 0; kind < kWaitingKinds; kind++) {
             std::deque<Deadline> &waiting = deadlines_.at(kind);
@@ -512,23 +521,31 @@ class Ring
                     owed.deadline != due.at)
                     continue;
                 owed.waiting = Waiting::nothing;
-                times_out(due.file_index, static_cast<Waiting>(kind), timing_out, released);
+                times_out(due.file_index, static_cast<Waiting>(kind), refusing, released);
             }
         }
     }
 
-    template <class TimingOut, class Releasing>
-    unsigned times_out(const uint32_t file_index, const Waiting kind, TimingOut &timing_out, Releasing &released)
+    template <class Refusing, class Releasing>
+    unsigned times_out(const uint32_t file_index, const Waiting kind, Refusing &refusing, Releasing &released)
     {
         Owed &owed = owed_[file_index];
         if (kind == Waiting::send)
             return owed.connection.drains() ? ends_the_linger(file_index) : closes(file_index, released, -ETIMEDOUT);
         if (kind == Waiting::idle || rests_.at(file_index).size == 0 || owed.runs(Doing::kSending))
             return closes(file_index, released, 0);
+        return answers_a_refusal(file_index, kRequestTimeout, refusing, released);
+    }
+
+    template <class Refusing, class Releasing>
+    unsigned answers_a_refusal(const uint32_t file_index, const uint16_t status, Refusing &refusing,
+                               Releasing &released)
+    {
+        Owed &owed = owed_[file_index];
         if (owed.room == nullptr)
             owed.room = room_taken(file_index);
         const std::span<char> room(reinterpret_cast<char *>(owed.room + owed.filled), kAnswerBytes - owed.filled);
-        const Answered said = timing_out(room);
+        const Answered said = refusing(room, status);
         if (said.head == 0 || said.head > room.size()) [[unlikely]]
             return closes(file_index, released, 0);
         owes_a_piece(owed, owed.room + owed.filled, said.head);
@@ -747,8 +764,8 @@ class Ring
         return ends(file_index);
     }
 
-    template <class Answering, class Releasing>
-    unsigned took(const uring::Cqe &cqe, Answering &answering, Releasing &released)
+    template <class Answering, class Refusing, class Releasing>
+    unsigned took(const uring::Cqe &cqe, Answering &answering, Refusing &refusing, Releasing &released)
     {
         unsigned armed = 0;
         const uint64_t mark = cqe.data;
@@ -758,7 +775,7 @@ class Ring
                            (file_index >= connections_ || generation_of(mark) != owed_[file_index].connection.generation);
         if (stale) [[unlikely]] {
             if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0 && cqe.res > 0)
-                consumed_ += buffers_of(static_cast<size_t>(cqe.res));
+                consumes(cqe.flags >> IORING_CQE_BUFFER_SHIFT, static_cast<size_t>(cqe.res));
             return armed;
         }
         switch (doing) {
@@ -800,6 +817,8 @@ class Ring
                     owed.connection.moves_to(tcp::State::close_wait);
                     if (owed.runs(Doing::kSending) || owed.first != owed.pieces)
                         return armed;
+                    if (rests_.at(file_index).needs_more)
+                        return answers_a_refusal(file_index, kBadRequest, refusing, released);
                 }
                 return closes(file_index, released, cqe.res);
             }
@@ -807,7 +826,7 @@ class Ring
             const size_t took_bytes = static_cast<size_t>(cqe.res);
             const size_t from = static_cast<size_t>(which) * kBufferBytes;
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
-            consumed_ += buffers_of(took_bytes);
+            consumes(which, took_bytes);
             if (!owed.connection.reads() || owed.connection.http == http1::State::tear_down) {
                 if (last && (owed.connection.reads() || owed.connection.drains()))
                     return receives(file_index);
@@ -889,8 +908,11 @@ class Ring
                     keeps_the_rest(file_index, asked.substr(taken.bytes), taken.needs_more);
                     armed += sends(file_index);
                 }
-                if (owed.connection.tcp == tcp::State::close_wait && owed.first == owed.pieces)
+                if (owed.connection.tcp == tcp::State::close_wait && owed.first == owed.pieces) {
+                    if (rests_.at(file_index).needs_more)
+                        return armed + answers_a_refusal(file_index, kBadRequest, refusing, released);
                     return armed + closes(file_index, released, 0);
+                }
                 waits_after_the_answers(file_index);
             } else {
                 armed += sends(file_index);
