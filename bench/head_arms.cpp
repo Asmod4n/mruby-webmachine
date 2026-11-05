@@ -54,7 +54,7 @@ size_t
 head_spelled(const std::span<char> room, const serve::Today &today)
 {
     serve::Spelled out(room);
-    serve::spelled_head(out, today, 200, kContentType, kLength, "");
+    serve::spelled_head(out, today, 200, kContentType, kLength, "", "");
     return out.size();
 }
 
@@ -62,7 +62,7 @@ size_t
 head_kept(const std::span<char> room, serve::Heads &heads, const serve::Today &today)
 {
     serve::Spelled out(room);
-    serve::head_added(out, heads, today, 200, kContentType, kLength, "");
+    serve::head_added(out, heads, today, 200, kContentType, kLength, "", "");
     return out.size();
 }
 

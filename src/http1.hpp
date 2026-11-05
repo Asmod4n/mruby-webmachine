@@ -50,6 +50,8 @@ struct Request {
     uint32_t content_length_field_lines;
     std::string_view transfer_encoding;
     uint32_t transfer_encoding_field_lines;
+    bool close;
+    bool keep_alive;
 };
 
 constexpr std::expected<RequestLine, http::Refusal>
@@ -191,6 +193,8 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
     uint32_t content_length_field_lines = 0;
     std::string_view transfer_encoding;
     uint32_t transfer_encoding_field_lines = 0;
+    bool close = false;
+    bool keep_alive = false;
     for (;;) {
         const size_t ends = asked.find('\n', at);
         if (ends == std::string_view::npos) [[unlikely]]
@@ -207,7 +211,8 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
                            ends + 1,       host,
                            host_field_lines, content_length,
                            content_length_field_lines, transfer_encoding,
-                           transfer_encoding_field_lines};
+                           transfer_encoding_field_lines, close,
+                           keep_alive};
         }
         if (ends + 1 - fields_from > kMostHeaderSectionBytes) [[unlikely]]
             return std::unexpected(http::Refusal{kRequestHeaderFieldsTooLarge, 0});
@@ -227,6 +232,13 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
                 return std::unexpected(http::Refusal{http::kContentLengthProblem, static_cast<uint32_t>(at)});
             content_length = *length;
             content_length_field_lines++;
+        } else if (http::equal_ignoring_case(field->field_name, "Connection")) {
+            std::string_view options = field->field_value;
+            while (const std::optional<http::ListElement> option = http::parse_list_element(options)) {
+                close = close || http::equal_ignoring_case(option->element, "close");
+                keep_alive = keep_alive || http::equal_ignoring_case(option->element, "keep-alive");
+                options = option->rest;
+            }
         } else if (http::equal_ignoring_case(field->field_name, "Transfer-Encoding")) {
             transfer_encoding = field->field_value;
             transfer_encoding_field_lines++;
@@ -270,6 +282,15 @@ constexpr std::expected<std::optional<http::Host>, http::Refusal> parse_host_fie
     if (!host) [[unlikely]]
         return std::unexpected(host.error());
     return *host;
+}
+
+constexpr bool is_persistent(const Request &request)
+{
+    if (request.close)
+        return false;
+    if (request.request_line.http_version == "HTTP/1.0")
+        return request.keep_alive;
+    return true;
 }
 
 constexpr std::optional<uint64_t> content_length_of(const Request &request)

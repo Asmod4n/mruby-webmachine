@@ -139,8 +139,9 @@ class ServeTest < Minitest::Test
   # never read as a request.
   def test_a_body_is_never_read_as_a_request
     smuggled = HELLO
-    answers, = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{smuggled.bytesize}\r\n\r\n#{smuggled}")
+    answers, got = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{smuggled.bytesize}\r\n\r\n#{smuggled}")
     assert_equal 1, answers.size
+    assert_match(/^Connection: close\r$/i, got)
     answers, = refused_and_closed("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc#{HELLO}")
     assert_equal ['HTTP/1.1 200 OK'], answers.map(&:first)
   end
@@ -197,6 +198,24 @@ class ServeTest < Minitest::Test
     home = "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
     ask(home)
     assert_equal ['HTTP/1.1 200 OK'] * 4, ask(home * 4).map(&:first)
+  end
+
+  # RFC 9112 9.6: a request with "close" gets its answer with
+  # Connection: close, and then the server closes. The request after it
+  # in the same write gets no answer.
+  def test_connection_close_closes_after_the_answer
+    answers, got = refused_and_closed("GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n#{HELLO}")
+    assert_equal ['HTTP/1.1 200 OK'], answers.map(&:first)
+    assert_match(/^Connection: close\r$/i, got)
+  end
+
+  # RFC 9112 9.3: HTTP/1.0 closes unless the request asks for keep-alive.
+  def test_http_1_0_closes_unless_it_asks_to_keep_alive
+    answers, got = refused_and_closed("GET /hello HTTP/1.0\r\n\r\n")
+    assert_equal ['HTTP/1.1 200 OK'], answers.map(&:first)
+    assert_match(/^Connection: close\r$/i, got)
+    kept = ask("GET /hello HTTP/1.0\r\nConnection: keep-alive\r\n\r\n" * 2)
+    assert_equal ['HTTP/1.1 200 OK'] * 2, kept.map(&:first)
   end
 
   # RFC 9112 3.2 asks for Host in HTTP/1.1 only.

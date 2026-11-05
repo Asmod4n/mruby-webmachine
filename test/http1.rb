@@ -175,3 +175,18 @@ end
 assert('an HTTP/1.0 request with Transfer-Encoding is refused with 400') do
   assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: chunked\r\n", 1000, 'HTTP/1.0')
 end
+
+# RFC 9112 9.3: an HTTP/1.1 connection persists unless the request
+# carries the "close" connection option; an HTTP/1.0 connection persists
+# only where the request carries "keep-alive". RFC 9110 7.6.1: connection
+# options are case-insensitive and form a list.
+assert('is_persistent follows RFC 9112 9.3') do
+  assert_true H1.persistent?("GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+  assert_false H1.persistent?("GET / HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n")
+  assert_false H1.persistent?("GET / HTTP/1.1\r\nHost: a\r\nConnection: Upgrade, CLOSE\r\n\r\n")
+  assert_false H1.persistent?("GET / HTTP/1.1\r\nHost: a\r\nConnection: x\r\nConnection: close\r\n\r\n")
+  assert_true H1.persistent?("GET / HTTP/1.1\r\nHost: a\r\nConnection: closed\r\n\r\n")
+  assert_false H1.persistent?("GET / HTTP/1.0\r\n\r\n")
+  assert_true H1.persistent?("GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\n")
+  assert_false H1.persistent?("GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n")
+end

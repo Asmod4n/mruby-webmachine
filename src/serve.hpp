@@ -129,6 +129,7 @@ struct Head {
     std::string_view                     content_type;
     size_t                               body_length;
     std::string_view                     extra_fields;
+    std::string_view                     connection;
     size_t                               size;
     std::array<char, kHeadBytesMost>     bytes;
 };
@@ -140,7 +141,7 @@ struct Heads {
 
 inline void
 spelled_head(Spelled &out, const Today &today, const uint16_t status, const std::string_view content_type,
-             const size_t body_length, const std::string_view extra_fields)
+             const size_t body_length, const std::string_view extra_fields, const std::string_view connection)
 {
     const auto &date = today.date;
     out.add("HTTP/1.1 ");
@@ -157,27 +158,29 @@ spelled_head(Spelled &out, const Today &today, const uint16_t status, const std:
     out.add_number(body_length);
     out.add("\r\n");
     out.add(extra_fields);
+    out.add(connection);
     out.add("\r\n");
 }
 
 inline void
 head_added(Spelled &out, Heads &heads, const Today &today, const uint16_t status, const std::string_view content_type,
-           const size_t body_length, const std::string_view extra_fields)
+           const size_t body_length, const std::string_view extra_fields, const std::string_view connection)
 {
     for (const Head &h : heads.kept)
         if (h.size != 0 && h.at == today.now && h.status == status && h.body_length == body_length &&
             h.content_type.data() == content_type.data() && h.content_type.size() == content_type.size() &&
-            h.extra_fields.data() == extra_fields.data() && h.extra_fields.size() == extra_fields.size()) {
+            h.extra_fields.data() == extra_fields.data() && h.extra_fields.size() == extra_fields.size() &&
+            h.connection.data() == connection.data() && h.connection.size() == connection.size()) {
             out.add(std::string_view(h.bytes.data(), h.size));
             return;
         }
     Head &h = heads.kept[heads.next];
     heads.next = (heads.next + 1) % kHeadsKept;
     Spelled into(h.bytes);
-    spelled_head(into, today, status, content_type, body_length, extra_fields);
-    h = Head{today.now, status, content_type, body_length, extra_fields, into.size(), h.bytes};
+    spelled_head(into, today, status, content_type, body_length, extra_fields, connection);
+    h = Head{today.now, status, content_type, body_length, extra_fields, connection, into.size(), h.bytes};
     if (h.size == 0) [[unlikely]] {
-        spelled_head(out, today, status, content_type, body_length, extra_fields);
+        spelled_head(out, today, status, content_type, body_length, extra_fields, connection);
         return;
     }
     out.add(std::string_view(h.bytes.data(), h.size));
@@ -185,11 +188,11 @@ head_added(Spelled &out, Heads &heads, const Today &today, const uint16_t status
 
 inline wm::Answered
 made(const std::span<char> room, const Today &today, const uint16_t status, const std::string_view content_type,
-     const std::string_view body, const bool head, const std::string_view extra_fields, cache_held *const held,
-     const size_t taken)
+     const std::string_view body, const bool head, const std::string_view extra_fields,
+     const std::string_view connection, cache_held *const held, const size_t taken)
 {
     Spelled out(room);
-    spelled_head(out, today, status, content_type, body.size(), extra_fields);
+    spelled_head(out, today, status, content_type, body.size(), extra_fields, connection);
     if (!head) out.add(body);
     return {out.size(), {}, held, taken, false, false};
 }
@@ -239,11 +242,11 @@ vary_of(const Inner &inner, std::string &spelled)
 
 inline wm::Answered
 stored_made(const std::span<char> room, Heads &heads, const Today &today, const std::string_view content_type,
-            const std::string_view vary, const std::string_view body, const bool head, cache_held *const held,
-            const size_t taken)
+            const std::string_view vary, const std::string_view connection, const std::string_view body, const bool head,
+            cache_held *const held, const size_t taken)
 {
     Spelled out(room);
-    head_added(out, heads, today, 200, content_type, body.size(), vary);
+    head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
         return {out.size(), head ? std::string_view{} : body, held, taken, false, false};
     out.add(body);
@@ -252,10 +255,11 @@ stored_made(const std::span<char> room, Heads &heads, const Today &today, const 
 
 inline wm::Answered
 constant_made(const std::span<char> room, Heads &heads, const Today &today, const std::string_view content_type,
-              const std::string_view vary, const std::string_view body, const bool head, const size_t taken)
+              const std::string_view vary, const std::string_view connection, const std::string_view body, const bool head,
+              const size_t taken)
 {
     Spelled out(room);
-    head_added(out, heads, today, 200, content_type, body.size(), vary);
+    head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
         return {out.size(), head ? std::string_view{} : body, nullptr, taken, false, false};
     out.add(body);
@@ -375,7 +379,7 @@ stored_if_due(Cache &c, const uint64_t route, const std::chrono::sys_seconds now
 
 [[gnu::cold, gnu::noinline]] inline wm::Answered
 problem_made(const std::span<char> room, const Today &today, const uint16_t status, const std::string_view accept,
-             const bool head, cache_held *const held, const size_t taken)
+             const bool head, const std::string_view connection, cache_held *const held, const size_t taken)
 {
     const problem::Details details = problem::details_of(status);
     const auto form = problem::form_of(flow::is_present(accept) ? std::optional(accept) : std::nullopt, false);
@@ -388,24 +392,25 @@ problem_made(const std::span<char> room, const Today &today, const uint16_t stat
         case problem::Form::kProblemXml: page = problem::xml_of(details); break;
         default: page = problem::text_of(details); break;
     }
-    return made(room, today, status, problem::media_type_of(chosen), page.value_or(""), head, kVaryAccept, held, taken);
+    return made(room, today, status, problem::media_type_of(chosen), page.value_or(""), head, kVaryAccept, connection,
+                held, taken);
 }
 
 template <class Rendering>
 [[gnu::cold, gnu::noinline]] wm::Answered
 rendered(Rendering rendering, const http1::Request &request, const flow::Outcome &outcome, Cache &c,
          const uint64_t route, const Today &today, const std::string_view content_type, const std::string_view vary,
-         const bool head, cache_held *const held, const std::span<char> room)
+         const bool head, const std::string_view connection, cache_held *const held, const std::span<char> room)
 {
     const std::string page = rendering(request, outcome);
     stored_if_due(c, route, today.now, content_type, page);
-    return made(room, today, 200, content_type, page, head, vary, held, request.bytes);
+    return made(room, today, 200, content_type, page, head, vary, connection, held, request.bytes);
 }
 
 template <class Inner, class Rendering>
 wm::Answered
 answered_by(const Inner &inner, Rendering rendering, const http1::Request &request, const flow::Facts &facts, Cache &c,
-            const Today &today, const std::span<char> room)
+            const Today &today, const std::string_view connection, const std::span<char> room)
 {
     const std::chrono::sys_seconds now = today.now;
     const std::chrono::year year = today.year;
@@ -416,43 +421,48 @@ answered_by(const Inner &inner, Rendering rendering, const http1::Request &reque
     const auto outcome = held != nullptr
                              ? flow::walk(stored::Resource<Inner>(inner, held, route, now, year), request, facts)
                              : flow::walk(inner, request, facts);
-    if (!outcome) [[unlikely]] return problem_made(room, today, 400, {}, head, held, request.bytes);
+    if (!outcome) [[unlikely]] return problem_made(room, today, 400, {}, head, connection, held, request.bytes);
     if (outcome->status == 200 && outcome->media_type) {
         const std::string_view content_type = inner.content_types_provided()[*outcome->media_type].media_type;
         const uint64_t seconds = static_cast<uint64_t>(now.time_since_epoch().count());
         const auto stored_body = held != nullptr ? body_remembered(c, held, route, seconds) : std::nullopt;
         const std::string_view vary = vary_of(inner, c.vary);
         if (stored_body)
-            return stored_made(room, c.heads, today, content_type, vary, *stored_body, head, held, request.bytes);
-        return rendered(rendering, request, *outcome, c, route, today, content_type, vary, head, held, room);
+            return stored_made(room, c.heads, today, content_type, vary, connection, *stored_body, head, held,
+                               request.bytes);
+        return rendered(rendering, request, *outcome, c, route, today, content_type, vary, head, connection, held, room);
     }
-    if (outcome->status < 400) return made(room, today, outcome->status, "", "", head, "", held, request.bytes);
-    return problem_made(room, today, outcome->status, facts.accept, head, held, request.bytes);
+    if (outcome->status < 400)
+        return made(room, today, outcome->status, "", "", head, "", connection, held, request.bytes);
+    return problem_made(room, today, outcome->status, facts.accept, head, connection, held, request.bytes);
 }
 
 template <class Inner>
 wm::Answered
 answered_constant(const Inner &inner, const std::string_view body, const http1::Request &request,
-                  const flow::Facts &facts, Cache &c, const Today &today, const std::span<char> room)
+                  const flow::Facts &facts, Cache &c, const Today &today, const std::string_view connection,
+                  const std::span<char> room)
 {
     const bool head = request.request_line.method == http::Method::kHead;
     const auto outcome = flow::walk(inner, request, facts);
-    if (!outcome) [[unlikely]] return problem_made(room, today, 400, {}, head, nullptr, request.bytes);
+    if (!outcome) [[unlikely]] return problem_made(room, today, 400, {}, head, connection, nullptr, request.bytes);
     if (outcome->status == 200 && outcome->media_type) {
         const std::string_view content_type = inner.content_types_provided()[*outcome->media_type].media_type;
-        return constant_made(room, c.heads, today, content_type, vary_of(inner, c.vary), body, head, request.bytes);
+        return constant_made(room, c.heads, today, content_type, vary_of(inner, c.vary), connection, body, head,
+                             request.bytes);
     }
-    if (outcome->status < 400) return made(room, today, outcome->status, "", "", head, "", nullptr, request.bytes);
-    return problem_made(room, today, outcome->status, facts.accept, head, nullptr, request.bytes);
+    if (outcome->status < 400)
+        return made(room, today, outcome->status, "", "", head, "", connection, nullptr, request.bytes);
+    return problem_made(room, today, outcome->status, facts.accept, head, connection, nullptr, request.bytes);
 }
 
 inline wm::Answered
 answer_to(const http1::Request &request, const flow::Facts &facts, Cache &c, const Today &today,
-          const std::span<char> room)
+          const std::string_view connection, const std::span<char> room)
 {
     if (request.request_line.request_target == "/hello")
-        return answered_constant(Hello{}, kHelloBody, request, facts, c, today, room);
-    return answered_by(home::Home{}, home::page_of, request, facts, c, today, room);
+        return answered_constant(Hello{}, kHelloBody, request, facts, c, today, connection, room);
+    return answered_by(home::Home{}, home::page_of, request, facts, c, today, connection, room);
 }
 
 inline pid_t
@@ -497,6 +507,7 @@ the_writer_stands(const std::filesystem::path &writer_path, const std::filesyste
 
 
 inline constexpr std::string_view kConnectionClose = "Connection: close\r\n";
+inline constexpr std::string_view kConnectionKeepAlive = "Connection: keep-alive\r\n";
 inline constexpr uint64_t kMostContentBytes = uint64_t{1} << 20;
 
 constexpr uint16_t status_of(const http::Refusal refusal)
@@ -515,7 +526,7 @@ refused(const std::span<char> room, const Today &today, const http::Refusal refu
 {
     const uint16_t status = status_of(refusal);
     wm::Answered said = made(room, today, status, problem::kMediaTypeText,
-                             problem::text_of(problem::details_of(status)).value_or(""), false, kConnectionClose,
+                             problem::text_of(problem::details_of(status)).value_or(""), false, "", kConnectionClose,
                              nullptr, bytes);
     said.closes = true;
     said.refused = true;
@@ -546,8 +557,11 @@ answered(const std::string_view asked, const std::span<char> room, Cache &c, con
     facts.method = request->request_line.method;
     facts.request_target = request->request_line.request_target;
     facts.content_length = http1::content_length_of(*request);
-    wm::Answered said = answer_to(*request, facts, c, today, room);
-    if (*body > 0) [[unlikely]] said.closes = true;
+    const bool persistent = http1::is_persistent(*request) && *body == 0;
+    const bool http_1_0 = request->request_line.http_version == "HTTP/1.0";
+    const std::string_view connection = !persistent ? kConnectionClose : http_1_0 ? kConnectionKeepAlive : "";
+    wm::Answered said = answer_to(*request, facts, c, today, connection, room);
+    said.closes = !persistent;
     return said;
 }
 
