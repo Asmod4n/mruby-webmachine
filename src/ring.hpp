@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <ctime>
 #include <functional>
 #include <memory>
@@ -182,7 +183,7 @@ class Ring
         if (!owing)
             return -ENOMEM;
         owed_map_.emplace(std::move(*owing));
-        owed_ = reinterpret_cast<Owed *>(owed_map_->all().data());
+        owed_ = std::span<Owed>(reinterpret_cast<Owed *>(owed_map_->all().data()), connections_);
         (void)owed_map_->advise_all(os::Advice::huge_page);
         heads_.assign(connections_, nullptr);
         rests_.assign(connections_, Rest{});
@@ -220,7 +221,8 @@ class Ring
         if (named.size() > sizeof where.sun_path - 1)
             return -ENAMETOOLONG;
         std::ranges::copy(named, std::begin(where.sun_path));
-        unlink(path);
+        std::error_code removed;
+        std::filesystem::remove(named, removed);
         sqe = ring_.get_sqe();
         if (!sqe)
             return -EBUSY;
@@ -304,7 +306,7 @@ class Ring
         sqe->prep_cmd_getsockname(fd, took);
         sqe->fixed_file();
         answer = one_at_a_time(*sqe);
-        port_[listeners_] = answer >= 0 ? ntohs(took.sin_port) : port;
+        port_.at(listeners_) = answer >= 0 ? ntohs(took.sin_port) : port;
 
         sqe = ring_.get_sqe();
         if (!sqe)
@@ -324,7 +326,7 @@ class Ring
 
     uint16_t port_taken(const uint32_t which) const
     {
-        return which < kListeners ? port_[which] : 0;
+        return which < kListeners ? port_.at(which) : 0;
     }
 
     template <class Answering, class Refusing, class Releasing, class Waking>
@@ -354,9 +356,8 @@ class Ring
         uint32_t pieces;
         uint32_t helds;
         uint16_t running;
-        uint8_t *room;
-        iovec piece[kPiecesMost];
-        const void *held[kHeldMost];
+        std::array<iovec, kPiecesMost> piece;
+        std::array<const void *, kHeldMost> held;
         msghdr message;
 
         static constexpr uint16_t bit_of(const Doing doing)
@@ -450,15 +451,15 @@ class Ring
 
     unsigned sends(const uint32_t file_index)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         if (owed.runs(Doing::kSending) || owed.first == owed.pieces)
             return 0;
         uring::Sqe sqe = room_for_one_more();
         if (owed.pieces - owed.first == 1) {
-            sqe.prep_send(static_cast<int>(file_index), bytes_of(owed.piece[owed.first]), MSG_NOSIGNAL | MSG_WAITALL);
+            sqe.prep_send(static_cast<int>(file_index), bytes_of(owed.piece.at(owed.first)), MSG_NOSIGNAL | MSG_WAITALL);
         } else {
             owed.message = msghdr{};
-            owed.message.msg_iov = owed.piece + owed.first;
+            owed.message.msg_iov = std::span(owed.piece).subspan(owed.first).data();
             owed.message.msg_iovlen = owed.pieces - owed.first;
             sqe.prep_sendmsg(static_cast<int>(file_index), owed.message, MSG_NOSIGNAL | MSG_WAITALL);
         }
@@ -481,7 +482,7 @@ class Ring
 
     void waits_for(const uint32_t file_index, const Waiting kind)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         if (kind == Waiting::nothing) {
             owed.waiting = Waiting::nothing;
             return;
@@ -500,7 +501,7 @@ class Ring
 
     void waits_after_the_answers(const uint32_t file_index)
     {
-        const Owed &owed = owed_[file_index];
+        const Owed &owed = owed_.at(file_index);
         if (owed.runs(Doing::kSending) || !owed.connection.reads())
             return;
         if (rests_.at(file_index).needs_more)
@@ -516,7 +517,7 @@ class Ring
             while (!waiting.empty() && waiting.front().at <= now_) {
                 const Deadline due = waiting.front();
                 waiting.pop_front();
-                Owed &owed = owed_[due.file_index];
+                Owed &owed = owed_.at(due.file_index);
                 if (owed.connection.generation != due.generation || owed.waiting != static_cast<Waiting>(kind) ||
                     owed.deadline != due.at)
                     continue;
@@ -529,7 +530,7 @@ class Ring
     template <class Refusing, class Releasing>
     unsigned times_out(const uint32_t file_index, const Waiting kind, Refusing &refusing, Releasing &released)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         if (kind == Waiting::send)
             return owed.connection.drains() ? ends_the_linger(file_index) : closes(file_index, released, -ETIMEDOUT);
         if (kind == Waiting::idle || rests_.at(file_index).size == 0 || owed.runs(Doing::kSending))
@@ -541,14 +542,13 @@ class Ring
     unsigned answers_a_refusal(const uint32_t file_index, const uint16_t status, Refusing &refusing,
                                Releasing &released)
     {
-        Owed &owed = owed_[file_index];
-        if (owed.room == nullptr)
-            owed.room = room_taken(file_index);
-        const std::span<char> room(reinterpret_cast<char *>(owed.room + owed.filled), kAnswerBytes - owed.filled);
+        Owed &owed = owed_.at(file_index);
+        const std::span<uint8_t> unused = room_taken(file_index).subspan(owed.filled);
+        const std::span<char> room(reinterpret_cast<char *>(unused.data()), unused.size());
         const Answered said = refusing(room, status);
         if (said.head == 0 || said.head > room.size()) [[unlikely]]
             return closes(file_index, released, 0);
-        owes_a_piece(owed, owed.room + owed.filled, said.head);
+        owes_a_piece(owed, unused.data(), said.head);
         owed.filled += static_cast<uint32_t>(said.head);
         rests_.at(file_index) = Rest{};
         if (owed.connection.http == http1::State::persistent)
@@ -561,54 +561,46 @@ class Ring
     template <class Releasing> void all_released(Owed &owed, Releasing &released)
     {
         for (uint32_t at = 0; at < owed.helds; at++)
-            released(owed.held[at]);
+            released(owed.held.at(at));
         owed.helds = 0;
     }
 
-    bool owes_a_piece(Owed &owed, uint8_t *const at, const size_t length)
+    static void owes_a_piece(Owed &owed, uint8_t *const at, const size_t length)
     {
         if (length == 0)
-            return true;
+            return;
         if (owed.pieces > 0) {
-            iovec &last = owed.piece[owed.pieces - 1];
-            if (static_cast<uint8_t *>(last.iov_base) + last.iov_len == at && owed.first < owed.pieces &&
-                !owed.runs(Doing::kSending)) {
+            iovec &last = owed.piece.at(owed.pieces - 1);
+            if (std::next(static_cast<uint8_t *>(last.iov_base), static_cast<std::ptrdiff_t>(last.iov_len)) == at &&
+                owed.first < owed.pieces && !owed.runs(Doing::kSending)) {
                 last.iov_len += length;
-                return true;
+                return;
             }
         }
-        if (owed.pieces >= kPiecesMost)
-            return false;
-        owed.piece[owed.pieces++] = iovec{at, length};
-        return true;
+        owed.piece.at(owed.pieces) = iovec{at, length};
+        owed.pieces++;
     }
 
-    uint8_t *room_taken(const uint32_t file_index)
+    std::span<uint8_t> room_taken(const uint32_t file_index)
     {
         std::shared_ptr<uint8_t[]> &head = heads_.at(file_index);
         if (!head)
             head = std::make_shared_for_overwrite<uint8_t[]>(kAnswerBytes);
-        return head.get();
-    }
-
-    void room_given_back(const uint32_t file_index)
-    {
-        owed_[file_index].room = nullptr;
+        return {head.get(), kAnswerBytes};
     }
 
     template <class Releasing> void gives_back_everything(const uint32_t file_index, Releasing &released)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         rests_.at(file_index) = Rest{};
         heads_.at(file_index).reset();
         all_released(owed, released);
-        room_given_back(file_index);
         clears(owed);
     }
 
     template <class Preparing> unsigned starts(const uint32_t file_index, const Doing doing, Preparing preparing)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         owed.starts(doing);
         uring::Sqe sqe = room_for_one_more();
         preparing(sqe);
@@ -640,14 +632,14 @@ class Ring
         });
         armed += starts(file_index, Doing::kLingering, [&](uring::Sqe &sqe) { sqe.prep_timeout(linger_); });
         waits_for(file_index, Waiting::nothing);
-        if (!owed_[file_index].runs(Doing::kReceiving))
+        if (!owed_.at(file_index).runs(Doing::kReceiving))
             armed += receives(file_index);
         return armed;
     }
 
     unsigned ends(const uint32_t file_index)
     {
-        const Owed &owed = owed_[file_index];
+        const Owed &owed = owed_.at(file_index);
         if (owed.running == 0)
             return closes_the_file(file_index);
         unsigned armed = 0;
@@ -666,7 +658,7 @@ class Ring
 
     unsigned settles(const uint32_t file_index)
     {
-        const Owed &owed = owed_[file_index];
+        const Owed &owed = owed_.at(file_index);
         if (owed.running != 0)
             return 0;
         if (owed.connection.tcp != tcp::State::last_ack && owed.connection.tcp != tcp::State::closed)
@@ -682,28 +674,26 @@ class Ring
     template <class Answering>
     Taken answers_from(const uint32_t file_index, const std::string_view asked, Answering &answering)
     {
-        Owed &owed = owed_[file_index];
-        if (owed.room == nullptr)
-            owed.room = room_taken(file_index);
-        uint8_t *const into = owed.room;
-        const size_t area = kAnswerBytes;
+        Owed &owed = owed_.at(file_index);
+        const std::span<uint8_t> area = room_taken(file_index);
         std::string_view left = asked;
         bool answered = false;
         bool closing = false;
         bool refused = false;
         bool needs_more = false;
-        while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
-            const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
+        while (!left.empty() && owed.filled < area.size() && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
+            const std::span<uint8_t> unused = area.subspan(owed.filled);
+            const std::span<char> room(reinterpret_cast<char *>(unused.data()), unused.size());
             const Answered said = answering(left, room);
             if (said.held != nullptr)
-                owed.held[owed.helds++] = said.held;
+                owed.held.at(owed.helds++) = said.held;
             if (said.taken == 0) {
                 needs_more = true;
                 break;
             }
             if (said.head == 0 || said.head > room.size())
                 break;
-            owes_a_piece(owed, into + owed.filled, said.head);
+            owes_a_piece(owed, unused.data(), said.head);
             owed.filled += static_cast<uint32_t>(said.head);
             owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())), said.body.size());
             left.remove_prefix(said.taken);
@@ -747,7 +737,7 @@ class Ring
 
     template <class Releasing> unsigned closes(const uint32_t file_index, Releasing &released, const int result)
     {
-        Owed &owed = owed_[file_index];
+        Owed &owed = owed_.at(file_index);
         if (!owed.connection.is_open())
             return 0;
         const tcp::State to = tcp::state_after_close(owed.connection.tcp, result);
@@ -760,7 +750,7 @@ class Ring
 
     unsigned ends_the_linger(const uint32_t file_index)
     {
-        owed_[file_index].connection.moves_to(tcp::State::closed);
+        owed_.at(file_index).connection.moves_to(tcp::State::closed);
         return ends(file_index);
     }
 
@@ -772,7 +762,7 @@ class Ring
         const uint32_t file_index = file_index_of(mark);
         const Doing doing = doing_of(mark);
         const bool stale = doing != Doing::kAccepting &&
-                           (file_index >= connections_ || generation_of(mark) != owed_[file_index].connection.generation);
+                           (file_index >= connections_ || generation_of(mark) != owed_.at(file_index).connection.generation);
         if (stale) [[unlikely]] {
             if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0 && cqe.res > 0)
                 consumes(cqe.flags >> IORING_CQE_BUFFER_SHIFT, static_cast<size_t>(cqe.res));
@@ -781,7 +771,7 @@ class Ring
         switch (doing) {
         case Doing::kAccepting:
             if (cqe.res >= 0) {
-                Owed &fresh = owed_[cqe.res];
+                Owed &fresh = owed_.at(cqe.res);
                 const Connection next = accepted_after(fresh.connection);
                 fresh = Owed{};
                 fresh.connection = next;
@@ -799,7 +789,7 @@ class Ring
             }
             return armed;
         case Doing::kReceiving: {
-            Owed &owed = owed_[file_index];
+            Owed &owed = owed_.at(file_index);
             const bool last = (cqe.flags & IORING_CQE_F_MORE) == 0;
             if (last)
                 owed.finishes(Doing::kReceiving);
@@ -869,7 +859,7 @@ class Ring
             return armed;
         }
         case Doing::kSending: {
-            Owed &owed = owed_[file_index];
+            Owed &owed = owed_.at(file_index);
             owed.finishes(Doing::kSending);
             if (!owed.connection.is_open()) {
                 gives_back_everything(file_index, released);
@@ -883,9 +873,9 @@ class Ring
                 return closes(file_index, released, cqe.res);
             size_t sent = static_cast<size_t>(cqe.res);
             while (sent > 0 && owed.first < owed.pieces) {
-                iovec &piece = owed.piece[owed.first];
+                iovec &piece = owed.piece.at(owed.first);
                 if (sent < piece.iov_len) {
-                    piece.iov_base = static_cast<uint8_t *>(piece.iov_base) + sent;
+                    piece.iov_base = std::next(static_cast<uint8_t *>(piece.iov_base), static_cast<std::ptrdiff_t>(sent));
                     piece.iov_len -= sent;
                     sent = 0;
                 } else {
@@ -895,7 +885,6 @@ class Ring
             }
             if (owed.first == owed.pieces) {
                 all_released(owed, released);
-                room_given_back(file_index);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
                 if (owed.connection.http == http1::State::tear_down)
@@ -920,14 +909,14 @@ class Ring
             return armed;
         }
         case Doing::kShuttingDown: {
-            Owed &owed = owed_[file_index];
+            Owed &owed = owed_.at(file_index);
             owed.finishes(Doing::kShuttingDown);
             if (cqe.res < 0 && owed.connection.drains())
                 return ends_the_linger(file_index);
             return settles(file_index);
         }
         case Doing::kLingering: {
-            Owed &owed = owed_[file_index];
+            Owed &owed = owed_.at(file_index);
             owed.finishes(Doing::kLingering);
             if (cqe.res == -ETIME && owed.connection.drains())
                 return ends_the_linger(file_index);
@@ -935,10 +924,10 @@ class Ring
         }
         case Doing::kCancelling:
         case Doing::kRemovingTimer:
-            owed_[file_index].finishes(doing);
+            owed_.at(file_index).finishes(doing);
             return settles(file_index);
         case Doing::kClosing: {
-            Owed &owed = owed_[file_index];
+            Owed &owed = owed_.at(file_index);
             owed.finishes(Doing::kClosing);
             if (owed.connection.tcp == tcp::State::last_ack)
                 owed.connection.moves_to(tcp::State::closed);
@@ -973,11 +962,11 @@ class Ring
     uint32_t consumed_ = 0;
     uint32_t given_back_ = 0;
     bool bundles_ = false;
-    Owed *owed_ = nullptr;
+    std::span<Owed> owed_;
     unsigned entries_ = 0;
     uint32_t connections_ = 0;
     uint32_t listeners_ = 0;
-    uint16_t port_[kListeners] = {};
+    std::array<uint16_t, kListeners> port_ = {};
 };
 
 } // namespace wm
