@@ -10,6 +10,21 @@
 # path here. Without it the pages render without pictures.
 # error_assets = "/usr/local/share/mruby-webmachine/error-assets.zip"
 
+# How long a connection waits, in whole seconds. The names are those of
+# the nginx directives that set the same times. Without a line the
+# value in the comment holds.
+# The whole head of a request, counted from its first byte:
+# client_header_timeout = 60
+# Between two reads of a request body:
+# client_body_timeout = 60
+# For one send to complete; a client that does not read is closed:
+# send_timeout = 60
+# For the next request on a persistent connection:
+# keepalive_timeout = 75
+# After the server closes its side, how long it still reads and drops
+# what the client sends; at most 30:
+# lingering_time = 5
+
 [log]
 # The key of the error fingerprint: 64 hex digits, 32 bytes. Every error
 # page and every line of the error log carries a fingerprint, BLAKE2b

@@ -99,19 +99,6 @@ inline constexpr int kBacklog = 4096;
 inline constexpr long kWaitSeconds = 1;
 inline constexpr size_t kHeadEndBytes = 4;
 inline constexpr size_t kRestBytes = http1::kMostRequestLineBytes + http1::kMostHeaderSectionBytes + 8;
-struct Timeouts {
-    std::chrono::seconds header;
-    std::chrono::seconds body;
-    std::chrono::seconds send;
-    std::chrono::seconds idle;
-    std::chrono::seconds linger;
-};
-
-inline constexpr Timeouts kTimeoutsByDefault = {std::chrono::seconds{60}, std::chrono::seconds{60},
-                                               std::chrono::seconds{60}, std::chrono::seconds{75},
-                                               std::chrono::seconds{5}};
-inline constexpr std::chrono::seconds kLingerMost{30};
-
 enum class Waiting : uint8_t {
     header,
     send,
@@ -132,8 +119,7 @@ class Ring
 
     int stood_up(const unsigned entries, const Timeouts timeouts)
     {
-        if (timeouts.linger > kLingerMost || timeouts.linger.count() <= 0 || timeouts.header.count() <= 0 ||
-            timeouts.send.count() <= 0 || timeouts.idle.count() <= 0 || timeouts.body.count() <= 0) [[unlikely]]
+        if (wrong_timeout_of(timeouts)) [[unlikely]]
             return -EINVAL;
         timeouts_ = timeouts;
         linger_ = __kernel_timespec{timeouts.linger.count(), 0};

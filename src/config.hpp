@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <chrono>
 #include <expected>
 #include <optional>
 #include <stdexcept>
@@ -12,6 +14,7 @@
 #include <mruby/presym.h>
 #include <mruby/string.h>
 
+#include "connection.hpp"
 #include "fingerprint.hpp"
 
 namespace config
@@ -96,6 +99,42 @@ string_in(mrb_state *mrb, const std::string_view text, const std::string_view ta
     if (!mrb_string_p(value)) [[unlikely]]
         return std::unexpected(ConfigError(where + std::string(name) + " is not a string"));
     return std::string(RSTRING_PTR(value), static_cast<size_t>(RSTRING_LEN(value)));
+}
+
+struct SecondsField {
+    std::string_view name;
+    std::chrono::seconds wm::Timeouts::*member;
+};
+
+inline constexpr std::array<SecondsField, 5> kTimeoutFields = {{
+    {"client_header_timeout", &wm::Timeouts::header},
+    {"client_body_timeout", &wm::Timeouts::body},
+    {"send_timeout", &wm::Timeouts::send},
+    {"keepalive_timeout", &wm::Timeouts::idle},
+    {"lingering_time", &wm::Timeouts::linger},
+}};
+
+inline std::expected<wm::Timeouts, ConfigError>
+timeouts_in(mrb_state *mrb, const std::string_view text)
+{
+    const std::expected<mrb_value, ConfigError> document = document_of(mrb, text);
+    if (!document) [[unlikely]] return std::unexpected(document.error());
+    wm::Timeouts timeouts = wm::kTimeoutsByDefault;
+    const std::optional<mrb_value> found = table_in(mrb, *document, "server");
+    if (!found) return timeouts;
+    const std::string where = "webmachine.toml: [server] ";
+    if (!mrb_hash_p(*found)) [[unlikely]] return std::unexpected(ConfigError(where + "is not a table"));
+    for (const SecondsField &field : kTimeoutFields) {
+        const mrb_value value =
+            mrb_hash_get(mrb, *found, mrb_str_new(mrb, field.name.data(), static_cast<mrb_int>(field.name.size())));
+        if (mrb_nil_p(value)) continue;
+        if (!mrb_integer_p(value)) [[unlikely]]
+            return std::unexpected(ConfigError(where + std::string(field.name) + " is not a whole number of seconds"));
+        timeouts.*field.member = std::chrono::seconds{mrb_integer(value)};
+    }
+    if (const std::optional<std::string_view> wrong = wm::wrong_timeout_of(timeouts)) [[unlikely]]
+        return std::unexpected(ConfigError(where + std::string(*wrong)));
+    return timeouts;
 }
 
 inline std::expected<std::optional<std::string>, ConfigError>

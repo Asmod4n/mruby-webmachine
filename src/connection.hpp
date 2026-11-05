@@ -6,6 +6,9 @@
 #pragma once
 
 #include <array>
+#include <chrono>
+#include <optional>
+#include <string_view>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -127,6 +130,40 @@ struct Connection {
         return tcp == tcp::State::established || tcp == tcp::State::close_wait;
     }
 };
+
+struct Timeouts {
+    std::chrono::seconds header;
+    std::chrono::seconds body;
+    std::chrono::seconds send;
+    std::chrono::seconds idle;
+    std::chrono::seconds linger;
+};
+
+inline constexpr Timeouts kTimeoutsByDefault = {std::chrono::seconds{60}, std::chrono::seconds{60},
+                                               std::chrono::seconds{60}, std::chrono::seconds{75},
+                                               std::chrono::seconds{5}};
+inline constexpr std::chrono::seconds kLingerMost{30};
+inline constexpr std::chrono::seconds kTimeoutMost{std::chrono::hours{24}};
+
+inline constexpr std::optional<std::string_view> wrong_timeout_of(const Timeouts timeouts)
+{
+    if (timeouts.header.count() <= 0)
+        return "client_header_timeout is not above 0 s";
+    if (timeouts.body.count() <= 0)
+        return "client_body_timeout is not above 0 s";
+    if (timeouts.send.count() <= 0)
+        return "send_timeout is not above 0 s";
+    if (timeouts.idle.count() <= 0)
+        return "keepalive_timeout is not above 0 s";
+    if (timeouts.linger.count() <= 0)
+        return "lingering_time is not above 0 s";
+    if (timeouts.linger > kLingerMost)
+        return "lingering_time is above 30 s";
+    if (timeouts.header > kTimeoutMost || timeouts.body > kTimeoutMost || timeouts.send > kTimeoutMost ||
+        timeouts.idle > kTimeoutMost)
+        return "a timeout is above 24 h";
+    return std::nullopt;
+}
 
 inline constexpr Connection accepted_after(const Connection before)
 {

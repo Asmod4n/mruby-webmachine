@@ -6,14 +6,19 @@ require 'tmpdir'
 # These tests run webmachine-serve and speak to it over a unix socket.
 # The bindings of mrbtest reach the parsers; only a running server shows
 # what the connection does with the bytes it receives.
-class ServeTest < Minitest::Test
+module Served
   SERVER = ARGV.fetch(0)
   HELLO = "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n".freeze
 
   def setup
     @dir = Dir.mktmpdir
     @path = File.join(@dir, 's.sock')
-    @pid = spawn(SERVER, @path, out: File.join(@dir, 'out'), err: File.join(@dir, 'err'))
+    config = []
+    if config_text
+      File.write(File.join(@dir, 'webmachine.toml'), config_text)
+      config = ['-c', File.join(@dir, 'webmachine.toml')]
+    end
+    @pid = spawn(SERVER, @path, *config, out: File.join(@dir, 'out'), err: File.join(@dir, 'err'))
     100.times do
       break if File.socket?(@path)
       sleep 0.05
@@ -72,6 +77,23 @@ class ServeTest < Minitest::Test
     socket&.close
   end
 
+  def config_text
+    nil
+  end
+
+  def refused_and_closed(bytes)
+    socket = UNIXSocket.new(@path)
+    socket.write(bytes)
+    got = read_to_end(socket)
+    [answers_of(got), got]
+  ensure
+    socket&.close
+  end
+end
+
+class ServeTest < Minitest::Test
+  include Served
+
   def test_a_route_answers_with_its_status
     assert_equal 'HTTP/1.1 200 OK', ask(HELLO).first.first
     assert_equal 'HTTP/1.1 404 Not Found', ask("GET /nope HTTP/1.1\r\nHost: x\r\n\r\n").first.first
@@ -95,15 +117,6 @@ class ServeTest < Minitest::Test
     assert_equal ['HTTP/1.1 200 OK'] * 4, answers.map(&:first)
     whole = ask(HELLO).first.last
     answers.each { |answer| assert_equal whole, answer.last }
-  ensure
-    socket&.close
-  end
-
-  def refused_and_closed(bytes)
-    socket = UNIXSocket.new(@path)
-    socket.write(bytes)
-    got = read_to_end(socket)
-    [answers_of(got), got]
   ensure
     socket&.close
   end
@@ -258,5 +271,72 @@ class ServeTest < Minitest::Test
       socket.close
     end
     assert_equal 'HTTP/1.1 200 OK', ask(HELLO).first.first
+  end
+end
+
+# RFC 9110 15.5.9 and the times of webmachine.toml: the server waits for
+# a head, for the next request and for a send only so long. The test sets
+# short times in a file and starts the server with -c.
+class TimeoutTest < Minitest::Test
+  include Served
+
+  def config_text
+    "[server]\nclient_header_timeout = 1\nsend_timeout = 1\nkeepalive_timeout = 2\nlingering_time = 1\n"
+  end
+
+  def closed_after(socket, most)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    got = +''
+    while IO.select([socket], nil, nil, most)
+      got << socket.readpartial(65_536)
+    end
+    flunk "the server did not close within #{most} s"
+  rescue EOFError, Errno::ECONNRESET
+    [Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, got]
+  end
+
+  def test_a_connection_without_bytes_closes_at_the_header_time
+    socket = UNIXSocket.new(@path)
+    took, got = closed_after(socket, 4)
+    assert_in_delta 1, took, 1
+    assert_equal '', got
+  ensure
+    socket&.close
+  end
+
+  def test_a_head_that_does_not_end_gets_408
+    socket = UNIXSocket.new(@path)
+    socket.write("GET /hello HTTP/1.1\r\nHo")
+    took, got = closed_after(socket, 4)
+    assert_in_delta 1, took, 1
+    assert_equal ['HTTP/1.1 408 Request Timeout'], answers_of(got).map(&:first)
+  ensure
+    socket&.close
+  end
+
+  def test_a_persistent_connection_closes_at_the_keepalive_time
+    socket = UNIXSocket.new(@path)
+    socket.write(HELLO)
+    took, got = closed_after(socket, 5)
+    assert_in_delta 2, took, 1
+    assert_equal ['HTTP/1.1 200 OK'], answers_of(got).map(&:first)
+  ensure
+    socket&.close
+  end
+
+  def test_a_client_that_does_not_read_is_closed_at_the_send_time
+    socket = UNIXSocket.new(@path)
+    home = "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+    ask(home)
+    begin
+      socket.write_nonblock(home * 3000)
+    rescue IO::WaitWritable
+      nil
+    end
+    sleep 3
+    took, = closed_after(socket, 5)
+    assert_operator took, :<, 1, 'the server should have closed while the client did not read'
+  ensure
+    socket&.close
   end
 end

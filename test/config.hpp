@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mruby.h>
+#include <mruby/array.h>
 #include <mruby/string.h>
 
 #include <string_view>
@@ -37,6 +38,20 @@ mrb_value spec_error_assets_in(mrb_state *mrb, mrb_value)
     return mrb_symbol_value(mrb_intern(mrb, (*path)->data(), (*path)->size()));
 }
 
+mrb_value spec_timeouts_in(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const auto timeouts = config::timeouts_in(mrb, std::string_view(text, static_cast<size_t>(length)));
+    if (!timeouts)
+        return mrb_str_new_cstr(mrb, timeouts.error().what());
+    mrb_value out[5] = {mrb_int_value(mrb, timeouts->header.count()), mrb_int_value(mrb, timeouts->body.count()),
+                        mrb_int_value(mrb, timeouts->send.count()), mrb_int_value(mrb, timeouts->idle.count()),
+                        mrb_int_value(mrb, timeouts->linger.count())};
+    return mrb_ary_new_from_values(mrb, 5, out);
+}
+
 } // namespace
 
 inline void config_spec(mrb_state *mrb)
@@ -45,4 +60,5 @@ inline void config_spec(mrb_state *mrb)
     struct RClass *sp = mrb_define_module_under(mrb, wm, "SpecConfig");
     mrb_define_module_function(mrb, sp, "fingerprint_key_in", spec_fingerprint_key_in, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "error_assets_in", spec_error_assets_in, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "timeouts_in", spec_timeouts_in, MRB_ARGS_REQ(1));
 }

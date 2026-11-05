@@ -34,3 +34,31 @@ assert('[server] error_assets names the pack') do
   assert_equal 'webmachine.toml: [server] error_assets is not a string',
                C.error_assets_in("[server]\nerror_assets = 1\n")
 end
+
+# The times a connection waits carry the names of the nginx directives
+# that set the same times, in whole seconds. A key that is not there
+# keeps its default: 60 s for a head, a body and a send, 75 s for the
+# next request, 5 s to linger.
+assert('[server] reads the five times, and a missing one keeps its default') do
+  assert_equal [60, 60, 60, 75, 5], C.timeouts_in("[log]\n")
+  assert_equal [60, 60, 60, 75, 5], C.timeouts_in("[server]\n")
+  text = "[server]\nclient_header_timeout = 1\nclient_body_timeout = 2\nsend_timeout = 3\n" \
+         "keepalive_timeout = 4\nlingering_time = 5\n"
+  assert_equal [1, 2, 3, 4, 5], C.timeouts_in(text)
+  assert_equal [60, 60, 60, 9, 5], C.timeouts_in("[server]\nkeepalive_timeout = 9\n")
+end
+
+# RULES.md: at the start, what the file gets wrong comes back as a value
+# with the reason, and the server does not start.
+assert('a time that is no whole number, not above 0, or too long is refused') do
+  assert_equal 'webmachine.toml: [server] send_timeout is not a whole number of seconds',
+               C.timeouts_in("[server]\nsend_timeout = \"60s\"\n")
+  assert_equal 'webmachine.toml: [server] client_header_timeout is not above 0 s',
+               C.timeouts_in("[server]\nclient_header_timeout = 0\n")
+  assert_equal 'webmachine.toml: [server] lingering_time is above 30 s',
+               C.timeouts_in("[server]\nlingering_time = 31\n")
+  assert_equal 30, C.timeouts_in("[server]\nlingering_time = 30\n")[4]
+  assert_equal 'webmachine.toml: [server] a timeout is above 24 h',
+               C.timeouts_in("[server]\nkeepalive_timeout = 86401\n")
+  assert_equal 86400, C.timeouts_in("[server]\nkeepalive_timeout = 86400\n")[3]
+end
