@@ -61,8 +61,14 @@ mrb_value spec_http1_field_line_forms_disagree(mrb_state *mrb, mrb_value)
                 std::fill(std::next(bytes.begin(), static_cast<std::ptrdiff_t>(length)), bytes.end(), '\r');
                 bytes.at(at) = static_cast<char>(byte);
                 const std::string_view lines(bytes.data(), length);
-                if (http1::field_lines_are_valid(lines) != http1::floor_field_lines_are_valid(lines))
-                    disagree++;
+                const bool floor = http1::floor_field_lines_are_valid(lines);
+                disagree += http1::field_lines_are_valid(lines) != floor;
+#if defined(__AVX2__)
+                disagree += http1::avx2_field_lines_are_valid(lines) != floor;
+#endif
+#if defined(__AVX512BW__)
+                disagree += http1::avx512_field_lines_are_valid(lines) != floor;
+#endif
             }
         }
     }

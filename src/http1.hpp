@@ -4,8 +4,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <expected>
-#if defined(__GNUC__) && !defined(__clang__)
-#include <experimental/simd>
+#include <bit>
+#if defined(__AVX2__)
+#include <immintrin.h>
 #endif
 #include <functional>
 #include <numeric>
@@ -98,10 +99,13 @@ constexpr std::expected<FieldLine, http::Refusal> parse_field_line(const std::st
     return FieldLine{field_name, without_ows(line.substr(colon + 1))};
 }
 
+inline constexpr unsigned char kLastControl = 0x1F;
+inline constexpr unsigned char kDelete = 0x7F;
+
 constexpr bool is_refused_in_field_lines(const char letter)
 {
     const unsigned char byte = static_cast<unsigned char>(letter);
-    return (byte < ' ' && byte != '\t' && byte != '\r' && byte != '\n') || byte == 0x7F;
+    return (byte <= kLastControl && byte != '\t' && byte != '\r' && byte != '\n') || byte == kDelete;
 }
 
 inline bool floor_field_lines_are_valid(const std::string_view lines)
@@ -112,39 +116,70 @@ inline bool floor_field_lines_are_valid(const std::string_view lines)
     return refused == 0 && std::ranges::count(lines, '\r') == std::ranges::count(lines, '\n');
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
-using FieldLineBlock = std::experimental::fixed_size_simd<unsigned char, http::kWideBlockBytes>;
-
-inline bool simd_field_lines_are_valid(const std::string_view lines)
+#if defined(__AVX2__)
+inline bool avx2_field_lines_are_valid(const std::string_view lines)
 {
-    const FieldLineBlock lane([](const auto index) { return static_cast<unsigned char>(index); });
-    const FieldLineBlock cr(static_cast<unsigned char>('\r'));
-    const FieldLineBlock lf(static_cast<unsigned char>('\n'));
-    const FieldLineBlock htab(static_cast<unsigned char>('\t'));
-    const FieldLineBlock sp(static_cast<unsigned char>(' '));
-    const FieldLineBlock del(static_cast<unsigned char>('\x7f'));
-    const unsigned char *const from = reinterpret_cast<const unsigned char *>(lines.data());
-    size_t crs = 0;
-    size_t lfs = 0;
-    bool refused = false;
-    for (size_t at = 0; at < lines.size(); at += FieldLineBlock::size()) {
-        FieldLineBlock bytes;
-        bytes.copy_from(std::next(from, static_cast<std::ptrdiff_t>(at)), std::experimental::element_aligned);
-        const auto inside =
-            lane < FieldLineBlock(static_cast<unsigned char>(std::min(lines.size() - at, FieldLineBlock::size())));
-        const auto control = bytes < sp && bytes != htab && bytes != cr && bytes != lf;
-        refused = refused || std::experimental::any_of((control || bytes == del) && inside);
-        crs += static_cast<size_t>(std::experimental::popcount((bytes == cr) && inside));
-        lfs += static_cast<size_t>(std::experimental::popcount((bytes == lf) && inside));
+    constexpr size_t kBlock = 32;
+    const __m256i last_control = _mm256_set1_epi8(static_cast<char>(kLastControl));
+    const __m256i htab = _mm256_set1_epi8('\t');
+    const __m256i cr = _mm256_set1_epi8('\r');
+    const __m256i lf = _mm256_set1_epi8('\n');
+    const __m256i del = _mm256_set1_epi8(static_cast<char>(kDelete));
+    uint32_t refused = 0;
+    int crs = 0;
+    int lfs = 0;
+    for (size_t at = 0; at < lines.size(); at += kBlock) {
+        const size_t left = lines.size() - at;
+        const uint32_t inside = left >= kBlock ? ~uint32_t{0} : (uint32_t{1} << left) - 1;
+        const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(std::next(lines.data(), static_cast<std::ptrdiff_t>(at))));
+        const __m256i control = _mm256_cmpeq_epi8(_mm256_min_epu8(bytes, last_control), bytes);
+        const __m256i is_cr = _mm256_cmpeq_epi8(bytes, cr);
+        const __m256i is_lf = _mm256_cmpeq_epi8(bytes, lf);
+        const __m256i allowed = _mm256_or_si256(_mm256_cmpeq_epi8(bytes, htab), _mm256_or_si256(is_cr, is_lf));
+        const __m256i no = _mm256_or_si256(_mm256_andnot_si256(allowed, control), _mm256_cmpeq_epi8(bytes, del));
+        refused |= static_cast<uint32_t>(_mm256_movemask_epi8(no)) & inside;
+        crs += std::popcount(static_cast<uint32_t>(_mm256_movemask_epi8(is_cr)) & inside);
+        lfs += std::popcount(static_cast<uint32_t>(_mm256_movemask_epi8(is_lf)) & inside);
     }
-    return !refused && crs == lfs;
+    return refused == 0 && crs == lfs;
+}
+#endif
+
+#if defined(__AVX512BW__)
+inline bool avx512_field_lines_are_valid(const std::string_view lines)
+{
+    constexpr size_t kBlock = 64;
+    const __m512i last_control = _mm512_set1_epi8(static_cast<char>(kLastControl));
+    const __m512i htab = _mm512_set1_epi8('\t');
+    const __m512i cr = _mm512_set1_epi8('\r');
+    const __m512i lf = _mm512_set1_epi8('\n');
+    const __m512i del = _mm512_set1_epi8(static_cast<char>(kDelete));
+    uint64_t refused = 0;
+    int crs = 0;
+    int lfs = 0;
+    for (size_t at = 0; at < lines.size(); at += kBlock) {
+        const size_t left = lines.size() - at;
+        const __mmask64 inside = left >= kBlock ? ~__mmask64{0} : (__mmask64{1} << left) - 1;
+        const __m512i bytes = _mm512_loadu_si512(std::next(lines.data(), static_cast<std::ptrdiff_t>(at)));
+        const __mmask64 control = _mm512_mask_cmple_epu8_mask(inside, bytes, last_control);
+        const __mmask64 is_cr = _mm512_mask_cmpeq_epi8_mask(inside, bytes, cr);
+        const __mmask64 is_lf = _mm512_mask_cmpeq_epi8_mask(inside, bytes, lf);
+        const __mmask64 is_htab = _mm512_mask_cmpeq_epi8_mask(inside, bytes, htab);
+        const __mmask64 is_del = _mm512_mask_cmpeq_epi8_mask(inside, bytes, del);
+        refused |= (control & ~(is_htab | is_cr | is_lf)) | is_del;
+        crs += std::popcount(is_cr);
+        lfs += std::popcount(is_lf);
+    }
+    return refused == 0 && crs == lfs;
 }
 #endif
 
 inline bool field_lines_are_valid(const std::string_view lines)
 {
-#if defined(__GNUC__) && !defined(__clang__)
-    return simd_field_lines_are_valid(lines);
+#if defined(__AVX512BW__)
+    return avx512_field_lines_are_valid(lines);
+#elif defined(__AVX2__)
+    return avx2_field_lines_are_valid(lines);
 #else
     return floor_field_lines_are_valid(lines);
 #endif
