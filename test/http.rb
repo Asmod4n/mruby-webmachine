@@ -1198,7 +1198,7 @@ end
 # RFC 9110 8.8.3 note: opaque-tag was a quoted-string in RFC 2616, "thus,
 # some recipients might perform backslash unescaping". It is not one
 # here. A backslash is %x5C and so it is etagc, and it stays a byte of
-# the tag: unescaping would make two spellings of one validator.
+# the tag: unescaping would make two written forms of one validator.
 assert('parse_entity_tag does not unescape a backslash') do
   a = Webmachine::SpecHttp.parse_entity_tag('"a\\\\b"')
   assert_equal 'a\\\\b', a[TAG_OPAQUE]
@@ -1281,15 +1281,15 @@ end
 # RFC 9110 8.3.1 lists these four as equivalent, and says the first is
 # preferred. All four have to read as the same type with the same
 # charset, or a resource answers two of them differently.
-assert('the four equivalent spellings of RFC 9110 8.3.1 read the same') do
+assert('the four equivalent written forms of RFC 9110 8.3.1 read the same') do
   ['text/html;charset=utf-8', 'Text/HTML;Charset="utf-8"', 'text/html; charset="utf-8"',
-   'text/html;charset=UTF-8'].each do |spelling|
-    m = Webmachine::SpecHttp.parse_media_type(spelling)
-    assert_true Webmachine::SpecHttp.equal_ignoring_case('text', m[MEDIA_TYPE]), spelling
-    assert_true Webmachine::SpecHttp.equal_ignoring_case('html', m[MEDIA_SUBTYPE]), spelling
+   'text/html;charset=UTF-8'].each do |written|
+    m = Webmachine::SpecHttp.parse_media_type(written)
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('text', m[MEDIA_TYPE]), written
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('html', m[MEDIA_SUBTYPE]), written
     raw = Webmachine::SpecHttp.value_of_parameter(m[MEDIA_PARAMETERS], 'charset')
     charset = Webmachine::SpecHttp.unquoted_token(raw)
-    assert_true Webmachine::SpecHttp.equal_ignoring_case('utf-8', charset), spelling
+    assert_true Webmachine::SpecHttp.equal_ignoring_case('utf-8', charset), written
   end
 end
 
@@ -1491,42 +1491,42 @@ end
 # parameters", and "media type parameters, if any, are mapped to
 # Structured Field Parameters".
 #
-# The RFC spells application/jsonpath as a String in one example and
+# The RFC writes application/jsonpath as a String in one example and
 # application/sql as a Token in the same line. That choice carries no
 # meaning - "recipients MAY convert Tokens to Strings, but MUST NOT
 # process them differently based on the received type" - so this writes
 # a Token wherever RFC 9651's sf-token allows one, and a String
 # otherwise, which is one rule instead of a table of habits.
-assert('spell_accept_query writes RFC 9651 Structured Fields') do
+assert('serialize_accept_query writes RFC 9651 Structured Fields') do
   assert_equal 'application/sql',
-               Webmachine::SpecHttp.spell_accept_query(['application/sql'])
+               Webmachine::SpecHttp.serialize_accept_query(['application/sql'])
   assert_equal 'application/x-www-form-urlencoded, application/sql',
-               Webmachine::SpecHttp.spell_accept_query(['application/x-www-form-urlencoded',
+               Webmachine::SpecHttp.serialize_accept_query(['application/x-www-form-urlencoded',
                                                         'application/sql'])
   assert_equal 'application/jsonpath, application/xslt+xml',
-               Webmachine::SpecHttp.spell_accept_query(['application/jsonpath',
+               Webmachine::SpecHttp.serialize_accept_query(['application/jsonpath',
                                                         'application/xslt+xml'])
   # A media type parameter becomes a Structured Field parameter. Its key
-  # is lowercased because RFC 9651 spells key as lcalpha alone; its value
+  # is lowercased because RFC 9651 writes key as lcalpha alone; its value
   # is not, because no rule asks for that. RFC 9110 8.3.2 makes a charset
   # case insensitive to compare, which is a question about meaning and
   # not about how the bytes are written.
   assert_equal 'application/sql;charset=UTF-8',
-               Webmachine::SpecHttp.spell_accept_query(['application/sql;charset=UTF-8'])
+               Webmachine::SpecHttp.serialize_accept_query(['application/sql;charset=UTF-8'])
   assert_equal 'application/sql;charset=UTF-8',
-               Webmachine::SpecHttp.spell_accept_query(['application/sql;CharSet="UTF-8"'])
+               Webmachine::SpecHttp.serialize_accept_query(['application/sql;CharSet="UTF-8"'])
   # RFC 10008 3: "The only supported uses of wildcards are */*, which
   # matches any type, or xxxx/*".
-  assert_equal '*/*', Webmachine::SpecHttp.spell_accept_query(['*/*'])
-  assert_equal 'text/*', Webmachine::SpecHttp.spell_accept_query(['text/*'])
-  assert_equal '', Webmachine::SpecHttp.spell_accept_query([])
+  assert_equal '*/*', Webmachine::SpecHttp.serialize_accept_query(['*/*'])
+  assert_equal 'text/*', Webmachine::SpecHttp.serialize_accept_query(['text/*'])
+  assert_equal '', Webmachine::SpecHttp.serialize_accept_query([])
 end
 
 # RFC 10008 3: "Media types do not exactly map to Tokens; for instance,
 # they allow a leading digit. In cases like these, the String format
 # needs to be used."
 assert('a media type that is no Token is written as a String') do
-  assert_equal '"3gpp/mp4"', Webmachine::SpecHttp.spell_accept_query(['3gpp/mp4'])
+  assert_equal '"3gpp/mp4"', Webmachine::SpecHttp.serialize_accept_query(['3gpp/mp4'])
 end
 
 # RFC 10008 2.6 and 2.2: a conditional QUERY is about the equivalent
@@ -1591,16 +1591,16 @@ assert('every problem string is still NUL terminated after the views') do
 end
 
 # RFC 9110 6.6.1 gives one example, and 5.6.7 gives the other. The
-# spelling and the reading share the named positions, so a round trip
+# serializing and the reading share the named positions, so a round trip
 # through both is the strongest thing the test can say.
-assert('spell_imf_fixdate writes what parse_imf_fixdate reads') do
+assert('serialize_imf_fixdate writes what parse_imf_fixdate reads') do
   [['Tue, 15 Nov 1994 08:12:31 GMT', 784887151],
    ['Sun, 06 Nov 1994 08:49:37 GMT', 784111777],
    ['Thu, 01 Jan 1970 00:00:00 GMT', 0],
    ['Mon, 29 Feb 2016 23:59:59 GMT', 1456790399],
-   ['Tue, 19 Jan 2038 03:14:07 GMT', 2147483647]].each do |spelled, at|
-    assert_equal spelled, Webmachine::SpecHttp.spell_imf_fixdate(at), spelled
-    assert_equal at, Webmachine::SpecHttp.parse_imf_fixdate(spelled), spelled
+   ['Tue, 19 Jan 2038 03:14:07 GMT', 2147483647]].each do |serialized, at|
+    assert_equal serialized, Webmachine::SpecHttp.serialize_imf_fixdate(at), serialized
+    assert_equal at, Webmachine::SpecHttp.parse_imf_fixdate(serialized), serialized
   end
 end
 
@@ -1990,7 +1990,7 @@ end
 # RFC 9110 15.1 lists the reason phrases, and RFC 6585 5 adds 431. They
 # are recommendations, so a code this tree never sends has none rather
 # than a made up one. 306 and 418 are "(Unused)".
-assert('reason_phrase spells what RFC 9110 15 names') do
+assert('reason_phrase writes what RFC 9110 15 names') do
   {200 => 'OK', 204 => 'No Content', 206 => 'Partial Content',
    301 => 'Moved Permanently', 304 => 'Not Modified', 308 => 'Permanent Redirect',
    400 => 'Bad Request', 404 => 'Not Found', 405 => 'Method Not Allowed',
@@ -2043,19 +2043,19 @@ end
 # RFC 9110 10.2.1: "Allow = #method", and "An empty Allow field value
 # indicates that the resource allows no methods", so the empty list is a
 # value and not a missing field.
-assert('spell_allow writes the list of RFC 9110 10.2.1') do
-  assert_equal 'GET, HEAD, QUERY', Webmachine::SpecHttp.spell_allow(%w[GET HEAD QUERY])
-  assert_equal 'GET', Webmachine::SpecHttp.spell_allow(%w[GET])
-  assert_equal '', Webmachine::SpecHttp.spell_allow([])
+assert('serialize_allow writes the list of RFC 9110 10.2.1') do
+  assert_equal 'GET, HEAD, QUERY', Webmachine::SpecHttp.serialize_allow(%w[GET HEAD QUERY])
+  assert_equal 'GET', Webmachine::SpecHttp.serialize_allow(%w[GET])
+  assert_equal '', Webmachine::SpecHttp.serialize_allow([])
 end
 
 # RFC 9110 10.2.3: "Retry-After = HTTP-date / delay-seconds" and
 # "delay-seconds = 1*DIGIT".
-assert('spell_retry_after writes both forms of RFC 9110 10.2.3') do
-  assert_equal '120', Webmachine::SpecHttp.spell_retry_after_delay(120)
-  assert_equal '0', Webmachine::SpecHttp.spell_retry_after_delay(0)
+assert('serialize_retry_after writes both forms of RFC 9110 10.2.3') do
+  assert_equal '120', Webmachine::SpecHttp.serialize_retry_after_delay(120)
+  assert_equal '0', Webmachine::SpecHttp.serialize_retry_after_delay(0)
   assert_equal 'Sun, 06 Nov 1994 08:49:37 GMT',
-               Webmachine::SpecHttp.spell_retry_after_date(784111777)
+               Webmachine::SpecHttp.serialize_retry_after_date(784111777)
 end
 
 # RFC 9110 11.1: token68 = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
@@ -2087,14 +2087,14 @@ end
 # RFC 9110 11.3: "challenge = auth-scheme [ 1*SP ( token68 / #auth-param
 # ) ]", and 11.5 makes realm the parameter every scheme may carry, with a
 # quoted-string for its value.
-assert('spell_challenge writes what RFC 9110 11.3 asks a 401 to carry') do
+assert('serialize_challenge writes what RFC 9110 11.3 asks a 401 to carry') do
   assert_equal 'Basic realm="the door"',
-               Webmachine::SpecHttp.spell_challenge('Basic', 'the door')
-  assert_equal 'Basic', Webmachine::SpecHttp.spell_challenge('Basic', '')
+               Webmachine::SpecHttp.serialize_challenge('Basic', 'the door')
+  assert_equal 'Basic', Webmachine::SpecHttp.serialize_challenge('Basic', '')
   assert_equal 'Basic realm="say \\"hi\\""',
-               Webmachine::SpecHttp.spell_challenge('Basic', 'say "hi"')
-  assert_nil Webmachine::SpecHttp.spell_challenge('Ba sic', 'x')
-  assert_nil Webmachine::SpecHttp.spell_challenge('Basic', "a\nb")
+               Webmachine::SpecHttp.serialize_challenge('Basic', 'say "hi"')
+  assert_nil Webmachine::SpecHttp.serialize_challenge('Ba sic', 'x')
+  assert_nil Webmachine::SpecHttp.serialize_challenge('Basic', "a\nb")
 end
 
 # Found by fuzz/fuzz_http.cpp. RFC 9110 5.6.1.2 lets a list be empty, so a
@@ -2193,39 +2193,39 @@ end
 # RFC 9110 12.5.5: "Vary = #( "*" / field-name )". RFC 9110 5.6.1.1 tells
 # a sender not to generate an empty list, so a response that selects on
 # nothing carries no Vary at all.
-assert('spell_vary writes the list of RFC 9110 12.5.5, and nothing for an empty one') do
-  assert_false Webmachine::SpecHttp.spell_vary([])
-  assert_equal 'accept', Webmachine::SpecHttp.spell_vary(%w[accept])
+assert('serialize_vary writes the list of RFC 9110 12.5.5, and nothing for an empty one') do
+  assert_false Webmachine::SpecHttp.serialize_vary([])
+  assert_equal 'accept', Webmachine::SpecHttp.serialize_vary(%w[accept])
   assert_equal 'accept, accept-encoding, accept-language',
-               Webmachine::SpecHttp.spell_vary(%w[accept accept-encoding accept-language])
-  assert_equal '*', Webmachine::SpecHttp.spell_vary(%w[*])
-  assert_nil Webmachine::SpecHttp.spell_vary(['a b'])
+               Webmachine::SpecHttp.serialize_vary(%w[accept accept-encoding accept-language])
+  assert_equal '*', Webmachine::SpecHttp.serialize_vary(%w[*])
+  assert_nil Webmachine::SpecHttp.serialize_vary(['a b'])
 end
 
 # RFC 9110 14.3: "acceptable-ranges = 1#range-unit", and a server that
 # supports no range request for the resource "MAY send Accept-Ranges:
 # none".
-assert('spell_accept_ranges writes none for the empty list of RFC 9110 14.3') do
-  assert_equal 'none', Webmachine::SpecHttp.spell_accept_ranges([])
-  assert_equal 'bytes', Webmachine::SpecHttp.spell_accept_ranges(%w[bytes])
-  assert_equal 'bytes, items', Webmachine::SpecHttp.spell_accept_ranges(%w[bytes items])
-  assert_nil Webmachine::SpecHttp.spell_accept_ranges(['by tes'])
+assert('serialize_accept_ranges writes none for the empty list of RFC 9110 14.3') do
+  assert_equal 'none', Webmachine::SpecHttp.serialize_accept_ranges([])
+  assert_equal 'bytes', Webmachine::SpecHttp.serialize_accept_ranges(%w[bytes])
+  assert_equal 'bytes, items', Webmachine::SpecHttp.serialize_accept_ranges(%w[bytes items])
+  assert_nil Webmachine::SpecHttp.serialize_accept_ranges(['by tes'])
 end
 
 # RFC 9110 14.4: "range-resp = incl-range "/" ( complete-length / "*" )".
-# A sender that does not know the complete length spells "*" for it.
-assert('spell_content_range writes the two forms of RFC 9110 14.4') do
+# A sender that does not know the complete length writes "*" for it.
+assert('serialize_content_range writes the two forms of RFC 9110 14.4') do
   assert_equal 'bytes 0-499/1234',
-               Webmachine::SpecHttp.spell_content_range('bytes', 0, 499, 1234)
+               Webmachine::SpecHttp.serialize_content_range('bytes', 0, 499, 1234)
   assert_equal 'bytes 500-999/*',
-               Webmachine::SpecHttp.spell_content_range('bytes', 500, 999, nil)
-  assert_nil Webmachine::SpecHttp.spell_content_range('by tes', 0, 1, 2)
+               Webmachine::SpecHttp.serialize_content_range('bytes', 500, 999, nil)
+  assert_nil Webmachine::SpecHttp.serialize_content_range('by tes', 0, 1, 2)
 end
 
 # RFC 9110 14.4: "unsatisfied-resp = "*" "/" complete-length". A 416
 # carries this form, and it names the length the range could not reach.
-assert('spell_unsatisfied_content_range writes what a 416 carries') do
+assert('serialize_unsatisfied_content_range writes what a 416 carries') do
   assert_equal 'bytes */1234',
-               Webmachine::SpecHttp.spell_unsatisfied_content_range('bytes', 1234)
-  assert_nil Webmachine::SpecHttp.spell_unsatisfied_content_range('by tes', 1)
+               Webmachine::SpecHttp.serialize_unsatisfied_content_range('bytes', 1234)
+  assert_nil Webmachine::SpecHttp.serialize_unsatisfied_content_range('by tes', 1)
 end

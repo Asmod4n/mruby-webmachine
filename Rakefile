@@ -343,7 +343,7 @@ TEXT
 # is not registered - "WM" as two bytes, picked to sit clear of the ids
 # the format's own extensions use. It carries the finished <img> for the
 # picture - src, size and alt, the bytes a page emits - so the server
-# appends what it read and spells nothing.
+# appends what it read and writes nothing.
 WM_EXTRA_ID = 0x574d
 WM_CACHE_ID = 0x574e
 WM_PLAIN_ID = 0x574f
@@ -427,7 +427,7 @@ end
 
 # The whole <img>, as the page emits it. Everything in it is known here:
 # the mount point and the status name from the server's own sources, the
-# geometry from file(1). The server appends this and spells nothing.
+# geometry from file(1). The server appends this and writes nothing.
 def img_tag(prefix, code, title, size_attrs)
   alt = "A cat, illustrating HTTP #{[code, title].join(' ').strip}"
   raise "#{code}: #{alt.inspect} needs escaping, and a baked tag does not escape" if

@@ -51,17 +51,17 @@ head_by_template(const std::span<char> room, const serve::Today &today)
 }
 
 size_t
-head_spelled(const std::span<char> room, const serve::Today &today)
+head_serialized(const std::span<char> room, const serve::Today &today)
 {
-    serve::Spelled out(room);
-    serve::spelled_head(out, today, 200, kContentType, kLength, "", "");
+    serve::Serialized out(room);
+    serve::serialized_head(out, today, 200, kContentType, kLength, "", "");
     return out.size();
 }
 
 size_t
 head_kept(const std::span<char> room, serve::Heads &heads, const serve::Today &today)
 {
-    serve::Spelled out(room);
+    serve::Serialized out(room);
     serve::head_added(out, heads, today, 200, kContentType, kLength, "", "");
     return out.size();
 }
@@ -82,21 +82,21 @@ head_in_pieces(const std::span<char> room, const serve::Today &today)
 const std::string &
 the_head()
 {
-    static const std::string spelled = [] {
+    static const std::string serialized = [] {
         std::array<char, 512> room{};
         const serve::Today today = today_now();
-        return std::string(room.data(), head_spelled(room, today));
+        return std::string(room.data(), head_serialized(room, today));
     }();
-    return spelled;
+    return serialized;
 }
 
 void
 same_or_abort(const std::span<const char> room, const size_t size)
 {
     const serve::Today today = today_now();
-    std::array<char, 512> spelled{};
-    const size_t n = head_spelled(spelled, today);
-    if (std::string_view(room.data(), size) != std::string_view(spelled.data(), n)) [[unlikely]] std::abort();
+    std::array<char, 512> serialized{};
+    const size_t n = head_serialized(serialized, today);
+    if (std::string_view(room.data(), size) != std::string_view(serialized.data(), n)) [[unlikely]] std::abort();
 }
 
 void
@@ -113,13 +113,13 @@ BM_head_by_template(benchmark::State &state)
 }
 
 void
-BM_head_spelled(benchmark::State &state)
+BM_head_serialized(benchmark::State &state)
 {
     std::array<char, 512> room{};
     const serve::Today today = today_now();
-    same_or_abort(room, head_spelled(room, today));
+    same_or_abort(room, head_serialized(room, today));
     for (auto _ : state) {
-        size_t n = head_spelled(room, today);
+        size_t n = head_serialized(room, today);
         benchmark::DoNotOptimize(n);
         benchmark::DoNotOptimize(room.data());
     }
@@ -155,6 +155,6 @@ BM_head_in_pieces(benchmark::State &state)
 }
 
 BENCHMARK(BM_head_by_template);
-BENCHMARK(BM_head_spelled);
+BENCHMARK(BM_head_serialized);
 BENCHMARK(BM_head_kept);
 BENCHMARK(BM_head_in_pieces);

@@ -68,10 +68,10 @@ class Hello final : public webmachine::Resource
     }
 };
 
-class Spelled
+class Serialized
 {
   public:
-    explicit Spelled(const std::span<char> room) : room_(room)
+    explicit Serialized(const std::span<char> room) : room_(room)
     {
     }
     void add(const std::string_view text)
@@ -117,7 +117,7 @@ brought_up_to_date(Today &today)
     if (now == today.now) return;
     today.now = now;
     today.year = std::chrono::year_month_day{std::chrono::floor<std::chrono::days>(now)}.year();
-    today.date = http::spell_imf_fixdate(now);
+    today.date = http::serialize_imf_fixdate(now);
 }
 
 inline constexpr size_t kHeadBytesMost = 256;
@@ -140,7 +140,7 @@ struct Heads {
 };
 
 inline void
-spelled_head(Spelled &out, const Today &today, const uint16_t status, const std::string_view content_type,
+serialized_head(Serialized &out, const Today &today, const uint16_t status, const std::string_view content_type,
              const size_t body_length, const std::string_view extra_fields, const std::string_view connection)
 {
     const auto &date = today.date;
@@ -165,7 +165,7 @@ spelled_head(Spelled &out, const Today &today, const uint16_t status, const std:
 }
 
 inline void
-head_added(Spelled &out, Heads &heads, const Today &today, const uint16_t status, const std::string_view content_type,
+head_added(Serialized &out, Heads &heads, const Today &today, const uint16_t status, const std::string_view content_type,
            const size_t body_length, const std::string_view extra_fields, const std::string_view connection)
 {
     for (const Head &h : heads.kept)
@@ -178,11 +178,11 @@ head_added(Spelled &out, Heads &heads, const Today &today, const uint16_t status
         }
     Head &h = heads.kept[heads.next];
     heads.next = (heads.next + 1) % kHeadsKept;
-    Spelled into(h.bytes);
-    spelled_head(into, today, status, content_type, body_length, extra_fields, connection);
+    Serialized into(h.bytes);
+    serialized_head(into, today, status, content_type, body_length, extra_fields, connection);
     h = Head{today.now, status, content_type, body_length, extra_fields, connection, into.size(), h.bytes};
     if (h.size == 0) [[unlikely]] {
-        spelled_head(out, today, status, content_type, body_length, extra_fields, connection);
+        serialized_head(out, today, status, content_type, body_length, extra_fields, connection);
         return;
     }
     out.add(std::string_view(h.bytes.data(), h.size));
@@ -193,8 +193,8 @@ made(const std::span<char> room, const Today &today, const uint16_t status, cons
      const std::string_view body, const bool head, const std::string_view extra_fields,
      const std::string_view connection, cache_held *const held, const size_t taken)
 {
-    Spelled out(room);
-    spelled_head(out, today, status, content_type, body.size(), extra_fields, connection);
+    Serialized out(room);
+    serialized_head(out, today, status, content_type, body.size(), extra_fields, connection);
     if (!head) out.add(body);
     return {out.size(), {}, held, taken, false, false};
 }
@@ -224,7 +224,7 @@ inline constexpr std::array<std::string_view, 16> kVaryFields = {{
 
 template <class Inner>
 std::string_view
-vary_of(const Inner &inner, std::string &spelled)
+vary_of(const Inner &inner, std::string &serialized)
 {
     const size_t offered = (inner.content_types_provided().size() > 1 ? 1u : 0u) |
                            (inner.charsets_provided().size() > 1 ? 2u : 0u) |
@@ -232,14 +232,14 @@ vary_of(const Inner &inner, std::string &spelled)
                            (inner.languages_provided().size() > 1 ? 8u : 0u);
     const std::span<const std::string_view> variances = inner.variances();
     if (variances.empty()) [[likely]] return kVaryFields[offered];
-    spelled = kVaryFields[offered].empty() ? std::string("Vary: ")
+    serialized = kVaryFields[offered].empty() ? std::string("Vary: ")
                                            : std::string(kVaryFields[offered].substr(0, kVaryFields[offered].size() - 2)) + ", ";
     for (size_t at = 0; at < variances.size(); at++) {
-        if (at > 0) spelled += ", ";
-        spelled += variances[at];
+        if (at > 0) serialized += ", ";
+        serialized += variances[at];
     }
-    spelled += "\r\n";
-    return spelled;
+    serialized += "\r\n";
+    return serialized;
 }
 
 inline wm::Answered
@@ -247,7 +247,7 @@ stored_made(const std::span<char> room, Heads &heads, const Today &today, const 
             const std::string_view vary, const std::string_view connection, const std::string_view body, const bool head,
             cache_held *const held, const size_t taken)
 {
-    Spelled out(room);
+    Serialized out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
         return {out.size(), head ? std::string_view{} : body, held, taken, false, false};
@@ -260,7 +260,7 @@ constant_made(const std::span<char> room, Heads &heads, const Today &today, cons
               const std::string_view vary, const std::string_view connection, const std::string_view body, const bool head,
               const size_t taken)
 {
-    Spelled out(room);
+    Serialized out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
         return {out.size(), head ? std::string_view{} : body, nullptr, taken, false, false};

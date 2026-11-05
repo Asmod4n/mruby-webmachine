@@ -66,7 +66,7 @@ year_of(const std::chrono::sys_seconds now)
 std::string
 head_of(const uint16_t status, const std::string_view content_type, const size_t body_length)
 {
-    const auto date = http::spell_imf_fixdate(now_is());
+    const auto date = http::serialize_imf_fixdate(now_is());
     std::string head;
     head.reserve(256);
     head += "HTTP/1.1 ";

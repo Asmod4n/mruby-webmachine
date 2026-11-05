@@ -119,9 +119,9 @@ template <class Resource>
 std::optional<http::EntityTag>
 entity_tag_of(const Resource &resource, const http1::Request &request)
 {
-    const std::string_view spelled = resource.generate_etag(request);
-    if (spelled.empty()) return std::nullopt;
-    const auto tag = http::parse_entity_tag(spelled);
+    const std::string_view serialized = resource.generate_etag(request);
+    if (serialized.empty()) return std::nullopt;
+    const auto tag = http::parse_entity_tag(serialized);
     if (!tag) [[unlikely]] return std::nullopt;
     return *tag;
 }

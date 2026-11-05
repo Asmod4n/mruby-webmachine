@@ -762,7 +762,7 @@ mrb_value spec_parse_content_length_list(mrb_state *mrb, mrb_value)
 // std::exception promises. It returns title.data(), which is only a C
 // string as long as every row of the table is a literal. This says so
 // for every row rather than trusting it.
-mrb_value spec_spell_accept_query(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_accept_query(mrb_state *mrb, mrb_value)
 {
     mrb_value list;
     mrb_get_args(mrb, "A", &list);
@@ -778,7 +778,7 @@ mrb_value spec_spell_accept_query(mrb_state *mrb, mrb_value)
             return cpp_to_mrb_value(mrb, std::string_view("a provided type does not parse"));
         provided.push_back(*media);
     }
-    const auto got = http::spell_accept_query(provided);
+    const auto got = http::serialize_accept_query(provided);
     if (!got)
         return cpp_to_mrb_value(mrb, http::ParseError(got.error(), "").rule());
     return cpp_to_mrb_value(mrb, std::string_view(*got));
@@ -820,7 +820,7 @@ mrb_value spec_every_expectation_is_understood(mrb_state *mrb, mrb_value)
         http::every_expectation_is_understood(std::string_view(text, static_cast<size_t>(length))));
 }
 
-mrb_value spec_spell_allow(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_allow(mrb_state *mrb, mrb_value)
 {
     mrb_value names = mrb_nil_value();
     mrb_get_args(mrb, "A", &names);
@@ -830,22 +830,22 @@ mrb_value spec_spell_allow(mrb_state *mrb, mrb_value)
         allowed.push_back(http::method_of(
             std::string_view(RSTRING_PTR(name), static_cast<size_t>(RSTRING_LEN(name)))));
     }
-    return cpp_to_mrb_value(mrb, http::spell_allow(allowed));
+    return cpp_to_mrb_value(mrb, http::serialize_allow(allowed));
 }
 
-mrb_value spec_spell_retry_after_delay(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_retry_after_delay(mrb_state *mrb, mrb_value)
 {
     mrb_int seconds = 0;
     mrb_get_args(mrb, "i", &seconds);
-    return cpp_to_mrb_value(mrb, http::spell_retry_after(std::chrono::seconds{seconds}));
+    return cpp_to_mrb_value(mrb, http::serialize_retry_after(std::chrono::seconds{seconds}));
 }
 
-mrb_value spec_spell_retry_after_date(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_retry_after_date(mrb_state *mrb, mrb_value)
 {
     mrb_int seconds = 0;
     mrb_get_args(mrb, "i", &seconds);
     return cpp_to_mrb_value(
-        mrb, http::spell_retry_after(std::chrono::sys_seconds{std::chrono::seconds{seconds}}));
+        mrb, http::serialize_retry_after(std::chrono::sys_seconds{std::chrono::seconds{seconds}}));
 }
 
 mrb_value spec_is_token68(mrb_state *mrb, mrb_value)
@@ -872,7 +872,7 @@ mrb_value spec_parse_credentials(mrb_state *mrb, mrb_value)
     return mrb_ary_new_from_values(mrb, 2, out);
 }
 
-mrb_value spec_spell_challenge(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_challenge(mrb_state *mrb, mrb_value)
 {
     const char *scheme = nullptr;
     const char *realm = nullptr;
@@ -880,7 +880,7 @@ mrb_value spec_spell_challenge(mrb_state *mrb, mrb_value)
     mrb_int realm_length = 0;
     mrb_get_args(mrb, "ss", &scheme, &scheme_length, &realm, &realm_length);
     const auto got =
-        http::spell_challenge(std::string_view(scheme, static_cast<size_t>(scheme_length)),
+        http::serialize_challenge(std::string_view(scheme, static_cast<size_t>(scheme_length)),
                               std::string_view(realm, static_cast<size_t>(realm_length)));
     if (!got)
         return mrb_nil_value();
@@ -932,13 +932,13 @@ mrb_value spec_problems_are_terminated(mrb_state *, mrb_value)
     return mrb_true_value();
 }
 
-mrb_value spec_spell_imf_fixdate(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_imf_fixdate(mrb_state *mrb, mrb_value)
 {
     mrb_int seconds = 0;
     mrb_get_args(mrb, "i", &seconds);
-    const auto spelled = http::spell_imf_fixdate(
+    const auto serialized = http::serialize_imf_fixdate(
         std::chrono::sys_seconds{std::chrono::seconds{static_cast<int64_t>(seconds)}});
-    return cpp_to_mrb_value(mrb, std::string_view(spelled.data(), spelled.size()));
+    return cpp_to_mrb_value(mrb, std::string_view(serialized.data(), serialized.size()));
 }
 
 mrb_value spec_date_is_required(mrb_state *mrb, mrb_value)
@@ -1128,11 +1128,11 @@ std::vector<std::string_view> spec_string_list(const mrb_value names)
     return texts;
 }
 
-mrb_value spec_spell_vary(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_vary(mrb_state *mrb, mrb_value)
 {
     mrb_value names = mrb_nil_value();
     mrb_get_args(mrb, "A", &names);
-    const auto got = http::spell_vary(spec_string_list(names));
+    const auto got = http::serialize_vary(spec_string_list(names));
     if (!got)
         return mrb_nil_value();
     if (!*got)
@@ -1140,17 +1140,17 @@ mrb_value spec_spell_vary(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, **got);
 }
 
-mrb_value spec_spell_accept_ranges(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_accept_ranges(mrb_state *mrb, mrb_value)
 {
     mrb_value units = mrb_nil_value();
     mrb_get_args(mrb, "A", &units);
-    const auto got = http::spell_accept_ranges(spec_string_list(units));
+    const auto got = http::serialize_accept_ranges(spec_string_list(units));
     if (!got)
         return mrb_nil_value();
     return cpp_to_mrb_value(mrb, *got);
 }
 
-mrb_value spec_spell_content_range(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_content_range(mrb_state *mrb, mrb_value)
 {
     const char *unit = nullptr;
     mrb_int length = 0;
@@ -1162,7 +1162,7 @@ mrb_value spec_spell_content_range(mrb_state *mrb, mrb_value)
         mrb_nil_p(complete_length)
             ? std::nullopt
             : std::optional<uint64_t>(static_cast<uint64_t>(mrb_integer(complete_length)));
-    const auto got = http::spell_content_range(
+    const auto got = http::serialize_content_range(
         std::string_view(unit, static_cast<size_t>(length)),
         http::ResolvedRange{static_cast<uint64_t>(first_pos), static_cast<uint64_t>(last_pos)},
         complete);
@@ -1171,14 +1171,14 @@ mrb_value spec_spell_content_range(mrb_state *mrb, mrb_value)
     return cpp_to_mrb_value(mrb, *got);
 }
 
-mrb_value spec_spell_unsatisfied_content_range(mrb_state *mrb, mrb_value)
+mrb_value spec_serialize_unsatisfied_content_range(mrb_state *mrb, mrb_value)
 {
     const char *unit = nullptr;
     mrb_int length = 0;
     mrb_int complete_length = 0;
     mrb_get_args(mrb, "si", &unit, &length, &complete_length);
     const auto got =
-        http::spell_unsatisfied_content_range(std::string_view(unit, static_cast<size_t>(length)),
+        http::serialize_unsatisfied_content_range(std::string_view(unit, static_cast<size_t>(length)),
                                               static_cast<uint64_t>(complete_length));
     if (!got)
         return mrb_nil_value();
@@ -1275,7 +1275,7 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "weight_of", spec_weight_of, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "media_type_weight", spec_media_type_weight,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "spell_accept_query", spec_spell_accept_query,
+    mrb_define_module_function(mrb, sp, "serialize_accept_query", spec_serialize_accept_query,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "date_is_a_validator?",
                                spec_modification_date_is_a_validator, MRB_ARGS_REQ(2));
@@ -1283,22 +1283,22 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "allowed_methods", spec_allowed_methods, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "every_expectation_is_understood",
                                spec_every_expectation_is_understood, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_allow", spec_spell_allow, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_retry_after_delay", spec_spell_retry_after_delay,
+    mrb_define_module_function(mrb, sp, "serialize_allow", spec_serialize_allow, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "serialize_retry_after_delay", spec_serialize_retry_after_delay,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_retry_after_date", spec_spell_retry_after_date,
+    mrb_define_module_function(mrb, sp, "serialize_retry_after_date", spec_serialize_retry_after_date,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "is_token68", spec_is_token68, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "parse_credentials", spec_parse_credentials,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_challenge", spec_spell_challenge, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "serialize_challenge", spec_serialize_challenge, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "status_properties", spec_status_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "method_properties", spec_method_properties,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems_terminated?", spec_problems_are_terminated,
                                MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, sp, "spell_imf_fixdate", spec_spell_imf_fixdate,
+    mrb_define_module_function(mrb, sp, "serialize_imf_fixdate", spec_serialize_imf_fixdate,
                                MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "date_required?", spec_date_is_required, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "field_combining", spec_field_combining, MRB_ARGS_REQ(1));
@@ -1328,13 +1328,13 @@ inline void http_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "if_range_passes", spec_if_range_passes, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "evaluate_preconditions", spec_evaluate_preconditions,
                                MRB_ARGS_REQ(2));
-    mrb_define_module_function(mrb, sp, "spell_vary", spec_spell_vary, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_accept_ranges", spec_spell_accept_ranges,
+    mrb_define_module_function(mrb, sp, "serialize_vary", spec_serialize_vary, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "serialize_accept_ranges", spec_serialize_accept_ranges,
                                MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, sp, "spell_content_range", spec_spell_content_range,
+    mrb_define_module_function(mrb, sp, "serialize_content_range", spec_serialize_content_range,
                                MRB_ARGS_REQ(4));
-    mrb_define_module_function(mrb, sp, "spell_unsatisfied_content_range",
-                               spec_spell_unsatisfied_content_range, MRB_ARGS_REQ(2));
+    mrb_define_module_function(mrb, sp, "serialize_unsatisfied_content_range",
+                               spec_serialize_unsatisfied_content_range, MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "parse_error", spec_parse_error, MRB_ARGS_REQ(3));
     mrb_define_module_function(mrb, sp, "parse_quoted_string", spec_parse_quoted_string,
                                MRB_ARGS_REQ(1));

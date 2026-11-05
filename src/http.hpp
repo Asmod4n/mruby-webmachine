@@ -81,7 +81,7 @@ inline constexpr std::array kProblems = std::to_array<Problem>({
     {"RFC 9110 8.3.1", "media-type", "A media type this resource provides is not valid",
      "type \"/\" subtype *( OWS \";\" OWS parameter ), type and subtype are tokens", 500},
     {"RFC 9651 4.1", "sf-item",
-     "A media type this resource provides cannot be spelled as a Structured Field",
+     "A media type this resource provides cannot be serialized as a Structured Field",
      "sf-token = ( ALPHA / \"*\" ) *( tchar / \":\" / \"/\" ); a string holds %x20-7E; a "
      "parameter key holds ( lcalpha / \"*\" ) *( lcalpha / DIGIT / \"_\" / \"-\" / \".\" / \"*\" )",
      500},
@@ -792,20 +792,20 @@ inline std::expected<std::string_view, Refusal> parse_quoted_string(const std::s
     return std::unexpected(Refusal{kQuotedStringProblem, static_cast<uint32_t>(text.size())});
 }
 
-inline std::expected<std::string, Refusal> spell_quoted_string(const std::string_view text)
+inline std::expected<std::string, Refusal> serialize_quoted_string(const std::string_view text)
 {
-    std::string spelled(1, '"');
+    std::string serialized(1, '"');
     for (size_t at = 0; at < text.size(); at++) {
         const char letter = text.at(at);
         if (letter == '"' || letter == '\\') {
-            spelled.push_back('\\');
+            serialized.push_back('\\');
         } else if (!is_qdtext(letter)) [[unlikely]] {
             return std::unexpected(Refusal{kQdtextProblem, static_cast<uint32_t>(at)});
         }
-        spelled.push_back(letter);
+        serialized.push_back(letter);
     }
-    spelled.push_back('"');
-    return spelled;
+    serialized.push_back('"');
+    return serialized;
 }
 
 struct Field {
@@ -1065,19 +1065,19 @@ parse_http_date(const std::string_view text, const std::chrono::year current_yea
     return fixdate;
 }
 
-inline std::array<char, kFixdateLength> spell_imf_fixdate(const std::chrono::sys_seconds moment)
+inline std::array<char, kFixdateLength> serialize_imf_fixdate(const std::chrono::sys_seconds moment)
 {
     const std::chrono::sys_days midnight = std::chrono::floor<std::chrono::days>(moment);
     const std::chrono::year_month_day date{midnight};
     const std::chrono::hh_mm_ss<std::chrono::seconds> time{moment - midnight};
     const unsigned year = static_cast<unsigned>(static_cast<int>(date.year()));
-    std::array<char, kFixdateLength> spelled{};
-    const auto put = [&spelled](const size_t at, const std::string_view text) {
-        std::ranges::copy(text, std::next(spelled.begin(), static_cast<ptrdiff_t>(at)));
+    std::array<char, kFixdateLength> serialized{};
+    const auto put = [&serialized](const size_t at, const std::string_view text) {
+        std::ranges::copy(text, std::next(serialized.begin(), static_cast<ptrdiff_t>(at)));
     };
-    const auto put_two = [&spelled](const size_t at, const unsigned value) {
+    const auto put_two = [&serialized](const size_t at, const unsigned value) {
         const std::array<char, 2> digits = two_digits(value);
-        std::ranges::copy(digits, std::next(spelled.begin(), static_cast<ptrdiff_t>(at)));
+        std::ranges::copy(digits, std::next(serialized.begin(), static_cast<ptrdiff_t>(at)));
     };
     put(0, kDayNames.at(std::chrono::weekday{midnight}.iso_encoding() - 1));
     put(kDayNames.front().size(), ", ");
@@ -1094,7 +1094,7 @@ inline std::array<char, kFixdateLength> spell_imf_fixdate(const std::chrono::sys
     put(kFixdateTimeAt + 5, ":");
     put_two(kFixdateTimeAt + 6, static_cast<unsigned>(time.seconds().count()));
     put(kFixdateZoneAt, " GMT");
-    return spelled;
+    return serialized;
 }
 
 constexpr bool date_is_required(const uint16_t status)
@@ -1396,9 +1396,9 @@ inline bool is_language_tag(const std::string_view text)
         const std::string_view subtag = rest.substr(0, hyphen);
         if (subtag.empty() || subtag.size() > 8) [[unlikely]]
             return false;
-        const bool spelled = primary ? std::ranges::all_of(subtag, is_alpha)
+        const bool serialized = primary ? std::ranges::all_of(subtag, is_alpha)
                                      : std::ranges::all_of(subtag, is_alphanum);
-        if (!spelled) [[unlikely]]
+        if (!serialized) [[unlikely]]
             return false;
         if (hyphen == std::string_view::npos)
             return true;
@@ -1490,26 +1490,26 @@ inline bool every_expectation_is_understood(const std::string_view field)
     return true;
 }
 
-inline std::string spell_allow(const std::span<const Method> allowed)
+inline std::string serialize_allow(const std::span<const Method> allowed)
 {
-    std::string spelled;
+    std::string serialized;
     for (const Method method : allowed) {
-        if (!spelled.empty())
-            spelled.append(", ");
-        spelled.append(method_name_of(method));
+        if (!serialized.empty())
+            serialized.append(", ");
+        serialized.append(method_name_of(method));
     }
-    return spelled;
+    return serialized;
 }
 
-inline std::string spell_retry_after(const std::chrono::seconds delay)
+inline std::string serialize_retry_after(const std::chrono::seconds delay)
 {
     return std::to_string(delay.count());
 }
 
-inline std::string spell_retry_after(const std::chrono::sys_seconds moment)
+inline std::string serialize_retry_after(const std::chrono::sys_seconds moment)
 {
-    const std::array<char, kFixdateLength> spelled = spell_imf_fixdate(moment);
-    return std::string(spelled.data(), spelled.size());
+    const std::array<char, kFixdateLength> serialized = serialize_imf_fixdate(moment);
+    return std::string(serialized.data(), serialized.size());
 }
 
 inline constexpr std::array<bool, 256> kToken68 = [] {
@@ -1537,20 +1537,20 @@ struct Credentials {
     std::string_view rest;
 };
 
-inline std::expected<std::string, Refusal> spell_challenge(const std::string_view auth_scheme,
+inline std::expected<std::string, Refusal> serialize_challenge(const std::string_view auth_scheme,
                                                            const std::string_view realm)
 {
     if (!is_token(auth_scheme)) [[unlikely]]
         return std::unexpected(Refusal{kTcharProblem, 0});
-    std::string spelled(auth_scheme);
+    std::string serialized(auth_scheme);
     if (realm.empty())
-        return spelled;
-    const auto quoted = spell_quoted_string(realm);
+        return serialized;
+    const auto quoted = serialize_quoted_string(realm);
     if (!quoted) [[unlikely]]
         return std::unexpected(quoted.error());
-    spelled.append(" realm=");
-    spelled.append(*quoted);
-    return spelled;
+    serialized.append(" realm=");
+    serialized.append(*quoted);
+    return serialized;
 }
 
 inline std::expected<Credentials, Refusal> parse_credentials(const std::string_view field)
@@ -1807,42 +1807,42 @@ constexpr bool is_structured_key(const std::string_view text)
     });
 }
 
-inline std::expected<std::string, Refusal> spell_structured_string(const std::string_view text)
+inline std::expected<std::string, Refusal> serialize_structured_string(const std::string_view text)
 {
-    std::string spelled(1, '"');
+    std::string serialized(1, '"');
     for (size_t at = 0; at < text.size(); at++) {
         const unsigned char byte = static_cast<unsigned char>(text.at(at));
         if (byte < 0x20 || byte > 0x7e) [[unlikely]]
             return std::unexpected(Refusal{kStructuredItemProblem, static_cast<uint32_t>(at)});
         if (byte == '"' || byte == '\\')
-            spelled.push_back('\\');
-        spelled.push_back(text.at(at));
+            serialized.push_back('\\');
+        serialized.push_back(text.at(at));
     }
-    spelled.push_back('"');
-    return spelled;
+    serialized.push_back('"');
+    return serialized;
 }
 
-inline std::expected<std::string, Refusal> spell_structured_item(const std::string_view text)
+inline std::expected<std::string, Refusal> serialize_structured_item(const std::string_view text)
 {
     if (is_structured_token(text))
         return std::string(text);
-    return spell_structured_string(text);
+    return serialize_structured_string(text);
 }
 
 inline std::expected<std::string, Refusal>
-spell_accept_query(const std::span<const MediaType> provided)
+serialize_accept_query(const std::span<const MediaType> provided)
 {
-    std::string spelled;
+    std::string serialized;
     for (const MediaType &media : provided) {
-        if (!spelled.empty())
-            spelled.append(", ");
+        if (!serialized.empty())
+            serialized.append(", ");
         std::string range(media.type);
         range.push_back('/');
         range.append(media.subtype);
-        const auto item = spell_structured_item(range);
+        const auto item = serialize_structured_item(range);
         if (!item) [[unlikely]]
             return std::unexpected(item.error());
-        spelled.append(*item);
+        serialized.append(*item);
         std::string_view rest = media.parameters;
         while (true) {
             const auto parameter = parse_field_value_parameter(rest);
@@ -1854,33 +1854,33 @@ spell_accept_query(const std::span<const MediaType> provided)
             const std::string key = ascii_lowered_copy((*parameter)->name);
             if (!is_structured_key(key)) [[unlikely]]
                 return std::unexpected(Refusal{kStructuredItemProblem, 0});
-            const auto value = spell_structured_item(unquoted_token((*parameter)->value));
+            const auto value = serialize_structured_item(unquoted_token((*parameter)->value));
             if (!value) [[unlikely]]
                 return std::unexpected(value.error());
-            spelled.push_back(';');
-            spelled.append(key);
-            spelled.push_back('=');
-            spelled.append(*value);
+            serialized.push_back(';');
+            serialized.append(key);
+            serialized.push_back('=');
+            serialized.append(*value);
             rest = (*parameter)->rest;
         }
     }
-    return spelled;
+    return serialized;
 }
 
 inline std::expected<std::optional<std::string>, Refusal>
-spell_vary(const std::span<const std::string_view> field_names)
+serialize_vary(const std::span<const std::string_view> field_names)
 {
     if (field_names.empty())
         return std::nullopt;
-    std::string spelled;
+    std::string serialized;
     for (const std::string_view field_name : field_names) {
         if (!is_token(field_name)) [[unlikely]]
             return std::unexpected(Refusal{kTcharProblem, 0});
-        if (!spelled.empty())
-            spelled.append(", ");
-        spelled.append(field_name);
+        if (!serialized.empty())
+            serialized.append(", ");
+        serialized.append(field_name);
     }
-    return spelled;
+    return serialized;
 }
 
 inline std::expected<std::optional<Chosen>, Refusal>
@@ -2125,49 +2125,49 @@ inline std::optional<ResolvedRange> resolved_range(const ByteRangeSpec spec,
 }
 
 inline std::expected<std::string, Refusal>
-spell_accept_ranges(const std::span<const std::string_view> range_units)
+serialize_accept_ranges(const std::span<const std::string_view> range_units)
 {
     if (range_units.empty())
         return std::string("none");
-    std::string spelled;
+    std::string serialized;
     for (const std::string_view range_unit : range_units) {
         if (!is_token(range_unit)) [[unlikely]]
             return std::unexpected(Refusal{kTcharProblem, 0});
-        if (!spelled.empty())
-            spelled.append(", ");
-        spelled.append(range_unit);
+        if (!serialized.empty())
+            serialized.append(", ");
+        serialized.append(range_unit);
     }
-    return spelled;
+    return serialized;
 }
 
 inline std::expected<std::string, Refusal>
-spell_content_range(const std::string_view range_unit, const ResolvedRange resolved,
+serialize_content_range(const std::string_view range_unit, const ResolvedRange resolved,
                     const std::optional<uint64_t> complete_length)
 {
     if (!is_token(range_unit)) [[unlikely]]
         return std::unexpected(Refusal{kTcharProblem, 0});
-    std::string spelled(range_unit);
-    spelled.push_back(' ');
-    spelled.append(std::to_string(resolved.first_pos));
-    spelled.push_back('-');
-    spelled.append(std::to_string(resolved.last_pos));
-    spelled.push_back('/');
+    std::string serialized(range_unit);
+    serialized.push_back(' ');
+    serialized.append(std::to_string(resolved.first_pos));
+    serialized.push_back('-');
+    serialized.append(std::to_string(resolved.last_pos));
+    serialized.push_back('/');
     if (complete_length)
-        spelled.append(std::to_string(*complete_length));
+        serialized.append(std::to_string(*complete_length));
     else
-        spelled.push_back('*');
-    return spelled;
+        serialized.push_back('*');
+    return serialized;
 }
 
 inline std::expected<std::string, Refusal>
-spell_unsatisfied_content_range(const std::string_view range_unit, const uint64_t complete_length)
+serialize_unsatisfied_content_range(const std::string_view range_unit, const uint64_t complete_length)
 {
     if (!is_token(range_unit)) [[unlikely]]
         return std::unexpected(Refusal{kTcharProblem, 0});
-    std::string spelled(range_unit);
-    spelled.append(" */");
-    spelled.append(std::to_string(complete_length));
-    return spelled;
+    std::string serialized(range_unit);
+    serialized.append(" */");
+    serialized.append(std::to_string(complete_length));
+    return serialized;
 }
 
 constexpr bool is_status(const uint16_t status)
