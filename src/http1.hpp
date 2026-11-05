@@ -22,6 +22,9 @@ inline constexpr uint16_t kStartLineProblem = 28;
 inline constexpr uint16_t kNotWholeYet = 29;
 inline constexpr uint16_t kUriTooLong = 30;
 inline constexpr uint16_t kRequestHeaderFieldsTooLarge = 31;
+inline constexpr uint16_t kTransferEncodingProblem = 32;
+inline constexpr uint16_t kLengthRequired = 33;
+inline constexpr uint16_t kContentTooLarge = 34;
 
 inline constexpr size_t kMostRequestLineBytes = 8000;
 inline constexpr size_t kMostHeaderSectionBytes = 8192;
@@ -43,6 +46,10 @@ struct Request {
     size_t bytes;
     std::string_view host;
     uint32_t host_field_lines;
+    uint64_t content_length;
+    uint32_t content_length_field_lines;
+    std::string_view transfer_encoding;
+    uint32_t transfer_encoding_field_lines;
 };
 
 constexpr std::expected<RequestLine, http::Refusal>
@@ -70,6 +77,14 @@ parse_request_line(const std::string_view line)
 
 
 
+constexpr std::string_view without_ows(const std::string_view text)
+{
+    const size_t first = text.find_first_not_of(" \t");
+    if (first == std::string_view::npos)
+        return text.substr(text.size());
+    return text.substr(first, text.find_last_not_of(" \t") + 1 - first);
+}
+
 constexpr std::expected<FieldLine, http::Refusal> parse_field_line(const std::string_view line)
 {
     const size_t colon = line.find(':');
@@ -78,10 +93,7 @@ constexpr std::expected<FieldLine, http::Refusal> parse_field_line(const std::st
     const std::string_view field_name = line.substr(0, colon);
     if (!http::is_token(field_name)) [[unlikely]]
         return std::unexpected(http::Refusal{kFieldLineProblem, 0});
-    const std::string_view after = line.substr(colon + 1);
-    const size_t first = after.find_first_not_of(" \t");
-    if (first == std::string_view::npos) return FieldLine{field_name, after.substr(after.size())};
-    return FieldLine{field_name, after.substr(first, after.find_last_not_of(" \t") + 1 - first)};
+    return FieldLine{field_name, without_ows(line.substr(colon + 1))};
 }
 
 constexpr bool is_refused_in_field_lines(const char letter)
@@ -175,6 +187,10 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
     size_t at = fields_from;
     std::string_view host;
     uint32_t host_field_lines = 0;
+    uint64_t content_length = 0;
+    uint32_t content_length_field_lines = 0;
+    std::string_view transfer_encoding;
+    uint32_t transfer_encoding_field_lines = 0;
     for (;;) {
         const size_t ends = asked.find('\n', at);
         if (ends == std::string_view::npos) [[unlikely]]
@@ -187,7 +203,11 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
             if (!field_lines_are_valid(field_lines)) [[unlikely]]
                 return std::unexpected(http::Refusal{
                     kFieldLineProblem, static_cast<uint32_t>(fields_from) + first_refused_in_field_lines(field_lines)});
-            return Request{*line, field_lines, ends + 1, host, host_field_lines};
+            return Request{*line,          field_lines,
+                           ends + 1,       host,
+                           host_field_lines, content_length,
+                           content_length_field_lines, transfer_encoding,
+                           transfer_encoding_field_lines};
         }
         if (ends + 1 - fields_from > kMostHeaderSectionBytes) [[unlikely]]
             return std::unexpected(http::Refusal{kRequestHeaderFieldsTooLarge, 0});
@@ -196,9 +216,20 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
         const std::expected<FieldLine, http::Refusal> field = parse_field_line(asked.substr(at, ends - 1 - at));
         if (!field) [[unlikely]]
             return std::unexpected(http::moved_forward(field.error(), at));
-        if (field->field_name.size() == 4 && http::equal_ignoring_case(field->field_name, "Host")) {
+        if (http::equal_ignoring_case(field->field_name, "Host")) {
             host = field->field_value;
             host_field_lines++;
+        } else if (http::equal_ignoring_case(field->field_name, "Content-Length")) {
+            const std::expected<uint64_t, http::Refusal> length = http::parse_content_length_list(field->field_value);
+            if (!length) [[unlikely]]
+                return std::unexpected(http::moved_forward(length.error(), at));
+            if (content_length_field_lines > 0 && *length != content_length) [[unlikely]]
+                return std::unexpected(http::Refusal{http::kContentLengthProblem, static_cast<uint32_t>(at)});
+            content_length = *length;
+            content_length_field_lines++;
+        } else if (http::equal_ignoring_case(field->field_name, "Transfer-Encoding")) {
+            transfer_encoding = field->field_value;
+            transfer_encoding_field_lines++;
         }
         seen(*field);
         at = ends + 1;
@@ -239,6 +270,36 @@ constexpr std::expected<std::optional<http::Host>, http::Refusal> parse_host_fie
     if (!host) [[unlikely]]
         return std::unexpected(host.error());
     return *host;
+}
+
+constexpr std::optional<uint64_t> content_length_of(const Request &request)
+{
+    if (request.content_length_field_lines == 0)
+        return std::nullopt;
+    return request.content_length;
+}
+
+constexpr std::string_view final_transfer_coding_of(const std::string_view transfer_encoding)
+{
+    const size_t comma = transfer_encoding.rfind(',');
+    const std::string_view coding =
+        comma == std::string_view::npos ? transfer_encoding : transfer_encoding.substr(comma + 1);
+    return without_ows(coding.substr(0, coding.find(';')));
+}
+
+constexpr std::expected<uint64_t, http::Refusal> parse_message_body_length(const Request &request,
+                                                                          const uint64_t most_content_bytes)
+{
+    if (request.transfer_encoding_field_lines > 0) [[unlikely]] {
+        if (request.request_line.http_version == "HTTP/1.0")
+            return std::unexpected(http::Refusal{kTransferEncodingProblem, 0});
+        if (http::equal_ignoring_case(final_transfer_coding_of(request.transfer_encoding), "chunked"))
+            return std::unexpected(http::Refusal{kLengthRequired, 0});
+        return std::unexpected(http::Refusal{kTransferEncodingProblem, 0});
+    }
+    if (request.content_length > most_content_bytes) [[unlikely]]
+        return std::unexpected(http::Refusal{kContentTooLarge, 0});
+    return request.content_length;
 }
 
 } // namespace http1

@@ -191,7 +191,7 @@ made(const std::span<char> room, const Today &today, const uint16_t status, cons
     Spelled out(room);
     spelled_head(out, today, status, content_type, body.size(), extra_fields);
     if (!head) out.add(body);
-    return {out.size(), {}, held, taken, false};
+    return {out.size(), {}, held, taken, false, false};
 }
 
 inline constexpr size_t kSendBodyWithoutCopyAbove = 4096;
@@ -245,9 +245,9 @@ stored_made(const std::span<char> room, Heads &heads, const Today &today, const 
     Spelled out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
-        return {out.size(), head ? std::string_view{} : body, held, taken, false};
+        return {out.size(), head ? std::string_view{} : body, held, taken, false, false};
     out.add(body);
-    return {out.size(), {}, held, taken, false};
+    return {out.size(), {}, held, taken, false, false};
 }
 
 inline wm::Answered
@@ -257,9 +257,9 @@ constant_made(const std::span<char> room, Heads &heads, const Today &today, cons
     Spelled out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
-        return {out.size(), head ? std::string_view{} : body, nullptr, taken, false};
+        return {out.size(), head ? std::string_view{} : body, nullptr, taken, false, false};
     out.add(body);
-    return {out.size(), {}, nullptr, taken, false};
+    return {out.size(), {}, nullptr, taken, false, false};
 }
 
 inline constexpr std::string_view kAppName = "webmachine-serve";
@@ -497,12 +497,15 @@ the_writer_stands(const std::filesystem::path &writer_path, const std::filesyste
 
 
 inline constexpr std::string_view kConnectionClose = "Connection: close\r\n";
+inline constexpr uint64_t kMostContentBytes = uint64_t{1} << 20;
 
 constexpr uint16_t status_of(const http::Refusal refusal)
 {
     switch (refusal.problem) {
         case http1::kUriTooLong: return 414;
         case http1::kRequestHeaderFieldsTooLarge: return 431;
+        case http1::kLengthRequired: return 411;
+        case http1::kContentTooLarge: return 413;
         default: return 400;
     }
 }
@@ -515,6 +518,7 @@ refused(const std::span<char> room, const Today &today, const http::Refusal refu
                              problem::text_of(problem::details_of(status)).value_or(""), false, kConnectionClose,
                              nullptr, bytes);
     said.closes = true;
+    said.refused = true;
     return said;
 }
 
@@ -522,7 +526,7 @@ refused(const std::span<char> room, const Today &today, const http::Refusal refu
 not_answered(const std::string_view asked, const std::span<char> room, const Today &today,
              const http::Refusal refusal)
 {
-    if (refusal.problem == http1::kNotWholeYet) return {0, {}, nullptr, 0, false};
+    if (refusal.problem == http1::kNotWholeYet) return {0, {}, nullptr, 0, false, false};
     const size_t bytes = http1::bytes_before_the_body(asked);
     return refused(room, today, refusal, bytes != 0 ? bytes : asked.size());
 }
@@ -537,9 +541,14 @@ answered(const std::string_view asked, const std::span<char> room, Cache &c, con
     if (!request) [[unlikely]] return not_answered(asked, room, today, request.error());
     const auto host = http1::parse_host_field(*request);
     if (!host) [[unlikely]] return refused(room, today, host.error(), request->bytes);
+    const auto body = http1::parse_message_body_length(*request, kMostContentBytes);
+    if (!body) [[unlikely]] return refused(room, today, body.error(), request->bytes);
     facts.method = request->request_line.method;
     facts.request_target = request->request_line.request_target;
-    return answer_to(*request, facts, c, today, room);
+    facts.content_length = http1::content_length_of(*request);
+    wm::Answered said = answer_to(*request, facts, c, today, room);
+    if (*body > 0) [[unlikely]] said.closes = true;
+    return said;
 }
 
 }

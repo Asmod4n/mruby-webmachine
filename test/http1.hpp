@@ -69,6 +69,22 @@ mrb_value spec_http1_field_line_forms_disagree(mrb_state *mrb, mrb_value)
     return mrb_fixnum_value(disagree);
 }
 
+mrb_value spec_http1_parse_message_body_length(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_int most = 0;
+    mrb_get_args(mrb, "si", &text, &length, &most);
+    const Padded padded(text, length);
+    const auto request = http1::parse_request(padded.view());
+    if (!request)
+        return spec_http1_refusal(mrb, request.error());
+    const auto got = http1::parse_message_body_length(*request, static_cast<uint64_t>(most));
+    if (!got)
+        return spec_http1_refusal(mrb, got.error());
+    return cpp_to_mrb_value(mrb, *got);
+}
+
 mrb_value spec_http1_problems(mrb_state *mrb, mrb_value)
 {
     const mrb_value all = mrb_hash_new(mrb);
@@ -81,6 +97,10 @@ mrb_value spec_http1_problems(mrb_state *mrb, mrb_value)
     named("uri_too_long", http1::kUriTooLong);
     named("request_header_fields_too_large", http1::kRequestHeaderFieldsTooLarge);
     named("host", http::kHostProblem);
+    named("content_length", http::kContentLengthProblem);
+    named("transfer_encoding", http1::kTransferEncodingProblem);
+    named("length_required", http1::kLengthRequired);
+    named("content_too_large", http1::kContentTooLarge);
     named("port", http::kPortProblem);
     return all;
 }
@@ -102,6 +122,8 @@ inline void http1_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_host_field", spec_http1_parse_host_field, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "field_line_forms_disagree", spec_http1_field_line_forms_disagree,
                                MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "parse_message_body_length", spec_http1_parse_message_body_length,
+                               MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "problems", spec_http1_problems, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "limits", spec_http1_limits, MRB_ARGS_NONE());
 }

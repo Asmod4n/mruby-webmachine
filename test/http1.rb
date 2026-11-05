@@ -114,3 +114,64 @@ end
 assert('an HTTP/1.0 request without Host has no host and is not refused') do
   assert_nil H1.parse_host_field("GET / HTTP/1.0\r\n\r\n")
 end
+
+def h1_body_length(lines, most = 1000, version = 'HTTP/1.1')
+  H1.parse_message_body_length("POST / #{version}\r\nHost: a\r\n#{lines}\r\n", most)
+end
+
+# RFC 9112 6.3 item 7: a request with neither Transfer-Encoding nor
+# Content-Length has a message body length of zero.
+assert('a request without Content-Length and Transfer-Encoding has no body') do
+  assert_equal 0, h1_body_length('')
+end
+
+# RFC 9112 6.3 item 6: a valid Content-Length is the message body length.
+# RFC 9110 8.6: Content-Length = 1*DIGIT, and a list of one value
+# repeated may stand for that value.
+assert('a valid Content-Length is the message body length') do
+  assert_equal 5, h1_body_length("Content-Length: 5\r\n")
+  assert_equal 5, h1_body_length("Content-Length: 005\r\n")
+  assert_equal 5, h1_body_length("Content-Length: 5, 5\r\n")
+  assert_equal 5, h1_body_length("Content-Length: 5\r\nContent-Length: 5\r\n")
+  assert_equal 0, h1_body_length("Content-Length: 0\r\n")
+end
+
+# RFC 9112 6.3 item 5: an invalid Content-Length, or several with values
+# that differ, is an unrecoverable error, and the server answers 400.
+assert('an invalid Content-Length or two that differ are refused') do
+  ['+5', '-1', '5a', '', ' ', '18446744073709551616', '5, 6', '0x5'].each do |value|
+    assert_equal PROBLEM[:content_length], h1_body_length("Content-Length: #{value}\r\n")[0], value.inspect
+  end
+  assert_equal PROBLEM[:content_length], h1_body_length("Content-Length: 5\r\nContent-Length: 6\r\n")[0]
+end
+
+# RFC 9110 15.5.14: 413 for content larger than the server will process.
+assert('a Content-Length above the limit of the server is refused with the problem of 413') do
+  assert_equal 1000, h1_body_length("Content-Length: 1000\r\n")
+  assert_equal [PROBLEM[:content_too_large], 0], h1_body_length("Content-Length: 1001\r\n")
+end
+
+# RFC 9112 6.3 item 4: a Transfer-Encoding whose final coding is not
+# chunked MUST be answered with 400. This server reads no chunked body,
+# so a final chunked coding needs a length: 411 (RFC 9110 15.5.12).
+assert('a Transfer-Encoding is refused with 400, or with 411 when its final coding is chunked') do
+  assert_equal [PROBLEM[:length_required], 0], h1_body_length("Transfer-Encoding: chunked\r\n")
+  assert_equal [PROBLEM[:length_required], 0], h1_body_length("Transfer-Encoding: gzip, Chunked\r\n")
+  assert_equal [PROBLEM[:length_required], 0], h1_body_length("Transfer-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n")
+  assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: gzip\r\n")
+  assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: chunked, gzip\r\n")
+  assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: chunked\r\nTransfer-Encoding: gzip\r\n")
+end
+
+# RFC 9112 6.1: Transfer-Encoding overrides Content-Length, and a server
+# MAY reject a message with both; it closes the connection after it.
+assert('Transfer-Encoding with Content-Length is refused as the Transfer-Encoding row says') do
+  assert_equal [PROBLEM[:length_required], 0], h1_body_length("Content-Length: 5\r\nTransfer-Encoding: chunked\r\n")
+  assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: gzip\r\nContent-Length: 5\r\n")
+end
+
+# RFC 9112 6.1: a server MUST treat an HTTP/1.0 message with
+# Transfer-Encoding as having faulty framing.
+assert('an HTTP/1.0 request with Transfer-Encoding is refused with 400') do
+  assert_equal [PROBLEM[:transfer_encoding], 0], h1_body_length("Transfer-Encoding: chunked\r\n", 1000, 'HTTP/1.0')
+end

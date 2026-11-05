@@ -133,6 +133,32 @@ class ServeTest < Minitest::Test
     assert_equal ['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request'], answers.map(&:first)
   end
 
+  # RFC 9112 6.3 item 6: the body of a request is Content-Length bytes,
+  # and what follows it is the next request. Until this server reads
+  # bodies, it answers a request with a body and closes, so the body is
+  # never read as a request.
+  def test_a_body_is_never_read_as_a_request
+    smuggled = HELLO
+    answers, = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{smuggled.bytesize}\r\n\r\n#{smuggled}")
+    assert_equal 1, answers.size
+    answers, = refused_and_closed("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc#{HELLO}")
+    assert_equal ['HTTP/1.1 200 OK'], answers.map(&:first)
+  end
+
+  # RFC 9112 6.1: a chunked body is not read here, so the request gets
+  # 411 and the bytes after it get no answer.
+  def test_a_chunked_request_gets_411_and_the_connection_closes
+    answers, = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n" \
+                                  "#{HELLO.bytesize.to_s(16)}\r\n#{HELLO}\r\n0\r\n\r\n#{HELLO}")
+    assert_equal ['HTTP/1.1 411 Length Required'], answers.map(&:first)
+  end
+
+  # RFC 9110 15.5.14: a body above the limit of the server gets 413.
+  def test_a_body_above_the_limit_gets_413
+    answers, = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{(1 << 20) + 1}\r\n\r\n")
+    assert_equal ['HTTP/1.1 413 Content Too Large'], answers.map(&:first)
+  end
+
   # RFC 9112 3.2 asks for Host in HTTP/1.1 only.
   def test_an_http_1_0_request_without_host_is_answered
     assert_equal 'HTTP/1.1 200 OK', ask("GET /hello HTTP/1.0\r\n\r\n").first.first

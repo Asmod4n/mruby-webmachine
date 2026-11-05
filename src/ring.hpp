@@ -73,6 +73,7 @@ struct Answered {
     const void *held;
     size_t taken;
     bool closes;
+    bool refused;
 };
 
 class QueueIsFull : public std::runtime_error
@@ -725,6 +726,7 @@ class Ring
             const size_t area = in_the_buffer ? kBufferBytes - took_bytes : kAnswerBytes;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
             bool answered = false;
+            bool closing = false;
             bool refused = false;
             while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
                 const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
@@ -742,22 +744,20 @@ class Ring
                 left.remove_prefix(said.taken);
                 answered = true;
                 if (said.closes) {
-                    refused = true;
+                    closing = true;
+                    refused = said.refused;
                     break;
                 }
             }
-            if (refused) {
+            if (answered && owed.connection.http != http1::State::response) {
                 if (owed.connection.http == http1::State::persistent)
                     owed.connection.moves_to(http1::State::header_section);
-                if (owed.connection.http == http1::State::header_section)
-                    owed.connection.moves_to(http1::State::client_error);
-                owed.connection.moves_to(http1::State::tear_down);
-            } else if (answered && owed.connection.http != http1::State::response) {
-                if (owed.connection.http == http1::State::persistent)
-                    owed.connection.moves_to(http1::State::header_section);
-                owed.connection.moves_to(http1::State::dispatch);
-                owed.connection.moves_to(http1::State::response);
+                owed.connection.moves_to(refused ? http1::State::client_error : http1::State::dispatch);
+                if (!refused)
+                    owed.connection.moves_to(http1::State::response);
             }
+            if (closing)
+                owed.connection.moves_to(http1::State::tear_down);
             if (in_the_buffer && owed.first != owed.pieces) {
                 owed.bid = static_cast<uint16_t>(which);
             } else {

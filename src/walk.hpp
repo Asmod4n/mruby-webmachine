@@ -29,7 +29,7 @@ struct Facts {
     std::string_view if_none_match;
     std::string_view if_modified_since;
     std::string_view content_type;
-    std::string_view content_length;
+    std::optional<uint64_t> content_length;
     std::string_view authorization;
     std::chrono::year current_year;
 };
@@ -67,7 +67,7 @@ struct FactField {
     std::string_view Facts::*member;
 };
 
-inline constexpr std::array<FactField, 10> kFactFields = {{
+inline constexpr std::array<FactField, 9> kFactFields = {{
     {"Accept", &Facts::accept},
     {"Accept-Language", &Facts::accept_language},
     {"Accept-Encoding", &Facts::accept_encoding},
@@ -76,7 +76,6 @@ inline constexpr std::array<FactField, 10> kFactFields = {{
     {"If-None-Match", &Facts::if_none_match},
     {"If-Modified-Since", &Facts::if_modified_since},
     {"Content-Type", &Facts::content_type},
-    {"Content-Length", &Facts::content_length},
     {"Authorization", &Facts::authorization},
 }};
 
@@ -98,6 +97,7 @@ facts_of(const http1::Request &request, const std::chrono::year current_year)
     facts.method = request.request_line.method;
     facts.request_target = request.request_line.request_target;
     facts.current_year = current_year;
+    facts.content_length = http1::content_length_of(request);
     std::string_view left = request.field_lines;
     while (!left.empty()) {
         const size_t ends = left.find("\r\n");
@@ -124,16 +124,6 @@ entity_tag_of(const Resource &resource, const http1::Request &request)
     const auto tag = http::parse_entity_tag(spelled);
     if (!tag) [[unlikely]] return std::nullopt;
     return *tag;
-}
-
-inline std::optional<uint64_t>
-content_length_of(const std::string_view field_value)
-{
-    if (!is_present(field_value)) return std::nullopt;
-    uint64_t length = 0;
-    const auto [end, error] = std::from_chars(field_value.data(), field_value.data() + field_value.size(), length);
-    if (error != std::errc{} || end != field_value.data() + field_value.size()) [[unlikely]] return std::nullopt;
-    return length;
 }
 
 template <class Resource> class Walk
@@ -218,7 +208,7 @@ template <class Resource> class Walk
             case Node::kB7: return r.forbidden(q);
             case Node::kB6: return r.valid_content_headers(q);
             case Node::kB5: return !is_present(f.content_type) || r.known_content_type(f.content_type);
-            case Node::kB4: return r.valid_entity_length(content_length_of(f.content_length));
+            case Node::kB4: return r.valid_entity_length(f.content_length);
             case Node::kB3: return f.method == http::Method::kOptions;
             case Node::kC3: {
                 if (is_present(f.accept)) return true;
