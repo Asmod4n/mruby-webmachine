@@ -57,6 +57,7 @@ struct Request {
     uint32_t transfer_encoding_field_lines;
     bool close;
     bool keep_alive;
+    bool expect_continue;
 };
 
 constexpr std::expected<RequestLine, http::Refusal>
@@ -267,6 +268,7 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
     uint32_t transfer_encoding_field_lines = 0;
     bool close = false;
     bool keep_alive = false;
+    bool expect_continue = false;
     for (;;) {
         const size_t ends = asked.find('\n', at);
         if (ends == std::string_view::npos) [[unlikely]]
@@ -284,7 +286,7 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
                            host_field_lines, content_length,
                            content_length_field_lines, transfer_encoding,
                            transfer_encoding_field_lines, close,
-                           keep_alive};
+                           keep_alive,     expect_continue};
         }
         if (ends + 1 - fields_from > kMostHeaderSectionBytes) [[unlikely]]
             return std::unexpected(http::Refusal{kRequestHeaderFieldsTooLarge, 0});
@@ -304,6 +306,12 @@ constexpr std::expected<Request, http::Refusal> parse_request(const std::string_
                 return std::unexpected(http::Refusal{http::kContentLengthProblem, static_cast<uint32_t>(at)});
             content_length = *length;
             content_length_field_lines++;
+        } else if (http::equal_ignoring_case(field->field_name, "Expect")) {
+            std::string_view expectations = field->field_value;
+            while (const std::optional<http::ListElement> expectation = http::parse_list_element(expectations)) {
+                expect_continue = expect_continue || http::equal_ignoring_case(expectation->element, "100-continue");
+                expectations = expectation->rest;
+            }
         } else if (http::equal_ignoring_case(field->field_name, "Connection")) {
             std::string_view options = field->field_value;
             while (const std::optional<http::ListElement> option = http::parse_list_element(options)) {

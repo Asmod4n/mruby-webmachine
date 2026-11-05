@@ -78,6 +78,7 @@ struct Answered {
     size_t taken;
     bool closes;
     bool refused;
+    uint64_t drops;
 };
 
 class QueueIsFull : public std::runtime_error
@@ -103,10 +104,11 @@ enum class Waiting : uint8_t {
     header,
     send,
     idle,
+    body,
     nothing,
 };
 
-inline constexpr size_t kWaitingKinds = 3;
+inline constexpr size_t kWaitingKinds = 4;
 inline constexpr uint16_t kBadRequest = 400;
 inline constexpr uint16_t kRequestTimeout = 408;
 
@@ -342,6 +344,7 @@ class Ring
         uint32_t pieces;
         uint32_t helds;
         uint16_t running;
+        uint64_t dropping;
         std::array<iovec, kPiecesMost> piece;
         std::array<const void *, kHeldMost> held;
         msghdr message;
@@ -462,6 +465,7 @@ class Ring
             case Waiting::header: return static_cast<uint32_t>(timeouts_.header.count());
             case Waiting::send: return static_cast<uint32_t>(timeouts_.send.count());
             case Waiting::idle: return static_cast<uint32_t>(timeouts_.idle.count());
+            case Waiting::body: return static_cast<uint32_t>(timeouts_.body.count());
             default: throw std::logic_error("a deadline for no kind of waiting");
         }
     }
@@ -490,7 +494,9 @@ class Ring
         const Owed &owed = owed_.at(file_index);
         if (owed.runs(Doing::kSending) || !owed.connection.reads())
             return;
-        if (rests_.at(file_index).needs_more)
+        if (owed.dropping > 0)
+            waits_for(file_index, Waiting::body);
+        else if (rests_.at(file_index).needs_more)
             waits_for(file_index, Waiting::header);
         else if (owed.connection.http == http1::State::persistent)
             waits_for(file_index, Waiting::idle);
@@ -519,7 +525,8 @@ class Ring
         Owed &owed = owed_.at(file_index);
         if (kind == Waiting::send)
             return owed.connection.drains() ? ends_the_linger(file_index) : closes(file_index, released, -ETIMEDOUT);
-        if (kind == Waiting::idle || rests_.at(file_index).size == 0 || owed.runs(Doing::kSending))
+        if (kind == Waiting::idle || kind == Waiting::body || rests_.at(file_index).size == 0 ||
+            owed.runs(Doing::kSending))
             return closes(file_index, released, 0);
         return answers_a_refusal(file_index, kRequestTimeout, refusing, released);
     }
@@ -684,6 +691,13 @@ class Ring
             owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())), said.body.size());
             left.remove_prefix(said.taken);
             answered = true;
+            if (said.drops > 0) {
+                const size_t skipped = static_cast<size_t>(std::min<uint64_t>(said.drops, left.size()));
+                left.remove_prefix(skipped);
+                owed.dropping = said.drops - skipped;
+                if (owed.dropping > 0)
+                    break;
+            }
             if (said.closes) {
                 closing = true;
                 refused = said.refused;
@@ -811,7 +825,18 @@ class Ring
             if (which >= kBufferCount || took_bytes > pool) [[unlikely]]
                 return closes(file_index, released, -EIO);
             const std::span<std::byte> bundle = room_map_->all_and_its_start_again().subspan(from, took_bytes);
-            const std::string_view received(reinterpret_cast<const char *>(bundle.data()), bundle.size());
+            std::string_view received(reinterpret_cast<const char *>(bundle.data()), bundle.size());
+            if (owed.dropping > 0) {
+                const size_t skipped = static_cast<size_t>(std::min<uint64_t>(owed.dropping, received.size()));
+                received.remove_prefix(skipped);
+                owed.dropping -= skipped;
+                if (received.empty()) {
+                    waits_after_the_answers(file_index);
+                    if (last)
+                        armed += receives(file_index);
+                    return armed;
+                }
+            }
             Rest &rest = rests_.at(file_index);
             std::string_view asked = received;
             bool fits = true;

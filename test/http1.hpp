@@ -106,6 +106,18 @@ mrb_value spec_http1_is_persistent(mrb_state *mrb, mrb_value)
     return mrb_bool_value(http1::is_persistent(*request));
 }
 
+mrb_value spec_http1_expects_continue(mrb_state *mrb, mrb_value)
+{
+    const char *text = nullptr;
+    mrb_int length = 0;
+    mrb_get_args(mrb, "s", &text, &length);
+    const Padded padded(text, length);
+    const auto request = http1::parse_request(padded.view());
+    if (!request)
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "the request does not parse");
+    return mrb_bool_value(request->expect_continue);
+}
+
 mrb_value spec_http1_problems(mrb_state *mrb, mrb_value)
 {
     const mrb_value all = mrb_hash_new(mrb);
@@ -146,6 +158,7 @@ inline void http1_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "parse_message_body_length", spec_http1_parse_message_body_length,
                                MRB_ARGS_REQ(2));
     mrb_define_module_function(mrb, sp, "persistent?", spec_http1_is_persistent, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, sp, "expects_continue?", spec_http1_expects_continue, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "problems", spec_http1_problems, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, sp, "limits", spec_http1_limits, MRB_ARGS_NONE());
 }

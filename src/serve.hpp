@@ -196,7 +196,7 @@ made(const std::span<char> room, const Today &today, const uint16_t status, cons
     Serialized out(room);
     serialized_head(out, today, status, content_type, body.size(), extra_fields, connection);
     if (!head) out.add(body);
-    return {out.size(), {}, held, taken, false, false};
+    return {out.size(), {}, held, taken, false, false, 0};
 }
 
 inline constexpr size_t kSendBodyWithoutCopyAbove = 4096;
@@ -250,9 +250,9 @@ stored_made(const std::span<char> room, Heads &heads, const Today &today, const 
     Serialized out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
-        return {out.size(), head ? std::string_view{} : body, held, taken, false, false};
+        return {out.size(), head ? std::string_view{} : body, held, taken, false, false, 0};
     out.add(body);
-    return {out.size(), {}, held, taken, false, false};
+    return {out.size(), {}, held, taken, false, false, 0};
 }
 
 inline wm::Answered
@@ -263,9 +263,9 @@ constant_made(const std::span<char> room, Heads &heads, const Today &today, cons
     Serialized out(room);
     head_added(out, heads, today, 200, content_type, body.size(), vary, connection);
     if (head || body.size() > kSendBodyWithoutCopyAbove)
-        return {out.size(), head ? std::string_view{} : body, nullptr, taken, false, false};
+        return {out.size(), head ? std::string_view{} : body, nullptr, taken, false, false, 0};
     out.add(body);
-    return {out.size(), {}, nullptr, taken, false, false};
+    return {out.size(), {}, nullptr, taken, false, false, 0};
 }
 
 inline constexpr std::string_view kAppName = "webmachine-serve";
@@ -538,7 +538,7 @@ refused(const std::span<char> room, const Today &today, const uint16_t status, c
 not_answered(const std::string_view asked, const std::span<char> room, const Today &today,
              const http::Refusal refusal)
 {
-    if (refusal.problem == http1::kNotWholeYet) return {0, {}, nullptr, 0, false, false};
+    if (refusal.problem == http1::kNotWholeYet) return {0, {}, nullptr, 0, false, false, 0};
     const size_t bytes = http1::bytes_before_the_body(asked);
     return refused(room, today, status_of(refusal), bytes != 0 ? bytes : asked.size());
 }
@@ -558,11 +558,13 @@ answered(const std::string_view asked, const std::span<char> room, Cache &c, con
     facts.method = request->request_line.method;
     facts.request_target = request->request_line.request_target;
     facts.content_length = http1::content_length_of(*request);
-    const bool persistent = http1::is_persistent(*request) && *body == 0;
     const bool http_1_0 = request->request_line.http_version == "HTTP/1.0";
+    const bool body_not_wanted_yet = request->expect_continue && !http_1_0 && *body > 0;
+    const bool persistent = http1::is_persistent(*request) && !body_not_wanted_yet;
     const std::string_view connection = !persistent ? kConnectionClose : http_1_0 ? kConnectionKeepAlive : "";
     wm::Answered said = answer_to(*request, facts, c, today, connection, room);
     said.closes = !persistent;
+    said.drops = persistent ? *body : 0;
     return said;
 }
 

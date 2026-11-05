@@ -154,16 +154,49 @@ class ServeTest < Minitest::Test
   end
 
   # RFC 9112 6.3 item 6: the body of a request is Content-Length bytes,
-  # and what follows it is the next request. Until this server reads
-  # bodies, it answers a request with a body and closes, so the body is
-  # never read as a request.
-  def test_a_body_is_never_read_as_a_request
+  # and what follows it is the next request. The server answers on the
+  # head, then reads the body and drops it, so a body is never read as a
+  # request, and the connection persists.
+  def test_a_body_is_dropped_and_the_request_after_it_is_answered
     smuggled = HELLO
-    answers, got = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{smuggled.bytesize}\r\n\r\n#{smuggled}")
-    assert_equal 1, answers.size
+    first = "POST /hello HTTP/1.1\r\nHost: x\r\nContent-Length: #{smuggled.bytesize}\r\n\r\n#{smuggled}"
+    answers = ask(first + HELLO)
+    assert_equal 2, answers.size, answers.inspect
+    assert_equal 'HTTP/1.1 200 OK', answers.last.first
+    answers = ask("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc#{HELLO}")
+    assert_equal ['HTTP/1.1 200 OK'] * 2, answers.map(&:first)
+  end
+
+  # A body that arrives in pieces after the answer is dropped piece by
+  # piece; the request after it is answered.
+  def test_a_body_in_pieces_is_dropped
+    socket = UNIXSocket.new(@path)
+    socket.write("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 10000\r\n\r\n#{'a' * 3000}")
+    sleep 0.1
+    socket.write('b' * 4000)
+    sleep 0.1
+    socket.write('c' * 3000 + HELLO)
+    assert_equal ['HTTP/1.1 200 OK'] * 2, answers_of(read_for_a_while(socket)).map(&:first)
+  ensure
+    socket&.close
+  end
+
+  # RFC 9110 10.1.1: a server that does not want the body yet may answer
+  # with a final status and no 100. It then closes, so a body the client
+  # sends anyway is never read as a request.
+  def test_expect_100_continue_gets_the_final_answer_and_the_close
+    answers, got = refused_and_closed("POST /hello HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\n" \
+                                      "Content-Length: #{HELLO.bytesize}\r\n\r\n#{HELLO}")
+    assert_equal 1, answers.size, got
+    refute_match(%r{^HTTP/1\.1 100}, got)
     assert_match(/^Connection: close\r$/i, got)
-    answers, = refused_and_closed("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc#{HELLO}")
-    assert_equal ['HTTP/1.1 200 OK'], answers.map(&:first)
+  end
+
+  # RFC 9110 10.1.1: an HTTP/1.0 request with 100-continue has the
+  # expectation ignored.
+  def test_expect_100_continue_in_http_1_0_is_ignored
+    request = "GET /hello HTTP/1.0\r\nConnection: keep-alive\r\nExpect: 100-continue\r\nContent-Length: 3\r\n\r\nabc"
+    assert_equal ['HTTP/1.1 200 OK'] * 2, ask(request + "GET /hello HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").map(&:first)
   end
 
   # RFC 9112 6.1: a chunked body is not read here, so the request gets
@@ -281,7 +314,8 @@ class TimeoutTest < Minitest::Test
   include Served
 
   def config_text
-    "[server]\nclient_header_timeout = 1\nsend_timeout = 1\nkeepalive_timeout = 2\nlingering_time = 1\n"
+    "[server]\nclient_header_timeout = 1\nclient_body_timeout = 1\nsend_timeout = 1\nkeepalive_timeout = 2\n" \
+      "lingering_time = 1\n"
   end
 
   def closed_after(socket, most)
@@ -324,7 +358,17 @@ class TimeoutTest < Minitest::Test
     socket&.close
   end
 
-  def test_a_client_that_does_not_read_is_closed_at_the_send_time
+  def test_a_body_that_does_not_end_closes_at_the_body_time
+    socket = UNIXSocket.new(@path)
+    socket.write("GET /hello HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nabc")
+    took, got = closed_after(socket, 4)
+    assert_in_delta 1, took, 1
+    assert_equal ['HTTP/1.1 200 OK'], answers_of(got).map(&:first)
+  ensure
+    socket&.close
+  end
+
+    def test_a_client_that_does_not_read_is_closed_at_the_send_time
     socket = UNIXSocket.new(@path)
     home = "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
     ask(home)

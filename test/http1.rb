@@ -196,3 +196,12 @@ end
 assert('a request that starts with a bare LF is refused as a start line, not as too long') do
   assert_equal [PROBLEM[:start_line], 0], H1.parse_request("\nGET / HTTP/1.1\r\nHost: a\r\n\r\n")
 end
+
+# RFC 9110 10.1.1: Expect is a list of expectations, compared without
+# case; 100-continue is the one this server knows.
+assert('parse_request records a 100-continue expectation') do
+  assert_true H1.expects_continue?("POST / HTTP/1.1\r\nHost: a\r\nExpect: 100-continue\r\n\r\n")
+  assert_true H1.expects_continue?("POST / HTTP/1.1\r\nHost: a\r\nExpect: x, 100-Continue\r\n\r\n")
+  assert_false H1.expects_continue?("POST / HTTP/1.1\r\nHost: a\r\n\r\n")
+  assert_false H1.expects_continue?("POST / HTTP/1.1\r\nHost: a\r\nExpect: 100-continued\r\n\r\n")
+end
