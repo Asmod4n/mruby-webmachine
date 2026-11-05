@@ -130,6 +130,11 @@ class Sqe
         sqe_->buf_group = group;
     }
 
+    void recvsend_bundle()
+    {
+        sqe_->ioprio |= IORING_RECVSEND_BUNDLE;
+    }
+
     void set_data64(const uint64_t data)
     {
         io_uring_sqe_set_data64(sqe_, data);
@@ -169,7 +174,13 @@ class Ring
         if (begun != 0) [[unlikely]]
             return std::unexpected(error_of(begun));
         queued_ = true;
+        features_ = asking.features;
         return asking.sq_entries;
+    }
+
+    uint32_t features() const
+    {
+        return features_;
     }
 
     std::expected<void, std::error_code> register_ring_fd()
@@ -252,6 +263,7 @@ class Ring
 
     io_uring ring_ = {};
     bool queued_ = false;
+    uint32_t features_ = 0;
 };
 
 class BufferRing

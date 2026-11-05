@@ -159,6 +159,14 @@ class ServeTest < Minitest::Test
     assert_equal ['HTTP/1.1 413 Content Too Large'], answers.map(&:first)
   end
 
+  # A receive takes several buffers of the pool at once, and they lie one
+  # after the other in memory, so a head larger than one buffer arrives
+  # whole when the client sends it in one write.
+  def test_a_head_larger_than_one_buffer_is_answered
+    big = "GET /hello HTTP/1.1\r\nHost: x\r\nX-Big: #{'b' * 6000}\r\n\r\n"
+    assert_equal 'HTTP/1.1 200 OK', ask(big).first&.first
+  end
+
   # RFC 9112 3.2 asks for Host in HTTP/1.1 only.
   def test_an_http_1_0_request_without_host_is_answered
     assert_equal 'HTTP/1.1 200 OK', ask("GET /hello HTTP/1.0\r\n\r\n").first.first

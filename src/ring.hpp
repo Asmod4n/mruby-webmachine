@@ -85,16 +85,12 @@ class QueueIsFull : public std::runtime_error
 };
 
 inline constexpr uint16_t kBufferGroup = 1;
-inline constexpr uint32_t kBufferCount = 2048;
+inline constexpr uint32_t kBufferCount = 8192;
 inline constexpr uint32_t kBufferBytes = 4096;
 inline constexpr uint32_t kListeners = 4;
 inline constexpr uint32_t kAnswerBytes = 16384;
 inline constexpr uint32_t kPiecesMost = 16;
 inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
-inline constexpr size_t kBufferRoomLeast = 512;
-inline constexpr uint16_t kSendGroupFirst = 2;
-inline constexpr unsigned kSendEntries = 8;
-inline constexpr uint32_t kSendGroupEpochsIdle = 2;
 inline constexpr int kBacklog = 4096;
 inline constexpr long kWaitSeconds = 1;
 inline constexpr __kernel_timespec kLinger = {5, 0};
@@ -143,12 +139,11 @@ class Ring
         if (!ranged)
             return -ranged.error().value();
 
-        auto room = os::Mapping::reserved(static_cast<size_t>(kBufferCount) * kBufferBytes);
+        auto room = os::Mapping::twice(static_cast<size_t>(kBufferCount) * kBufferBytes);
         if (!room)
             return -room.error().value();
         room_map_.emplace(std::move(*room));
-        room_ = reinterpret_cast<uint8_t *>(room_map_->all().data());
-        (void)room_map_->advise_all(os::Advice::huge_page);
+        bundles_ = (ring_.features() & IORING_FEAT_RECVSEND_BUNDLE) != 0;
 
         auto answering = os::Mapping::reserved(static_cast<size_t>(connections_) * kAnswerBytes);
         if (!answering)
@@ -312,12 +307,6 @@ class Ring
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
             woken();
-            const auto now = std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now());
-            if (now != send_epoch_at_) {
-                send_epoch_at_ = now;
-                send_epoch_++;
-            }
-            send_group_collected_step();
             ring_.for_each_cqe([&](const uring::Cqe &cqe) { took(cqe, answering, released); });
             given_back();
         }
@@ -331,8 +320,6 @@ class Ring
         uint32_t pieces;
         uint32_t helds;
         uint16_t running;
-        std::optional<uint16_t> bid;
-        std::optional<uint16_t> group;
         uint8_t *room;
         iovec piece[kPiecesMost];
         const void *held[kHeldMost];
@@ -390,27 +377,20 @@ class Ring
 
     void given_back()
     {
-        if (returned_count_ == 0)
+        if (consumed_ == 0)
             return;
-        for (uint32_t at = 0; at < returned_count_; at++) {
-            const uint16_t which = returned_[at];
+        for (uint32_t at = 0; at < consumed_; at++) {
+            const uint16_t which = static_cast<uint16_t>((given_back_ + at) % kBufferCount);
             buffers_->buf_ring_add(receive_buffer(which), which, at);
         }
-        buffers_->buf_ring_advance(returned_count_);
-        returned_count_ = 0;
+        buffers_->buf_ring_advance(consumed_);
+        given_back_ += consumed_;
+        consumed_ = 0;
     }
 
-    void buffer_returned(const uint16_t which)
+    static constexpr uint32_t buffers_of(const size_t bytes)
     {
-        returned_[returned_count_++] = which;
-    }
-
-    void bid_given_back(Owed &owed)
-    {
-        if (!owed.bid)
-            return;
-        buffer_returned(*owed.bid);
-        owed.bid.reset();
+        return static_cast<uint32_t>((bytes + kBufferBytes - 1) / kBufferBytes);
     }
 
     static void clears(Owed &owed)
@@ -422,58 +402,9 @@ class Ring
         owed.running = running;
     }
 
-    std::optional<uint16_t> send_group_taken()
-    {
-        while (!free_send_groups_.empty()) {
-            std::ranges::pop_heap(free_send_groups_, std::ranges::greater{});
-            const uint16_t at = free_send_groups_.back();
-            free_send_groups_.pop_back();
-            if (at >= send_groups_.size() || !send_groups_[at].free)
-                continue;
-            send_groups_[at].free = false;
-            send_groups_[at].used_in = send_epoch_;
-            return at;
-        }
-        if (send_groups_.size() + kSendGroupFirst > 0xFFFF)
-            return std::nullopt;
-        const uint16_t at = static_cast<uint16_t>(send_groups_.size());
-        auto buffers =
-            uring::BufferRing::setup_buf_ring(ring_, kSendEntries, static_cast<uint16_t>(kSendGroupFirst + at));
-        if (!buffers) [[unlikely]]
-            return std::nullopt;
-        send_groups_.push_back(SendGroup{std::move(*buffers), send_epoch_, false});
-        return at;
-    }
-
-    void send_group_given_back(Owed &owed)
-    {
-        if (!owed.group)
-            return;
-        send_groups_[*owed.group].free = true;
-        free_send_groups_.push_back(*owed.group);
-        std::ranges::push_heap(free_send_groups_, std::ranges::greater{});
-        owed.group.reset();
-    }
-
-    void send_group_collected_step()
-    {
-        if (send_groups_.empty())
-            return;
-        const SendGroup &youngest = send_groups_.back();
-        if (!youngest.free || send_epoch_ - youngest.used_in < kSendGroupEpochsIdle)
-            return;
-        send_groups_.pop_back();
-    }
-
     static std::span<std::byte> bytes_of(const iovec &piece)
     {
         return {static_cast<std::byte *>(piece.iov_base), piece.iov_len};
-    }
-
-    bool in_the_receive_pool(const iovec &piece) const
-    {
-        const uint8_t *const at = static_cast<const uint8_t *>(piece.iov_base);
-        return at >= room_ && at + piece.iov_len <= room_ + static_cast<size_t>(kBufferCount) * kBufferBytes;
     }
 
     unsigned sends(const uint32_t slot)
@@ -482,21 +413,6 @@ class Ring
         if (owed.runs(Doing::kSending) || owed.first == owed.pieces)
             return 0;
         uring::Sqe sqe = room_for_one_more();
-        if (owed.pieces - owed.first == 1 && in_the_receive_pool(owed.piece[owed.first])) {
-            const std::optional<uint16_t> group = send_group_taken();
-            if (group) {
-                owed.group = *group;
-                uring::BufferRing &own = send_groups_[*group].buffers;
-                own.buf_ring_add(bytes_of(owed.piece[owed.first]), 0, 0);
-                own.buf_ring_advance(1);
-                sqe.prep_send_selected(static_cast<int>(slot), MSG_NOSIGNAL | MSG_WAITALL);
-                sqe.fixed_file();
-                sqe.buffer_select(own.group());
-                sqe.set_data64(marked(Doing::kSending, slot, owed.connection.generation));
-                owed.starts(Doing::kSending);
-                return 1;
-            }
-        }
         if (owed.pieces - owed.first == 1) {
             sqe.prep_send(static_cast<int>(slot), bytes_of(owed.piece[owed.first]), MSG_NOSIGNAL | MSG_WAITALL);
         } else {
@@ -557,8 +473,6 @@ class Ring
     {
         all_released(owed, released);
         room_given_back(owed);
-        bid_given_back(owed);
-        send_group_given_back(owed);
         clears(owed);
     }
 
@@ -578,6 +492,8 @@ class Ring
             sqe.prep_recv_multishot(static_cast<int>(slot));
             sqe.fixed_file();
             sqe.buffer_select(kBufferGroup);
+            if (bundles_)
+                sqe.recvsend_bundle();
         });
     }
 
@@ -656,8 +572,8 @@ class Ring
         const bool stale = doing != Doing::kAccepting &&
                            (slot >= connections_ || generation_of(mark) != owed_[slot].connection.generation);
         if (stale) [[unlikely]] {
-            if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0)
-                buffer_returned(static_cast<uint16_t>(cqe.flags >> IORING_CQE_BUFFER_SHIFT));
+            if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0 && cqe.res > 0)
+                consumed_ += buffers_of(static_cast<size_t>(cqe.res));
             return armed;
         }
         switch (doing) {
@@ -703,28 +619,23 @@ class Ring
             const size_t took_bytes = static_cast<size_t>(cqe.res);
             const size_t from = static_cast<size_t>(which) * kBufferBytes;
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
+            consumed_ += buffers_of(took_bytes);
             if (!owed.connection.reads() || owed.connection.http == http1::State::tear_down) {
-                buffer_returned(static_cast<uint16_t>(which));
                 if (last && (owed.connection.reads() || owed.connection.drains()))
                     return receives(slot);
                 return settles(slot);
             }
-            if (from + took_bytes > pool) {
-                buffer_returned(static_cast<uint16_t>(which));
+            if (which >= kBufferCount || took_bytes > pool) [[unlikely]]
                 return closes(slot, released, -EIO);
-            }
-            const bool in_the_buffer = owed.room == nullptr && !owed.bid && !owed.runs(Doing::kSending) &&
-                                       owed.first == owed.pieces && kBufferBytes - took_bytes >= kBufferRoomLeast;
-            if (!in_the_buffer && owed.room == nullptr) {
+            if (owed.room == nullptr) {
                 owed.room = room_taken();
-                if (owed.room == nullptr) [[unlikely]] {
-                    buffer_returned(static_cast<uint16_t>(which));
+                if (owed.room == nullptr) [[unlikely]]
                     return closes(slot, released, -ENOMEM);
-                }
             }
-            uint8_t *const into = in_the_buffer ? room_ + from + took_bytes : owed.room;
-            const size_t area = in_the_buffer ? kBufferBytes - took_bytes : kAnswerBytes;
-            std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
+            uint8_t *const into = owed.room;
+            const size_t area = kAnswerBytes;
+            const std::span<std::byte> bundle = room_map_->all_and_its_start_again().subspan(from, took_bytes);
+            std::string_view left(reinterpret_cast<const char *>(bundle.data()), bundle.size());
             bool answered = false;
             bool closing = false;
             bool refused = false;
@@ -758,11 +669,6 @@ class Ring
             }
             if (closing)
                 owed.connection.moves_to(http1::State::tear_down);
-            if (in_the_buffer && owed.first != owed.pieces) {
-                owed.bid = static_cast<uint16_t>(which);
-            } else {
-                buffer_returned(static_cast<uint16_t>(which));
-            }
             armed += sends(slot);
             if (last)
                 armed += receives(slot);
@@ -771,7 +677,6 @@ class Ring
         case Doing::kSending: {
             Owed &owed = owed_[slot];
             owed.finishes(Doing::kSending);
-            send_group_given_back(owed);
             if (!owed.connection.is_open()) {
                 gives_back_everything(owed, released);
                 if (!owed.connection.drains())
@@ -797,7 +702,6 @@ class Ring
             if (owed.first == owed.pieces) {
                 all_released(owed, released);
                 room_given_back(owed);
-                bid_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
                 if (owed.connection.http == http1::State::tear_down) {
@@ -847,22 +751,13 @@ class Ring
     std::optional<os::Mapping> room_map_;
     std::optional<os::Mapping> answers_map_;
     std::optional<os::Mapping> owed_map_;
-    uint8_t *room_ = nullptr;
     uint8_t *answers_ = nullptr;
     std::vector<uint8_t *> free_rooms_;
-    struct SendGroup {
-        uring::BufferRing buffers;
-        uint32_t used_in;
-        bool free;
-    };
-    std::vector<SendGroup> send_groups_;
-    std::vector<uint16_t> free_send_groups_;
-    uint32_t send_epoch_ = 0;
-    std::chrono::sys_seconds send_epoch_at_{};
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
-    uint16_t returned_[kBufferCount] = {};
-    uint32_t returned_count_ = 0;
+    uint32_t consumed_ = 0;
+    uint32_t given_back_ = 0;
+    bool bundles_ = false;
     Owed *owed_ = nullptr;
     unsigned entries_ = 0;
     uint32_t connections_ = 0;
