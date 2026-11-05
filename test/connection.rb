@@ -78,19 +78,19 @@ assert('an HTTP state moves only where the plan of RFC 9112 moves it') do
   end
 end
 
-# A slot is used again after its close. The generation tells the
+# A file index is used again after its close. The generation tells the
 # completions of the old connection from those of the new one.
 assert('an accept starts in ESTABLISHED and header_section with the next generation') do
   assert_equal [:established, :header_section, 8], C.accepted_after(7)
   assert_equal [:established, :header_section, 0], C.accepted_after(4294967295)
 end
 
-# The user data of a completion holds what was done, the slot and the
+# The user data of a completion holds what was done, the file index and the
 # generation, and each comes back whole at the edges of its width.
-assert('a mark gives back what was done, the slot and the generation') do
-  most = C.slots_most
+assert('a mark gives back what was done, the file index and the generation') do
+  most = C.file_indices_most
   assert_equal 1 << 20, most
-  [[1, 0, 0], [2, most - 1, 4294967295], [4, 12345, 1], [3, 1, 2147483648]].each do |doing, slot, generation|
-    assert_equal [doing, slot, generation], C.mark(doing, slot, generation)
+  [[1, 0, 0], [2, most - 1, 4294967295], [4, 12345, 1], [3, 1, 2147483648]].each do |doing, file_index, generation|
+    assert_equal [doing, file_index, generation], C.mark(doing, file_index, generation)
   end
 end

@@ -224,7 +224,7 @@ class ServeTest < Minitest::Test
   end
 
   # RFC 9293 3.10.7.1: a reset ends the connection at once. The server
-  # closes the slot and serves the next connection.
+  # closes the connection and serves the next one.
   def test_a_reset_from_the_client_leaves_the_server_serving
     socket = UNIXSocket.new(@path)
     socket.write(HELLO * 2)

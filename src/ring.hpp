@@ -42,17 +42,17 @@ enum class Doing : uint8_t {
     kRemovingTimer,
 };
 
-inline constexpr unsigned kSlotBits = 20;
+inline constexpr unsigned kFileIndexBits = 20;
 inline constexpr unsigned kGenerationBits = 32;
-inline constexpr unsigned kDoingShift = kSlotBits + kGenerationBits;
-inline constexpr uint32_t kSlotsMost = uint32_t{1} << kSlotBits;
+inline constexpr unsigned kDoingShift = kFileIndexBits + kGenerationBits;
+inline constexpr uint32_t kFileIndicesMost = uint32_t{1} << kFileIndexBits;
 
-static_assert(kDoingShift + 8 <= 64, "a mark holds the slot, the generation and what was being done");
+static_assert(kDoingShift + 8 <= 64, "a mark holds the file_index, the generation and what was being done");
 
-inline constexpr uint64_t marked(const Doing doing, const uint32_t slot, const uint32_t generation)
+inline constexpr uint64_t marked(const Doing doing, const uint32_t file_index, const uint32_t generation)
 {
-    return (static_cast<uint64_t>(doing) << kDoingShift) | (static_cast<uint64_t>(generation) << kSlotBits) |
-           (slot & (kSlotsMost - 1));
+    return (static_cast<uint64_t>(doing) << kDoingShift) | (static_cast<uint64_t>(generation) << kFileIndexBits) |
+           (file_index & (kFileIndicesMost - 1));
 }
 
 inline constexpr Doing doing_of(const uint64_t mark)
@@ -60,14 +60,14 @@ inline constexpr Doing doing_of(const uint64_t mark)
     return static_cast<Doing>(mark >> kDoingShift);
 }
 
-inline constexpr uint32_t slot_of(const uint64_t mark)
+inline constexpr uint32_t file_index_of(const uint64_t mark)
 {
-    return static_cast<uint32_t>(mark & (kSlotsMost - 1));
+    return static_cast<uint32_t>(mark & (kFileIndicesMost - 1));
 }
 
 inline constexpr uint32_t generation_of(const uint64_t mark)
 {
-    return static_cast<uint32_t>(mark >> kSlotBits);
+    return static_cast<uint32_t>(mark >> kFileIndexBits);
 }
 
 struct Answered {
@@ -143,7 +143,7 @@ class Ring
                                         : static_cast<uint32_t>(limit.rlim_cur);
         if (open_files <= kListeners)
             return -EMFILE;
-        if (limit.rlim_cur != RLIM_INFINITY && limit.rlim_cur > kSlotsMost) [[unlikely]]
+        if (limit.rlim_cur != RLIM_INFINITY && limit.rlim_cur > kFileIndicesMost) [[unlikely]]
             return -ERANGE;
         connections_ = open_files - kListeners;
 
@@ -201,13 +201,13 @@ class Ring
             return -ENOSPC;
         if (path == nullptr || *path == '\0')
             return -EINVAL;
-        const uint32_t slot = connections_ + listeners_;
-        const int fd = static_cast<int>(slot);
+        const uint32_t file_index = connections_ + listeners_;
+        const int fd = static_cast<int>(file_index);
 
         auto sqe = ring_.get_sqe();
         if (!sqe)
             return -EBUSY;
-        sqe->prep_socket_direct(AF_UNIX, SOCK_STREAM, 0, slot);
+        sqe->prep_socket_direct(AF_UNIX, SOCK_STREAM, 0, file_index);
         int answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
@@ -242,7 +242,7 @@ class Ring
             return -EBUSY;
         sqe->prep_multishot_accept_direct(fd);
         sqe->fixed_file();
-        sqe->set_data64(marked(Doing::kAccepting, slot, 0));
+        sqe->set_data64(marked(Doing::kAccepting, file_index, 0));
         ring_.submit();
         listeners_++;
         return 0;
@@ -252,13 +252,13 @@ class Ring
     {
         if (listeners_ >= kListeners)
             return -ENOSPC;
-        const uint32_t slot = connections_ + listeners_;
-        const int fd = static_cast<int>(slot);
+        const uint32_t file_index = connections_ + listeners_;
+        const int fd = static_cast<int>(file_index);
 
         auto sqe = ring_.get_sqe();
         if (!sqe)
             return -EBUSY;
-        sqe->prep_socket_direct(AF_INET, SOCK_STREAM, 0, slot);
+        sqe->prep_socket_direct(AF_INET, SOCK_STREAM, 0, file_index);
         int answer = one_at_a_time(*sqe);
         if (answer < 0)
             return answer;
@@ -309,7 +309,7 @@ class Ring
             return -EBUSY;
         sqe->prep_multishot_accept_direct(fd);
         sqe->fixed_file();
-        sqe->set_data64(marked(Doing::kAccepting, slot, 0));
+        sqe->set_data64(marked(Doing::kAccepting, file_index, 0));
         ring_.submit();
         listeners_++;
         return 0;
@@ -370,7 +370,7 @@ class Ring
         constexpr void starts(const Doing doing)
         {
             if (runs(doing)) [[unlikely]]
-                throw std::logic_error("one slot runs the same operation twice");
+                throw std::logic_error("one file_index runs the same operation twice");
             running = static_cast<uint16_t>(running | bit_of(doing));
         }
 
@@ -439,24 +439,24 @@ class Ring
         return {static_cast<std::byte *>(piece.iov_base), piece.iov_len};
     }
 
-    unsigned sends(const uint32_t slot)
+    unsigned sends(const uint32_t file_index)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         if (owed.runs(Doing::kSending) || owed.first == owed.pieces)
             return 0;
         uring::Sqe sqe = room_for_one_more();
         if (owed.pieces - owed.first == 1) {
-            sqe.prep_send(static_cast<int>(slot), bytes_of(owed.piece[owed.first]), MSG_NOSIGNAL | MSG_WAITALL);
+            sqe.prep_send(static_cast<int>(file_index), bytes_of(owed.piece[owed.first]), MSG_NOSIGNAL | MSG_WAITALL);
         } else {
             owed.message = msghdr{};
             owed.message.msg_iov = owed.piece + owed.first;
             owed.message.msg_iovlen = owed.pieces - owed.first;
-            sqe.prep_sendmsg(static_cast<int>(slot), owed.message, MSG_NOSIGNAL | MSG_WAITALL);
+            sqe.prep_sendmsg(static_cast<int>(file_index), owed.message, MSG_NOSIGNAL | MSG_WAITALL);
         }
         sqe.fixed_file();
-        sqe.set_data64(marked(Doing::kSending, slot, owed.connection.generation));
+        sqe.set_data64(marked(Doing::kSending, file_index, owed.connection.generation));
         owed.starts(Doing::kSending);
-        waits_for(slot, Waiting::send);
+        waits_for(file_index, Waiting::send);
         return 1;
     }
 
@@ -470,9 +470,9 @@ class Ring
         }
     }
 
-    void waits_for(const uint32_t slot, const Waiting kind)
+    void waits_for(const uint32_t file_index, const Waiting kind)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         if (kind == Waiting::nothing) {
             owed.waiting = Waiting::nothing;
             return;
@@ -486,18 +486,18 @@ class Ring
         if (pushed == at)
             return;
         pushed = at;
-        deadlines_.at(static_cast<size_t>(kind)).push_back(Deadline{at, slot, owed.connection.generation});
+        deadlines_.at(static_cast<size_t>(kind)).push_back(Deadline{at, file_index, owed.connection.generation});
     }
 
-    void waits_after_the_answers(const uint32_t slot)
+    void waits_after_the_answers(const uint32_t file_index)
     {
-        const Owed &owed = owed_[slot];
+        const Owed &owed = owed_[file_index];
         if (owed.runs(Doing::kSending) || !owed.connection.reads())
             return;
-        if (rests_.at(slot).needs_more)
-            waits_for(slot, Waiting::header);
+        if (rests_.at(file_index).needs_more)
+            waits_for(file_index, Waiting::header);
         else if (owed.connection.http == http1::State::persistent)
-            waits_for(slot, Waiting::idle);
+            waits_for(file_index, Waiting::idle);
     }
 
     template <class TimingOut, class Releasing> void expires(TimingOut &timing_out, Releasing &released)
@@ -507,38 +507,38 @@ class Ring
             while (!waiting.empty() && waiting.front().at <= now_) {
                 const Deadline due = waiting.front();
                 waiting.pop_front();
-                Owed &owed = owed_[due.slot];
+                Owed &owed = owed_[due.file_index];
                 if (owed.connection.generation != due.generation || owed.waiting != static_cast<Waiting>(kind) ||
                     owed.deadline != due.at)
                     continue;
                 owed.waiting = Waiting::nothing;
-                times_out(due.slot, static_cast<Waiting>(kind), timing_out, released);
+                times_out(due.file_index, static_cast<Waiting>(kind), timing_out, released);
             }
         }
     }
 
     template <class TimingOut, class Releasing>
-    unsigned times_out(const uint32_t slot, const Waiting kind, TimingOut &timing_out, Releasing &released)
+    unsigned times_out(const uint32_t file_index, const Waiting kind, TimingOut &timing_out, Releasing &released)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         if (kind == Waiting::send)
-            return owed.connection.drains() ? ends_the_linger(slot) : closes(slot, released, -ETIMEDOUT);
-        if (kind == Waiting::idle || rests_.at(slot).size == 0 || owed.runs(Doing::kSending))
-            return closes(slot, released, 0);
+            return owed.connection.drains() ? ends_the_linger(file_index) : closes(file_index, released, -ETIMEDOUT);
+        if (kind == Waiting::idle || rests_.at(file_index).size == 0 || owed.runs(Doing::kSending))
+            return closes(file_index, released, 0);
         if (owed.room == nullptr)
-            owed.room = room_taken(slot);
+            owed.room = room_taken(file_index);
         const std::span<char> room(reinterpret_cast<char *>(owed.room + owed.filled), kAnswerBytes - owed.filled);
         const Answered said = timing_out(room);
         if (said.head == 0 || said.head > room.size()) [[unlikely]]
-            return closes(slot, released, 0);
+            return closes(file_index, released, 0);
         owes_a_piece(owed, owed.room + owed.filled, said.head);
         owed.filled += static_cast<uint32_t>(said.head);
-        rests_.at(slot) = Rest{};
+        rests_.at(file_index) = Rest{};
         if (owed.connection.http == http1::State::persistent)
             owed.connection.moves_to(http1::State::header_section);
         owed.connection.moves_to(http1::State::client_error);
         owed.connection.moves_to(http1::State::tear_down);
-        return sends(slot);
+        return sends(file_index);
     }
 
     template <class Releasing> void all_released(Owed &owed, Releasing &released)
@@ -566,43 +566,43 @@ class Ring
         return true;
     }
 
-    uint8_t *room_taken(const uint32_t slot)
+    uint8_t *room_taken(const uint32_t file_index)
     {
-        std::shared_ptr<uint8_t[]> &head = heads_.at(slot);
+        std::shared_ptr<uint8_t[]> &head = heads_.at(file_index);
         if (!head)
             head = std::make_shared_for_overwrite<uint8_t[]>(kAnswerBytes);
         return head.get();
     }
 
-    void room_given_back(const uint32_t slot)
+    void room_given_back(const uint32_t file_index)
     {
-        owed_[slot].room = nullptr;
+        owed_[file_index].room = nullptr;
     }
 
-    template <class Releasing> void gives_back_everything(const uint32_t slot, Releasing &released)
+    template <class Releasing> void gives_back_everything(const uint32_t file_index, Releasing &released)
     {
-        Owed &owed = owed_[slot];
-        rests_.at(slot) = Rest{};
-        heads_.at(slot).reset();
+        Owed &owed = owed_[file_index];
+        rests_.at(file_index) = Rest{};
+        heads_.at(file_index).reset();
         all_released(owed, released);
-        room_given_back(slot);
+        room_given_back(file_index);
         clears(owed);
     }
 
-    template <class Preparing> unsigned starts(const uint32_t slot, const Doing doing, Preparing preparing)
+    template <class Preparing> unsigned starts(const uint32_t file_index, const Doing doing, Preparing preparing)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         owed.starts(doing);
         uring::Sqe sqe = room_for_one_more();
         preparing(sqe);
-        sqe.set_data64(marked(doing, slot, owed.connection.generation));
+        sqe.set_data64(marked(doing, file_index, owed.connection.generation));
         return 1;
     }
 
-    unsigned receives(const uint32_t slot)
+    unsigned receives(const uint32_t file_index)
     {
-        return starts(slot, Doing::kReceiving, [&](uring::Sqe &sqe) {
-            sqe.prep_recv_multishot(static_cast<int>(slot));
+        return starts(file_index, Doing::kReceiving, [&](uring::Sqe &sqe) {
+            sqe.prep_recv_multishot(static_cast<int>(file_index));
             sqe.fixed_file();
             sqe.buffer_select(kBufferGroup);
             if (bundles_)
@@ -610,51 +610,51 @@ class Ring
         });
     }
 
-    unsigned closes_the_slot(const uint32_t slot)
+    unsigned closes_the_file(const uint32_t file_index)
     {
-        return starts(slot, Doing::kClosing, [&](uring::Sqe &sqe) { sqe.prep_close_direct(slot); });
+        return starts(file_index, Doing::kClosing, [&](uring::Sqe &sqe) { sqe.prep_close_direct(file_index); });
     }
 
-    unsigned lingers(const uint32_t slot)
+    unsigned lingers(const uint32_t file_index)
     {
-        unsigned armed = starts(slot, Doing::kShuttingDown, [&](uring::Sqe &sqe) {
-            sqe.prep_shutdown(static_cast<int>(slot), SHUT_WR);
+        unsigned armed = starts(file_index, Doing::kShuttingDown, [&](uring::Sqe &sqe) {
+            sqe.prep_shutdown(static_cast<int>(file_index), SHUT_WR);
             sqe.fixed_file();
         });
-        armed += starts(slot, Doing::kLingering, [&](uring::Sqe &sqe) { sqe.prep_timeout(linger_); });
-        waits_for(slot, Waiting::nothing);
-        if (!owed_[slot].runs(Doing::kReceiving))
-            armed += receives(slot);
+        armed += starts(file_index, Doing::kLingering, [&](uring::Sqe &sqe) { sqe.prep_timeout(linger_); });
+        waits_for(file_index, Waiting::nothing);
+        if (!owed_[file_index].runs(Doing::kReceiving))
+            armed += receives(file_index);
         return armed;
     }
 
-    unsigned ends(const uint32_t slot)
+    unsigned ends(const uint32_t file_index)
     {
-        const Owed &owed = owed_[slot];
+        const Owed &owed = owed_[file_index];
         if (owed.running == 0)
-            return closes_the_slot(slot);
+            return closes_the_file(file_index);
         unsigned armed = 0;
         if (owed.runs(Doing::kLingering)) {
-            const uint64_t timer = marked(Doing::kLingering, slot, owed.connection.generation);
-            armed += starts(slot, Doing::kRemovingTimer,
+            const uint64_t timer = marked(Doing::kLingering, file_index, owed.connection.generation);
+            armed += starts(file_index, Doing::kRemovingTimer,
                             [&](uring::Sqe &sqe) { sqe.prep_timeout_remove(timer); });
         }
         if (owed.runs(Doing::kReceiving) || owed.runs(Doing::kSending) || owed.runs(Doing::kShuttingDown)) {
-            armed += starts(slot, Doing::kCancelling, [&](uring::Sqe &sqe) {
-                sqe.prep_cancel_fd(static_cast<int>(slot), IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_FD_FIXED);
+            armed += starts(file_index, Doing::kCancelling, [&](uring::Sqe &sqe) {
+                sqe.prep_cancel_fd(static_cast<int>(file_index), IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_FD_FIXED);
             });
         }
         return armed;
     }
 
-    unsigned settles(const uint32_t slot)
+    unsigned settles(const uint32_t file_index)
     {
-        const Owed &owed = owed_[slot];
+        const Owed &owed = owed_[file_index];
         if (owed.running != 0)
             return 0;
         if (owed.connection.tcp != tcp::State::last_ack && owed.connection.tcp != tcp::State::closed)
             return 0;
-        return closes_the_slot(slot);
+        return closes_the_file(file_index);
     }
 
     struct Taken {
@@ -663,11 +663,11 @@ class Ring
     };
 
     template <class Answering>
-    Taken answers_from(const uint32_t slot, const std::string_view asked, Answering &answering)
+    Taken answers_from(const uint32_t file_index, const std::string_view asked, Answering &answering)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         if (owed.room == nullptr)
-            owed.room = room_taken(slot);
+            owed.room = room_taken(file_index);
         uint8_t *const into = owed.room;
         const size_t area = kAnswerBytes;
         std::string_view left = asked;
@@ -711,9 +711,9 @@ class Ring
         return Taken{asked.size() - left.size(), needs_more};
     }
 
-    bool keeps_the_rest(const uint32_t slot, const std::string_view left, const bool needs_more)
+    bool keeps_the_rest(const uint32_t file_index, const std::string_view left, const bool needs_more)
     {
-        Rest &rest = rests_.at(slot);
+        Rest &rest = rests_.at(file_index);
         if (left.empty()) {
             rest = Rest{};
             return true;
@@ -728,23 +728,23 @@ class Ring
         return kept == left.size();
     }
 
-    template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released, const int result)
+    template <class Releasing> unsigned closes(const uint32_t file_index, Releasing &released, const int result)
     {
-        Owed &owed = owed_[slot];
+        Owed &owed = owed_[file_index];
         if (!owed.connection.is_open())
             return 0;
         const tcp::State to = tcp::state_after_close(owed.connection.tcp, result);
         owed.connection.moves_to(to);
         if (owed.runs(Doing::kSending))
-            return to == tcp::State::fin_wait_1 ? 0 : ends(slot);
-        gives_back_everything(slot, released);
-        return to == tcp::State::fin_wait_1 ? lingers(slot) : ends(slot);
+            return to == tcp::State::fin_wait_1 ? 0 : ends(file_index);
+        gives_back_everything(file_index, released);
+        return to == tcp::State::fin_wait_1 ? lingers(file_index) : ends(file_index);
     }
 
-    unsigned ends_the_linger(const uint32_t slot)
+    unsigned ends_the_linger(const uint32_t file_index)
     {
-        owed_[slot].connection.moves_to(tcp::State::closed);
-        return ends(slot);
+        owed_[file_index].connection.moves_to(tcp::State::closed);
+        return ends(file_index);
     }
 
     template <class Answering, class Releasing>
@@ -752,10 +752,10 @@ class Ring
     {
         unsigned armed = 0;
         const uint64_t mark = cqe.data;
-        const uint32_t slot = slot_of(mark);
+        const uint32_t file_index = file_index_of(mark);
         const Doing doing = doing_of(mark);
         const bool stale = doing != Doing::kAccepting &&
-                           (slot >= connections_ || generation_of(mark) != owed_[slot].connection.generation);
+                           (file_index >= connections_ || generation_of(mark) != owed_[file_index].connection.generation);
         if (stale) [[unlikely]] {
             if (doing == Doing::kReceiving && (cqe.flags & IORING_CQE_F_BUFFER) != 0 && cqe.res > 0)
                 consumed_ += buffers_of(static_cast<size_t>(cqe.res));
@@ -775,33 +775,33 @@ class Ring
             }
             if ((cqe.flags & IORING_CQE_F_MORE) == 0) {
                 uring::Sqe sqe = room_for_one_more();
-                sqe.prep_multishot_accept_direct(static_cast<int>(slot));
+                sqe.prep_multishot_accept_direct(static_cast<int>(file_index));
                 sqe.fixed_file();
                 sqe.set_data64(mark);
                 armed++;
             }
             return armed;
         case Doing::kReceiving: {
-            Owed &owed = owed_[slot];
+            Owed &owed = owed_[file_index];
             const bool last = (cqe.flags & IORING_CQE_F_MORE) == 0;
             if (last)
                 owed.finishes(Doing::kReceiving);
             if (cqe.res <= 0) {
                 if (cqe.res == -ENOBUFS) {
                     if (last && (owed.connection.reads() || owed.connection.drains()))
-                        return receives(slot);
-                    return settles(slot);
+                        return receives(file_index);
+                    return settles(file_index);
                 }
                 if (owed.connection.drains())
-                    return ends_the_linger(slot);
+                    return ends_the_linger(file_index);
                 if (!owed.connection.is_open())
-                    return settles(slot);
+                    return settles(file_index);
                 if (cqe.res == 0 && owed.connection.reads()) {
                     owed.connection.moves_to(tcp::State::close_wait);
                     if (owed.runs(Doing::kSending) || owed.first != owed.pieces)
                         return armed;
                 }
-                return closes(slot, released, cqe.res);
+                return closes(file_index, released, cqe.res);
             }
             const uint32_t which = cqe.flags >> IORING_CQE_BUFFER_SHIFT;
             const size_t took_bytes = static_cast<size_t>(cqe.res);
@@ -810,14 +810,14 @@ class Ring
             consumed_ += buffers_of(took_bytes);
             if (!owed.connection.reads() || owed.connection.http == http1::State::tear_down) {
                 if (last && (owed.connection.reads() || owed.connection.drains()))
-                    return receives(slot);
-                return settles(slot);
+                    return receives(file_index);
+                return settles(file_index);
             }
             if (which >= kBufferCount || took_bytes > pool) [[unlikely]]
-                return closes(slot, released, -EIO);
+                return closes(file_index, released, -EIO);
             const std::span<std::byte> bundle = room_map_->all_and_its_start_again().subspan(from, took_bytes);
             const std::string_view received(reinterpret_cast<const char *>(bundle.data()), bundle.size());
-            Rest &rest = rests_.at(slot);
+            Rest &rest = rests_.at(file_index);
             std::string_view asked = received;
             bool fits = true;
             if (rest.size > 0) {
@@ -831,37 +831,37 @@ class Ring
                 if (rest.needs_more && fits && rest.size <= http1::kMostRequestLineBytes + http1::kMostHeaderSectionBytes &&
                     http1::bytes_before_the_body(asked.substr(join)) == 0) {
                     if (last)
-                        armed += receives(slot);
+                        armed += receives(file_index);
                     return armed;
                 }
             }
-            const Taken taken = answers_from(slot, asked, answering);
-            fits = keeps_the_rest(slot, asked.substr(taken.bytes), taken.needs_more) && fits;
+            const Taken taken = answers_from(file_index, asked, answering);
+            fits = keeps_the_rest(file_index, asked.substr(taken.bytes), taken.needs_more) && fits;
             if (!fits) [[unlikely]] {
                 if (owed.first == owed.pieces)
-                    return closes(slot, released, 0);
+                    return closes(file_index, released, 0);
                 if (owed.connection.http != http1::State::tear_down)
                     owed.connection.moves_to(http1::State::tear_down);
             }
-            armed += sends(slot);
-            waits_after_the_answers(slot);
+            armed += sends(file_index);
+            waits_after_the_answers(file_index);
             if (last)
-                armed += receives(slot);
+                armed += receives(file_index);
             return armed;
         }
         case Doing::kSending: {
-            Owed &owed = owed_[slot];
+            Owed &owed = owed_[file_index];
             owed.finishes(Doing::kSending);
             if (!owed.connection.is_open()) {
-                gives_back_everything(slot, released);
+                gives_back_everything(file_index, released);
                 if (!owed.connection.drains())
-                    return settles(slot);
+                    return settles(file_index);
                 if (cqe.res == -ECONNRESET || cqe.res == -EPIPE)
-                    return ends_the_linger(slot);
-                return lingers(slot);
+                    return ends_the_linger(file_index);
+                return lingers(file_index);
             }
             if (cqe.res <= 0)
-                return closes(slot, released, cqe.res);
+                return closes(file_index, released, cqe.res);
             size_t sent = static_cast<size_t>(cqe.res);
             while (sent > 0 && owed.first < owed.pieces) {
                 iovec &piece = owed.piece[owed.first];
@@ -876,47 +876,47 @@ class Ring
             }
             if (owed.first == owed.pieces) {
                 all_released(owed, released);
-                room_given_back(slot);
+                room_given_back(file_index);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
                 if (owed.connection.http == http1::State::tear_down)
-                    return armed + closes(slot, released, 0);
+                    return armed + closes(file_index, released, 0);
                 owed.connection.moves_to(http1::State::persistent);
-                const Rest &rest = rests_.at(slot);
+                const Rest &rest = rests_.at(file_index);
                 if (rest.size > 0 && !rest.needs_more) {
                     const std::string_view asked(rest.bytes.get(), rest.size);
-                    const Taken taken = answers_from(slot, asked, answering);
-                    keeps_the_rest(slot, asked.substr(taken.bytes), taken.needs_more);
-                    armed += sends(slot);
+                    const Taken taken = answers_from(file_index, asked, answering);
+                    keeps_the_rest(file_index, asked.substr(taken.bytes), taken.needs_more);
+                    armed += sends(file_index);
                 }
                 if (owed.connection.tcp == tcp::State::close_wait && owed.first == owed.pieces)
-                    return armed + closes(slot, released, 0);
-                waits_after_the_answers(slot);
+                    return armed + closes(file_index, released, 0);
+                waits_after_the_answers(file_index);
             } else {
-                armed += sends(slot);
+                armed += sends(file_index);
             }
             return armed;
         }
         case Doing::kShuttingDown: {
-            Owed &owed = owed_[slot];
+            Owed &owed = owed_[file_index];
             owed.finishes(Doing::kShuttingDown);
             if (cqe.res < 0 && owed.connection.drains())
-                return ends_the_linger(slot);
-            return settles(slot);
+                return ends_the_linger(file_index);
+            return settles(file_index);
         }
         case Doing::kLingering: {
-            Owed &owed = owed_[slot];
+            Owed &owed = owed_[file_index];
             owed.finishes(Doing::kLingering);
             if (cqe.res == -ETIME && owed.connection.drains())
-                return ends_the_linger(slot);
-            return settles(slot);
+                return ends_the_linger(file_index);
+            return settles(file_index);
         }
         case Doing::kCancelling:
         case Doing::kRemovingTimer:
-            owed_[slot].finishes(doing);
-            return settles(slot);
+            owed_[file_index].finishes(doing);
+            return settles(file_index);
         case Doing::kClosing: {
-            Owed &owed = owed_[slot];
+            Owed &owed = owed_[file_index];
             owed.finishes(Doing::kClosing);
             if (owed.connection.tcp == tcp::State::last_ack)
                 owed.connection.moves_to(tcp::State::closed);
@@ -940,7 +940,7 @@ class Ring
     std::vector<Rest> rests_;
     struct Deadline {
         uint32_t at;
-        uint32_t slot;
+        uint32_t file_index;
         uint32_t generation;
     };
     std::array<std::deque<Deadline>, kWaitingKinds> deadlines_;

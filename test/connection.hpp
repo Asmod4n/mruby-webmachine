@@ -154,21 +154,21 @@ mrb_value spec_accepted_after(mrb_state *mrb, mrb_value)
 mrb_value spec_mark(mrb_state *mrb, mrb_value)
 {
     mrb_int doing = 0;
-    mrb_int slot = 0;
+    mrb_int file_index = 0;
     mrb_int generation = 0;
-    mrb_get_args(mrb, "iii", &doing, &slot, &generation);
-    const uint64_t mark = wm::marked(static_cast<wm::Doing>(doing), static_cast<uint32_t>(slot),
+    mrb_get_args(mrb, "iii", &doing, &file_index, &generation);
+    const uint64_t mark = wm::marked(static_cast<wm::Doing>(doing), static_cast<uint32_t>(file_index),
                                      static_cast<uint32_t>(generation));
     const mrb_value all = mrb_ary_new(mrb);
     mrb_ary_push(mrb, all, mrb_int_value(mrb, static_cast<mrb_int>(wm::doing_of(mark))));
-    mrb_ary_push(mrb, all, mrb_int_value(mrb, wm::slot_of(mark)));
+    mrb_ary_push(mrb, all, mrb_int_value(mrb, wm::file_index_of(mark)));
     mrb_ary_push(mrb, all, mrb_int_value(mrb, wm::generation_of(mark)));
     return all;
 }
 
-mrb_value spec_slots_most(mrb_state *mrb, mrb_value)
+mrb_value spec_file_indices_most(mrb_state *mrb, mrb_value)
 {
-    return mrb_int_value(mrb, wm::kSlotsMost);
+    return mrb_int_value(mrb, wm::kFileIndicesMost);
 }
 
 } // namespace
@@ -188,5 +188,5 @@ inline void connection_spec(mrb_state *mrb)
     mrb_define_module_function(mrb, sp, "errno", spec_errno, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "accepted_after", spec_accepted_after, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, sp, "mark", spec_mark, MRB_ARGS_REQ(3));
-    mrb_define_module_function(mrb, sp, "slots_most", spec_slots_most, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, sp, "file_indices_most", spec_file_indices_most, MRB_ARGS_NONE());
 }

@@ -641,7 +641,7 @@ end
 
 # RFC 9110 5.6.1.2 prints these three as valid and these three as
 # holding no element. A list is written "a, b, c", and a sender that
-# merges two values can leave an empty slot behind - "a,,b" or a comma
+# merges two values can leave an empty element behind - "a,,b" or a comma
 # at the end. A recipient has to step over those rather than see an
 # element that is not there.
 assert('parse_list_element walks the lists RFC 9110 5.6.1.2 prints') do
