@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -45,9 +46,11 @@ head_by_template(const std::span<char> room, const serve::Today &today)
     const auto [end, error] = std::to_chars(digits.data(), digits.data() + digits.size(), kLength);
     const HeadFields fields{"200", "OK", std::string_view(today.date.data(), today.date.size()), kContentType,
                             std::string_view(digits.data(), static_cast<size_t>(end - digits.data()))};
-    mustache::Out out{room.data(), room.data() + room.size() - mustache::kEscapeSlack};
-    mustache::render<mustache::fixed_string{kHeadSource}>(out, fields);
-    return out.full ? 0 : static_cast<size_t>(out.w - room.data());
+    const auto rendered = mustache::render<mustache::fixed_string{kHeadSource}>(fields);
+    if (!rendered || rendered->size() > room.size()) [[unlikely]]
+        return 0;
+    std::ranges::copy(*rendered, room.begin());
+    return rendered->size();
 }
 
 size_t
