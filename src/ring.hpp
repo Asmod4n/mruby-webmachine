@@ -10,6 +10,7 @@
 #include <cstring>
 #include <ctime>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <span>
@@ -22,6 +23,7 @@
 #include <sys/uio.h>
 
 #include "connection.hpp"
+#include "http1.hpp"
 #include "os_mapping.hpp"
 #include "uring.hpp"
 
@@ -93,6 +95,8 @@ inline constexpr uint32_t kPiecesMost = 16;
 inline constexpr uint32_t kHeldMost = kPiecesMost / 2;
 inline constexpr int kBacklog = 4096;
 inline constexpr long kWaitSeconds = 1;
+inline constexpr size_t kHeadEndBytes = 4;
+inline constexpr size_t kRestBytes = http1::kMostRequestLineBytes + http1::kMostHeaderSectionBytes + 8;
 inline constexpr __kernel_timespec kLinger = {5, 0};
 
 class Ring
@@ -158,6 +162,7 @@ class Ring
         owed_ = reinterpret_cast<Owed *>(owed_map_->all().data());
         (void)owed_map_->advise_all(os::Advice::huge_page);
         free_rooms_.assign(connections_, nullptr);
+        rests_.assign(connections_, Rest{});
 
         auto buffers = uring::BufferRing::setup_buf_ring(ring_, kBufferCount, kBufferGroup);
         if (!buffers)
@@ -469,8 +474,10 @@ class Ring
         owed.room = nullptr;
     }
 
-    template <class Releasing> void gives_back_everything(Owed &owed, Releasing &released)
+    template <class Releasing> void gives_back_everything(const uint32_t slot, Releasing &released)
     {
+        Owed &owed = owed_[slot];
+        rests_.at(slot) = Rest{};
         all_released(owed, released);
         room_given_back(owed);
         clears(owed);
@@ -543,6 +550,80 @@ class Ring
         return closes_the_slot(slot);
     }
 
+    struct Taken {
+        size_t bytes;
+        bool needs_more;
+    };
+
+    template <class Answering>
+    std::optional<Taken> answers_from(const uint32_t slot, const std::string_view asked, Answering &answering)
+    {
+        Owed &owed = owed_[slot];
+        if (owed.room == nullptr) {
+            owed.room = room_taken();
+            if (owed.room == nullptr) [[unlikely]]
+                return std::nullopt;
+        }
+        uint8_t *const into = owed.room;
+        const size_t area = kAnswerBytes;
+        std::string_view left = asked;
+        bool answered = false;
+        bool closing = false;
+        bool refused = false;
+        bool needs_more = false;
+        while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
+            const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
+            const Answered said = answering(left, room);
+            if (said.held != nullptr)
+                owed.held[owed.helds++] = said.held;
+            if (said.taken == 0) {
+                needs_more = true;
+                break;
+            }
+            if (said.head == 0 || said.head > room.size())
+                break;
+            owes_a_piece(owed, into + owed.filled, said.head);
+            owed.filled += static_cast<uint32_t>(said.head);
+            owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())), said.body.size());
+            left.remove_prefix(said.taken);
+            answered = true;
+            if (said.closes) {
+                closing = true;
+                refused = said.refused;
+                break;
+            }
+        }
+        if (answered && owed.connection.http != http1::State::response) {
+            if (owed.connection.http == http1::State::persistent)
+                owed.connection.moves_to(http1::State::header_section);
+            owed.connection.moves_to(refused ? http1::State::client_error : http1::State::dispatch);
+            if (!refused)
+                owed.connection.moves_to(http1::State::response);
+        }
+        if (closing) {
+            owed.connection.moves_to(http1::State::tear_down);
+            return Taken{asked.size(), false};
+        }
+        return Taken{asked.size() - left.size(), needs_more};
+    }
+
+    bool keeps_the_rest(const uint32_t slot, const std::string_view left, const bool needs_more)
+    {
+        Rest &rest = rests_.at(slot);
+        if (left.empty()) {
+            rest = Rest{};
+            return true;
+        }
+        if (!rest.bytes)
+            rest.bytes = std::make_shared_for_overwrite<char[]>(kRestBytes + http::kWidePadding);
+        const size_t kept = std::min(left.size(), kRestBytes);
+        if (left.data() != rest.bytes.get())
+            std::ranges::copy(left.substr(0, kept), rest.bytes.get());
+        rest.size = static_cast<uint32_t>(kept);
+        rest.needs_more = needs_more;
+        return kept == left.size();
+    }
+
     template <class Releasing> unsigned closes(const uint32_t slot, Releasing &released, const int result)
     {
         Owed &owed = owed_[slot];
@@ -552,7 +633,7 @@ class Ring
         owed.connection.moves_to(to);
         if (owed.runs(Doing::kSending))
             return to == tcp::State::fin_wait_1 ? 0 : ends(slot);
-        gives_back_everything(owed, released);
+        gives_back_everything(slot, released);
         return to == tcp::State::fin_wait_1 ? lingers(slot) : ends(slot);
     }
 
@@ -583,6 +664,7 @@ class Ring
                 const Connection next = accepted_after(fresh.connection);
                 fresh = Owed{};
                 fresh.connection = next;
+                rests_.at(static_cast<size_t>(cqe.res)) = Rest{};
                 armed += receives(static_cast<uint32_t>(cqe.res));
             }
             if ((cqe.flags & IORING_CQE_F_MORE) == 0) {
@@ -627,48 +709,36 @@ class Ring
             }
             if (which >= kBufferCount || took_bytes > pool) [[unlikely]]
                 return closes(slot, released, -EIO);
-            if (owed.room == nullptr) {
-                owed.room = room_taken();
-                if (owed.room == nullptr) [[unlikely]]
-                    return closes(slot, released, -ENOMEM);
-            }
-            uint8_t *const into = owed.room;
-            const size_t area = kAnswerBytes;
             const std::span<std::byte> bundle = room_map_->all_and_its_start_again().subspan(from, took_bytes);
-            std::string_view left(reinterpret_cast<const char *>(bundle.data()), bundle.size());
-            bool answered = false;
-            bool closing = false;
-            bool refused = false;
-            while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
-                const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
-                const Answered said = answering(left, room);
-                if (said.held != nullptr)
-                    owed.held[owed.helds++] = said.held;
-                if (said.taken == 0)
-                    break;
-                if (said.head == 0 || said.head > room.size())
-                    break;
-                owes_a_piece(owed, into + owed.filled, said.head);
-                owed.filled += static_cast<uint32_t>(said.head);
-                owes_a_piece(owed, reinterpret_cast<uint8_t *>(const_cast<char *>(said.body.data())),
-                             said.body.size());
-                left.remove_prefix(said.taken);
-                answered = true;
-                if (said.closes) {
-                    closing = true;
-                    refused = said.refused;
-                    break;
+            const std::string_view received(reinterpret_cast<const char *>(bundle.data()), bundle.size());
+            Rest &rest = rests_.at(slot);
+            std::string_view asked = received;
+            bool fits = true;
+            if (rest.size > 0) {
+                const size_t before = rest.size;
+                const size_t appended = std::min(kRestBytes - rest.size, received.size());
+                fits = appended == received.size();
+                std::ranges::copy(received.substr(0, appended), std::next(rest.bytes.get(), static_cast<std::ptrdiff_t>(rest.size)));
+                rest.size += appended;
+                asked = std::string_view(rest.bytes.get(), rest.size);
+                const size_t join = before >= kHeadEndBytes - 1 ? before - (kHeadEndBytes - 1) : 0;
+                if (rest.needs_more && fits && rest.size <= http1::kMostRequestLineBytes + http1::kMostHeaderSectionBytes &&
+                    http1::bytes_before_the_body(asked.substr(join)) == 0) {
+                    if (last)
+                        armed += receives(slot);
+                    return armed;
                 }
             }
-            if (answered && owed.connection.http != http1::State::response) {
-                if (owed.connection.http == http1::State::persistent)
-                    owed.connection.moves_to(http1::State::header_section);
-                owed.connection.moves_to(refused ? http1::State::client_error : http1::State::dispatch);
-                if (!refused)
-                    owed.connection.moves_to(http1::State::response);
+            const std::optional<Taken> taken = answers_from(slot, asked, answering);
+            if (!taken) [[unlikely]]
+                return closes(slot, released, -ENOMEM);
+            fits = keeps_the_rest(slot, asked.substr(taken->bytes), taken->needs_more) && fits;
+            if (!fits) [[unlikely]] {
+                if (owed.first == owed.pieces)
+                    return closes(slot, released, 0);
+                if (owed.connection.http != http1::State::tear_down)
+                    owed.connection.moves_to(http1::State::tear_down);
             }
-            if (closing)
-                owed.connection.moves_to(http1::State::tear_down);
             armed += sends(slot);
             if (last)
                 armed += receives(slot);
@@ -678,7 +748,7 @@ class Ring
             Owed &owed = owed_[slot];
             owed.finishes(Doing::kSending);
             if (!owed.connection.is_open()) {
-                gives_back_everything(owed, released);
+                gives_back_everything(slot, released);
                 if (!owed.connection.drains())
                     return settles(slot);
                 if (cqe.res == -ECONNRESET || cqe.res == -EPIPE)
@@ -704,13 +774,20 @@ class Ring
                 room_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
-                if (owed.connection.http == http1::State::tear_down) {
-                    armed += closes(slot, released, 0);
-                } else {
-                    owed.connection.moves_to(http1::State::persistent);
-                    if (owed.connection.tcp == tcp::State::close_wait)
-                        armed += closes(slot, released, 0);
+                if (owed.connection.http == http1::State::tear_down)
+                    return armed + closes(slot, released, 0);
+                owed.connection.moves_to(http1::State::persistent);
+                const Rest &rest = rests_.at(slot);
+                if (rest.size > 0 && !rest.needs_more) {
+                    const std::string_view asked(rest.bytes.get(), rest.size);
+                    const std::optional<Taken> taken = answers_from(slot, asked, answering);
+                    if (!taken) [[unlikely]]
+                        return armed + closes(slot, released, -ENOMEM);
+                    keeps_the_rest(slot, asked.substr(taken->bytes), taken->needs_more);
+                    armed += sends(slot);
                 }
+                if (owed.connection.tcp == tcp::State::close_wait && owed.first == owed.pieces)
+                    armed += closes(slot, released, 0);
             } else {
                 armed += sends(slot);
             }
@@ -755,6 +832,12 @@ class Ring
     std::vector<uint8_t *> free_rooms_;
     uint32_t free_room_count_ = 0;
     uint32_t fresh_rooms_ = 0;
+    struct Rest {
+        std::shared_ptr<char[]> bytes;
+        uint32_t size;
+        bool needs_more;
+    };
+    std::vector<Rest> rests_;
     uint32_t consumed_ = 0;
     uint32_t given_back_ = 0;
     bool bundles_ = false;

@@ -167,6 +167,38 @@ class ServeTest < Minitest::Test
     assert_equal 'HTTP/1.1 200 OK', ask(big).first&.first
   end
 
+  # TCP carries a byte stream, so a head may arrive in pieces. The server
+  # keeps the part it has and reads on where the next piece joins it.
+  def test_a_head_in_two_writes_is_answered
+    socket = UNIXSocket.new(@path)
+    socket.write(HELLO[0, 17])
+    sleep 0.1
+    socket.write(HELLO[17..])
+    assert_equal ['HTTP/1.1 200 OK'], answers_of(read_for_a_while(socket)).map(&:first)
+  ensure
+    socket&.close
+  end
+
+  def test_a_head_sent_byte_by_byte_is_answered
+    socket = UNIXSocket.new(@path)
+    HELLO.each_char do |letter|
+      socket.write(letter)
+      sleep 0.002
+    end
+    assert_equal ['HTTP/1.1 200 OK'], answers_of(read_for_a_while(socket)).map(&:first)
+  ensure
+    socket&.close
+  end
+
+  # RFC 9112 9.3.2: every pipelined request gets its answer, in order,
+  # also when they are more than one send can carry at once.
+  def test_twenty_requests_in_one_write_get_twenty_answers
+    assert_equal ['HTTP/1.1 200 OK'] * 20, ask(HELLO * 20).map(&:first)
+    home = "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+    ask(home)
+    assert_equal ['HTTP/1.1 200 OK'] * 4, ask(home * 4).map(&:first)
+  end
+
   # RFC 9112 3.2 asks for Host in HTTP/1.1 only.
   def test_an_http_1_0_request_without_host_is_answered
     assert_equal 'HTTP/1.1 200 OK', ask("GET /hello HTTP/1.0\r\n\r\n").first.first
