@@ -2,11 +2,15 @@
 
 #include <cstddef>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <expected>
 #include <bit>
 #if defined(__AVX2__)
 #include <immintrin.h>
+#endif
+#if defined(__ARM_NEON) && defined(__aarch64__)
+#include <arm_neon.h>
 #endif
 #include <functional>
 #include <numeric>
@@ -174,12 +178,45 @@ inline bool avx512_field_lines_are_valid(const std::string_view lines)
 }
 #endif
 
+#if defined(__ARM_NEON) && defined(__aarch64__)
+inline bool neon_field_lines_are_valid(const std::string_view lines)
+{
+    constexpr size_t kBlock = 16;
+    constexpr std::array<uint8_t, kBlock> kLanes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    constexpr int kLowestBit = 7;
+    const uint8x16_t lane = vld1q_u8(kLanes.data());
+    const uint8x16_t last_control = vdupq_n_u8(kLastControl);
+    const uint8x16_t htab = vdupq_n_u8('\t');
+    const uint8x16_t cr = vdupq_n_u8('\r');
+    const uint8x16_t lf = vdupq_n_u8('\n');
+    const uint8x16_t del = vdupq_n_u8(kDelete);
+    uint8x16_t refused = vdupq_n_u8(0);
+    uint32_t crs = 0;
+    uint32_t lfs = 0;
+    for (size_t at = 0; at < lines.size(); at += kBlock) {
+        const uint8x16_t inside = vcltq_u8(lane, vdupq_n_u8(static_cast<uint8_t>(std::min(lines.size() - at, kBlock))));
+        const uint8x16_t bytes =
+            vld1q_u8(reinterpret_cast<const uint8_t *>(std::next(lines.data(), static_cast<std::ptrdiff_t>(at))));
+        const uint8x16_t is_cr = vceqq_u8(bytes, cr);
+        const uint8x16_t is_lf = vceqq_u8(bytes, lf);
+        const uint8x16_t allowed = vorrq_u8(vceqq_u8(bytes, htab), vorrq_u8(is_cr, is_lf));
+        const uint8x16_t no = vorrq_u8(vbicq_u8(vcleq_u8(bytes, last_control), allowed), vceqq_u8(bytes, del));
+        refused = vorrq_u8(refused, vandq_u8(no, inside));
+        crs += vaddvq_u8(vshrq_n_u8(vandq_u8(is_cr, inside), kLowestBit));
+        lfs += vaddvq_u8(vshrq_n_u8(vandq_u8(is_lf, inside), kLowestBit));
+    }
+    return vmaxvq_u8(refused) == 0 && crs == lfs;
+}
+#endif
+
 inline bool field_lines_are_valid(const std::string_view lines)
 {
 #if defined(__AVX512BW__)
     return avx512_field_lines_are_valid(lines);
 #elif defined(__AVX2__)
     return avx2_field_lines_are_valid(lines);
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    return neon_field_lines_are_valid(lines);
 #else
     return floor_field_lines_are_valid(lines);
 #endif

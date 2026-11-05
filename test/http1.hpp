@@ -69,6 +69,9 @@ mrb_value spec_http1_field_line_forms_disagree(mrb_state *mrb, mrb_value)
 #if defined(__AVX512BW__)
                 disagree += http1::avx512_field_lines_are_valid(lines) != floor;
 #endif
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                disagree += http1::neon_field_lines_are_valid(lines) != floor;
+#endif
             }
         }
     }
