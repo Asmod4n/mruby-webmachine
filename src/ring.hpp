@@ -72,6 +72,7 @@ struct Answered {
     std::string_view body;
     const void *held;
     size_t taken;
+    bool closes;
 };
 
 class QueueIsFull : public std::runtime_error
@@ -701,9 +702,9 @@ class Ring
             const size_t took_bytes = static_cast<size_t>(cqe.res);
             const size_t from = static_cast<size_t>(which) * kBufferBytes;
             const size_t pool = static_cast<size_t>(kBufferCount) * kBufferBytes;
-            if (!owed.connection.reads()) {
+            if (!owed.connection.reads() || owed.connection.http == http1::State::tear_down) {
                 buffer_returned(static_cast<uint16_t>(which));
-                if (last && owed.connection.drains())
+                if (last && (owed.connection.reads() || owed.connection.drains()))
                     return receives(slot);
                 return settles(slot);
             }
@@ -724,6 +725,7 @@ class Ring
             const size_t area = in_the_buffer ? kBufferBytes - took_bytes : kAnswerBytes;
             std::string_view left(reinterpret_cast<const char *>(room_ + from), took_bytes);
             bool answered = false;
+            bool refused = false;
             while (!left.empty() && owed.filled < area && owed.pieces + 2 <= kPiecesMost && owed.helds < kHeldMost) {
                 const std::span<char> room(reinterpret_cast<char *>(into + owed.filled), area - owed.filled);
                 const Answered said = answering(left, room);
@@ -739,8 +741,18 @@ class Ring
                              said.body.size());
                 left.remove_prefix(said.taken);
                 answered = true;
+                if (said.closes) {
+                    refused = true;
+                    break;
+                }
             }
-            if (answered && owed.connection.http != http1::State::response) {
+            if (refused) {
+                if (owed.connection.http == http1::State::persistent)
+                    owed.connection.moves_to(http1::State::header_section);
+                if (owed.connection.http == http1::State::header_section)
+                    owed.connection.moves_to(http1::State::client_error);
+                owed.connection.moves_to(http1::State::tear_down);
+            } else if (answered && owed.connection.http != http1::State::response) {
                 if (owed.connection.http == http1::State::persistent)
                     owed.connection.moves_to(http1::State::header_section);
                 owed.connection.moves_to(http1::State::dispatch);
@@ -788,9 +800,13 @@ class Ring
                 bid_given_back(owed);
                 owed.first = owed.pieces = 0;
                 owed.filled = 0;
-                owed.connection.moves_to(http1::State::persistent);
-                if (owed.connection.tcp == tcp::State::close_wait)
+                if (owed.connection.http == http1::State::tear_down) {
                     armed += closes(slot, released, 0);
+                } else {
+                    owed.connection.moves_to(http1::State::persistent);
+                    if (owed.connection.tcp == tcp::State::close_wait)
+                        armed += closes(slot, released, 0);
+                }
             } else {
                 armed += sends(slot);
             }

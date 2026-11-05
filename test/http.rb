@@ -1987,14 +1987,15 @@ assert('status_class reads the first digit and nothing else') do
   end
 end
 
-# RFC 9110 15.1 lists the reason phrases. They are recommendations, so a
-# code this tree never sends has none rather than a made up one. 306 and
-# 418 are "(Unused)".
+# RFC 9110 15.1 lists the reason phrases, and RFC 6585 5 adds 431. They
+# are recommendations, so a code this tree never sends has none rather
+# than a made up one. 306 and 418 are "(Unused)".
 assert('reason_phrase spells what RFC 9110 15 names') do
   {200 => 'OK', 204 => 'No Content', 206 => 'Partial Content',
    301 => 'Moved Permanently', 304 => 'Not Modified', 308 => 'Permanent Redirect',
    400 => 'Bad Request', 404 => 'Not Found', 405 => 'Method Not Allowed',
    406 => 'Not Acceptable', 412 => 'Precondition Failed', 413 => 'Content Too Large',
+   414 => 'URI Too Long', 431 => 'Request Header Fields Too Large',
    415 => 'Unsupported Media Type', 416 => 'Range Not Satisfiable',
    422 => 'Unprocessable Content', 500 => 'Internal Server Error',
    501 => 'Not Implemented', 503 => 'Service Unavailable'}.each do |status, want|

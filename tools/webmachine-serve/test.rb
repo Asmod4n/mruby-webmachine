@@ -92,6 +92,52 @@ class ServeTest < Minitest::Test
     socket&.close
   end
 
+  def refused_and_closed(bytes)
+    socket = UNIXSocket.new(@path)
+    socket.write(bytes)
+    got = read_to_end(socket)
+    [answers_of(got), got]
+  ensure
+    socket&.close
+  end
+
+  # RFC 9112 3.2: a server MUST answer 400 to an HTTP/1.1 request without
+  # Host, with two Host field lines, or with an invalid Host. RFC 9112
+  # 5.1: whitespace between the field name and the colon is 400. RFC 9112
+  # 2.2: after a refusal of the framing, the server closes, and it sends
+  # Connection: close before it does (RFC 9112 9.6).
+  def test_a_refused_request_gets_400_and_the_connection_closes
+    ["GET /hello HTTP/1.1\r\n\r\n",
+     "GET /hello HTTP/1.1\r\nHost: x\r\nHost: x\r\n\r\n",
+     "GET /hello HTTP/1.1\r\nHost: x y\r\n\r\n",
+     "GET /hello HTTP/1.1\r\nHost : x\r\n\r\n",
+     "GET /hello HTTP/1.1\r\nHost: x\r\nX: a\r\n b\r\n\r\n",
+     "GET /hello HTTP/1.1\r\nHost: x\r\nX: a\rb\r\n\r\n"].each do |bytes|
+      answers, got = refused_and_closed(bytes)
+      assert_equal ['HTTP/1.1 400 Bad Request'], answers.map(&:first), bytes.inspect
+      assert_match(/^Connection: close\r$/i, got, bytes.inspect)
+    end
+  end
+
+  # RFC 9112 2.2: the bytes after a refused request cannot be trusted to
+  # start a request, so the request that follows in the same write gets
+  # no answer.
+  def test_a_request_after_a_refused_one_gets_no_answer
+    answers, = refused_and_closed("GET /hello HTTP/1.1\r\n\r\n#{HELLO}")
+    assert_equal ['HTTP/1.1 400 Bad Request'], answers.map(&:first)
+  end
+
+  # A request before the refused one is answered first, in order.
+  def test_a_request_before_a_refused_one_is_answered
+    answers, = refused_and_closed("#{HELLO}GET /hello HTTP/1.1\r\n\r\n#{HELLO}")
+    assert_equal ['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request'], answers.map(&:first)
+  end
+
+  # RFC 9112 3.2 asks for Host in HTTP/1.1 only.
+  def test_an_http_1_0_request_without_host_is_answered
+    assert_equal 'HTTP/1.1 200 OK', ask("GET /hello HTTP/1.0\r\n\r\n").first.first
+  end
+
   # RFC 9293 3.10.7.1: a reset ends the connection at once. The server
   # closes the slot and serves the next connection.
   def test_a_reset_from_the_client_leaves_the_server_serving

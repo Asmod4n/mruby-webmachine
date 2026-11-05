@@ -14,6 +14,7 @@ is a bug in this directory, not a local decision.
 | 5234 | the ABNF the others are written in, and the core rules: ALPHA, DIGIT, HTAB, SP, VCHAR |
 | 3986 | the URI. segment, pchar, query, reg-name, IP-literal, and remove_dot_segments |
 | 9110 | HTTP semantics. The field grammars, the methods, the status codes, the conditional requests, the negotiation |
+| 6585 | the status code 431, for a header section above the limit of this server |
 | 9111 | caching |
 | 9112 | HTTP/1.1 on the wire. The request line, the four target forms, chunked transfer coding |
 | 9113 | HTTP/2. Frames, the field validity rules, the cookie that arrives on several lines |

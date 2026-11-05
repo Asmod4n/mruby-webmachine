@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "../src/walk.hpp"
+#include "http.hpp"
 
 namespace
 {
@@ -39,8 +40,8 @@ mrb_value spec_walk(mrb_state *mrb, mrb_value)
         const mrb_value etag = mrb_hash_get(mrb, options, mrb_symbol_value(mrb_intern_lit(mrb, "etag")));
         if (mrb_string_p(etag)) resource.etag.assign(RSTRING_PTR(etag), static_cast<size_t>(RSTRING_LEN(etag)));
     }
-    const std::string text(asked, static_cast<size_t>(length));
-    const auto request = http1::parse_request(text);
+    const Padded text(asked, length);
+    const auto request = http1::parse_request(text.view());
     if (!request) return mrb_symbol_value(mrb_intern_lit(mrb, "unparsed"));
     const flow::Facts facts = flow::facts_of(*request, std::chrono::year{2026});
     const auto outcome = flow::walk(resource, *request, facts);

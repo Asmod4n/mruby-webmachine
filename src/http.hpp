@@ -2267,6 +2267,8 @@ constexpr std::string_view reason_phrase(const uint16_t status)
             return "Unprocessable Content";
         case 426:
             return "Upgrade Required";
+        case 431:
+            return "Request Header Fields Too Large";
         case 500:
             return "Internal Server Error";
         case 501:
