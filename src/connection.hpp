@@ -44,7 +44,7 @@ inline constexpr bool may_move(const State from, const State to)
 
 inline constexpr State state_after_close(const State now, const int result)
 {
-    if (result == -ECONNRESET || result == -EPIPE)
+    if (result == -ECONNRESET || result == -EPIPE || result == -ETIMEDOUT)
         return State::closed;
     return now == State::close_wait ? State::last_ack : State::fin_wait_1;
 }

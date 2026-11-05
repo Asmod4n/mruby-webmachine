@@ -34,7 +34,7 @@ main(int argc, char **argv)
     if (writer < 0 || c.of_thread == nullptr) fprintf(stderr, "webmachine-serve: no cache, every page is rendered\n");
 
     wm::Ring ring;
-    const int stood = ring.stood_up(4096);
+    const int stood = ring.stood_up(4096, wm::kTimeoutsByDefault);
     if (stood < 0) {
         fprintf(stderr, "webmachine-serve: stood_up: %s\n", strerror(-stood));
         return 1;
@@ -53,6 +53,7 @@ main(int argc, char **argv)
             [&](const std::string_view asked, const std::span<char> room) -> wm::Answered {
                 return serve::answered(asked, room, c, today);
             },
+            [&](const std::span<char> room) -> wm::Answered { return serve::timed_out(room, today); },
             [&](const void *const held) {
                 serve::released(c, static_cast<cache_held *>(const_cast<void *>(held)));
             },

@@ -534,6 +534,17 @@ refused(const std::span<char> room, const Today &today, const http::Refusal refu
 }
 
 [[gnu::cold, gnu::noinline]] inline wm::Answered
+timed_out(const std::span<char> room, const Today &today)
+{
+    wm::Answered said = made(room, today, 408, problem::kMediaTypeText,
+                             problem::text_of(problem::details_of(408)).value_or(""), false, "", kConnectionClose,
+                             nullptr, 0);
+    said.closes = true;
+    said.refused = true;
+    return said;
+}
+
+[[gnu::cold, gnu::noinline]] inline wm::Answered
 not_answered(const std::string_view asked, const std::span<char> room, const Today &today,
              const http::Refusal refusal)
 {

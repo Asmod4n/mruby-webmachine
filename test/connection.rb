@@ -29,7 +29,8 @@ assert('a TCP state moves only where RFC 9293 3.3.2 moves it') do
 end
 
 # RFC 9293 3.10.4 CLOSE call, RFC 9293 3.10.7.1: a reset or a write to a
-# connection that the peer reset ends it at once. A close of the server
+# connection that the peer reset ends it at once. RFC 9293 3.10.8: a user
+# timeout ends it at once too. A close of the server
 # otherwise sends FIN, and the state depends on whether the FIN of the
 # peer came first.
 assert('a close moves ESTABLISHED to FIN-WAIT-1 and CLOSE-WAIT to LAST-ACK') do
@@ -39,10 +40,11 @@ assert('a close moves ESTABLISHED to FIN-WAIT-1 and CLOSE-WAIT to LAST-ACK') do
   assert_equal :fin_wait_1, C.state_after_close(:established, -C.errno(:ENOMEM))
 end
 
-assert('a reset or a broken pipe moves to CLOSED') do
+assert('a reset, a broken pipe or a user timeout moves to CLOSED') do
   [:established, :close_wait].each do |now|
     assert_equal :closed, C.state_after_close(now, -C.errno(:ECONNRESET))
     assert_equal :closed, C.state_after_close(now, -C.errno(:EPIPE))
+    assert_equal :closed, C.state_after_close(now, -C.errno(:ETIMEDOUT))
   end
 end
 

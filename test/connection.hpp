@@ -127,6 +127,8 @@ mrb_value spec_errno(mrb_state *mrb, mrb_value)
         return mrb_fixnum_value(EIO);
     if (named == "ENOMEM")
         return mrb_fixnum_value(ENOMEM);
+    if (named == "ETIMEDOUT")
+        return mrb_fixnum_value(ETIMEDOUT);
     mrb_raisef(mrb, E_ARGUMENT_ERROR, "no errno %n", name);
     return mrb_nil_value();
 }

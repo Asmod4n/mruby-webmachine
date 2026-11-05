@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
+#include <deque>
 #include <ctime>
 #include <functional>
 #include <memory>
@@ -97,7 +98,27 @@ inline constexpr int kBacklog = 4096;
 inline constexpr long kWaitSeconds = 1;
 inline constexpr size_t kHeadEndBytes = 4;
 inline constexpr size_t kRestBytes = http1::kMostRequestLineBytes + http1::kMostHeaderSectionBytes + 8;
-inline constexpr __kernel_timespec kLinger = {5, 0};
+struct Timeouts {
+    std::chrono::seconds header;
+    std::chrono::seconds body;
+    std::chrono::seconds send;
+    std::chrono::seconds idle;
+    std::chrono::seconds linger;
+};
+
+inline constexpr Timeouts kTimeoutsByDefault = {std::chrono::seconds{60}, std::chrono::seconds{60},
+                                               std::chrono::seconds{60}, std::chrono::seconds{75},
+                                               std::chrono::seconds{5}};
+inline constexpr std::chrono::seconds kLingerMost{30};
+
+enum class Waiting : uint8_t {
+    header,
+    send,
+    idle,
+    nothing,
+};
+
+inline constexpr size_t kWaitingKinds = 3;
 
 class Ring
 {
@@ -106,8 +127,14 @@ class Ring
     Ring(const Ring &) = delete;
     Ring &operator=(const Ring &) = delete;
 
-    int stood_up(const unsigned entries)
+    int stood_up(const unsigned entries, const Timeouts timeouts)
     {
+        if (timeouts.linger > kLingerMost || timeouts.linger.count() <= 0 || timeouts.header.count() <= 0 ||
+            timeouts.send.count() <= 0 || timeouts.idle.count() <= 0 || timeouts.body.count() <= 0) [[unlikely]]
+            return -EINVAL;
+        timeouts_ = timeouts;
+        linger_ = __kernel_timespec{timeouts.linger.count(), 0};
+        started_ = std::chrono::steady_clock::now();
         rlimit limit = {};
         if (getrlimit(RLIMIT_NOFILE, &limit) != 0)
             return -errno;
@@ -298,15 +325,18 @@ class Ring
         return which < kListeners ? port_[which] : 0;
     }
 
-    template <class Answering, class Releasing, class Waking>
-    void serves(Answering answering, Releasing released, Waking woken, const bool &until)
+    template <class Answering, class TimingOut, class Releasing, class Waking>
+    void serves(Answering answering, TimingOut timing_out, Releasing released, Waking woken, const bool &until)
     {
         while (!until) {
             const int waited = ring_.submit_and_wait_timeout(kWaitSeconds);
             if (waited < 0 && waited != -ETIME && waited != -EINTR)
                 break;
             woken();
+            now_ = static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started_).count());
             ring_.for_each_cqe([&](const uring::Cqe &cqe) { took(cqe, answering, released); });
+            expires(timing_out, released);
             given_back();
         }
     }
@@ -314,6 +344,9 @@ class Ring
   private:
     struct alignas(64) Owed {
         Connection connection;
+        Waiting waiting;
+        uint32_t deadline;
+        std::array<uint32_t, kWaitingKinds> pushed;
         uint32_t filled;
         uint32_t first;
         uint32_t pieces;
@@ -423,7 +456,89 @@ class Ring
         sqe.fixed_file();
         sqe.set_data64(marked(Doing::kSending, slot, owed.connection.generation));
         owed.starts(Doing::kSending);
+        waits_for(slot, Waiting::send);
         return 1;
+    }
+
+    uint32_t seconds_of(const Waiting kind) const
+    {
+        switch (kind) {
+            case Waiting::header: return static_cast<uint32_t>(timeouts_.header.count());
+            case Waiting::send: return static_cast<uint32_t>(timeouts_.send.count());
+            case Waiting::idle: return static_cast<uint32_t>(timeouts_.idle.count());
+            default: throw std::logic_error("a deadline for no kind of waiting");
+        }
+    }
+
+    void waits_for(const uint32_t slot, const Waiting kind)
+    {
+        Owed &owed = owed_[slot];
+        if (kind == Waiting::nothing) {
+            owed.waiting = Waiting::nothing;
+            return;
+        }
+        if (kind == Waiting::header && owed.waiting == Waiting::header)
+            return;
+        const uint32_t at = now_ + seconds_of(kind);
+        owed.waiting = kind;
+        owed.deadline = at;
+        uint32_t &pushed = owed.pushed.at(static_cast<size_t>(kind));
+        if (pushed == at)
+            return;
+        pushed = at;
+        deadlines_.at(static_cast<size_t>(kind)).push_back(Deadline{at, slot, owed.connection.generation});
+    }
+
+    void waits_after_the_answers(const uint32_t slot)
+    {
+        const Owed &owed = owed_[slot];
+        if (owed.runs(Doing::kSending) || !owed.connection.reads())
+            return;
+        if (rests_.at(slot).needs_more)
+            waits_for(slot, Waiting::header);
+        else if (owed.connection.http == http1::State::persistent)
+            waits_for(slot, Waiting::idle);
+    }
+
+    template <class TimingOut, class Releasing> void expires(TimingOut &timing_out, Releasing &released)
+    {
+        for (size_t kind = 0; kind < kWaitingKinds; kind++) {
+            std::deque<Deadline> &waiting = deadlines_.at(kind);
+            while (!waiting.empty() && waiting.front().at <= now_) {
+                const Deadline due = waiting.front();
+                waiting.pop_front();
+                Owed &owed = owed_[due.slot];
+                if (owed.connection.generation != due.generation || owed.waiting != static_cast<Waiting>(kind) ||
+                    owed.deadline != due.at)
+                    continue;
+                owed.waiting = Waiting::nothing;
+                times_out(due.slot, static_cast<Waiting>(kind), timing_out, released);
+            }
+        }
+    }
+
+    template <class TimingOut, class Releasing>
+    unsigned times_out(const uint32_t slot, const Waiting kind, TimingOut &timing_out, Releasing &released)
+    {
+        Owed &owed = owed_[slot];
+        if (kind == Waiting::send)
+            return owed.connection.drains() ? ends_the_linger(slot) : closes(slot, released, -ETIMEDOUT);
+        if (kind == Waiting::idle || rests_.at(slot).size == 0 || owed.runs(Doing::kSending))
+            return closes(slot, released, 0);
+        if (owed.room == nullptr)
+            owed.room = room_taken(slot);
+        const std::span<char> room(reinterpret_cast<char *>(owed.room + owed.filled), kAnswerBytes - owed.filled);
+        const Answered said = timing_out(room);
+        if (said.head == 0 || said.head > room.size()) [[unlikely]]
+            return closes(slot, released, 0);
+        owes_a_piece(owed, owed.room + owed.filled, said.head);
+        owed.filled += static_cast<uint32_t>(said.head);
+        rests_.at(slot) = Rest{};
+        if (owed.connection.http == http1::State::persistent)
+            owed.connection.moves_to(http1::State::header_section);
+        owed.connection.moves_to(http1::State::client_error);
+        owed.connection.moves_to(http1::State::tear_down);
+        return sends(slot);
     }
 
     template <class Releasing> void all_released(Owed &owed, Releasing &released)
@@ -506,7 +621,8 @@ class Ring
             sqe.prep_shutdown(static_cast<int>(slot), SHUT_WR);
             sqe.fixed_file();
         });
-        armed += starts(slot, Doing::kLingering, [](uring::Sqe &sqe) { sqe.prep_timeout(kLinger); });
+        armed += starts(slot, Doing::kLingering, [&](uring::Sqe &sqe) { sqe.prep_timeout(linger_); });
+        waits_for(slot, Waiting::nothing);
         if (!owed_[slot].runs(Doing::kReceiving))
             armed += receives(slot);
         return armed;
@@ -653,6 +769,8 @@ class Ring
                 fresh = Owed{};
                 fresh.connection = next;
                 rests_.at(static_cast<size_t>(cqe.res)) = Rest{};
+                fresh.waiting = Waiting::nothing;
+                waits_for(static_cast<uint32_t>(cqe.res), Waiting::header);
                 armed += receives(static_cast<uint32_t>(cqe.res));
             }
             if ((cqe.flags & IORING_CQE_F_MORE) == 0) {
@@ -726,6 +844,7 @@ class Ring
                     owed.connection.moves_to(http1::State::tear_down);
             }
             armed += sends(slot);
+            waits_after_the_answers(slot);
             if (last)
                 armed += receives(slot);
             return armed;
@@ -771,7 +890,8 @@ class Ring
                     armed += sends(slot);
                 }
                 if (owed.connection.tcp == tcp::State::close_wait && owed.first == owed.pieces)
-                    armed += closes(slot, released, 0);
+                    return armed + closes(slot, released, 0);
+                waits_after_the_answers(slot);
             } else {
                 armed += sends(slot);
             }
@@ -818,6 +938,16 @@ class Ring
         bool needs_more;
     };
     std::vector<Rest> rests_;
+    struct Deadline {
+        uint32_t at;
+        uint32_t slot;
+        uint32_t generation;
+    };
+    std::array<std::deque<Deadline>, kWaitingKinds> deadlines_;
+    Timeouts timeouts_ = kTimeoutsByDefault;
+    __kernel_timespec linger_ = {};
+    std::chrono::steady_clock::time_point started_;
+    uint32_t now_ = 0;
     uint32_t consumed_ = 0;
     uint32_t given_back_ = 0;
     bool bundles_ = false;
